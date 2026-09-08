@@ -129,6 +129,37 @@ function AppIcon({
   );
 }
 
+// Full-viewport boot splash. Rendered by React (not static index.html markup)
+// so it paints at the correct DPI on Windows/WebView2, and it blocks all input
+// underneath until the app has finished its first load. `hiding` fades it out
+// just before it unmounts. The EP-133 device motif — charcoal pad, orange
+// record dot, an LCD segment chase — reads as the hardware "powering on".
+function Splash({ hiding }: { hiding: boolean }) {
+  return (
+    <div
+      className={`splash ${hiding ? "splash--hidden" : ""}`}
+      role="progressbar"
+      aria-label="Loading vibe-control"
+      aria-busy="true"
+    >
+      <div className="splash-card">
+        <div className="splash-badge">
+          <span className="splash-rec" />
+        </div>
+        <div className="splash-word">vibe-control</div>
+        <div className="splash-leds" aria-hidden>
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="splash-cap">Initializing</div>
+      </div>
+    </div>
+  );
+}
+
 const completionLabel: Record<SessionCompletion, string> = {
   Waiting: "Awaiting reply",
   NotWaiting: "Working",
@@ -196,6 +227,11 @@ export default function App() {
   const [filter, setFilter] = useState("");
   const [refreshing, setRefreshing] = useState(false);
 
+  // Boot splash: `booting` keeps the overlay mounted (blocking input);
+  // `splashOut` triggers its fade just before we unmount it.
+  const [booting, setBooting] = useState(true);
+  const [splashOut, setSplashOut] = useState(false);
+
   const [newGroupName, setNewGroupName] = useState("");
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
@@ -219,18 +255,66 @@ export default function App() {
   const [keyInput, setKeyInput] = useState("");
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
+  // Boot sequence. The splash overlay blocks all input; hold it until the
+  // essential shell data has loaded — saved groups, Claude status, and the
+  // first running-apps scan (the slow OS call the splash exists to cover) — so
+  // the window never appears interactive while still empty. A minimum on-screen
+  // time keeps it from flickering on a fast start; a hard cap guarantees the
+  // splash is always lifted even if a backend call hangs.
   useEffect(() => {
-    getBundles()
-      .then(setBundles)
-      .catch((e) => setError(String(e)));
-    claudeStatus()
-      .then(setClaude)
-      .catch(() => setClaude(null));
-    // Defer the running-apps scan (a comparatively slow OS call) to the next
-    // frame so the app shell + saved groups paint immediately instead of the
-    // window sitting blank until the scan returns on cold start.
-    const raf = requestAnimationFrame(() => refreshRunning());
-    return () => cancelAnimationFrame(raf);
+    let cancelled = false;
+    let finished = false;
+    const startedAt = performance.now();
+    const MIN_SPLASH_MS = 650;
+    const MAX_SPLASH_MS = 8000;
+    const FADE_MS = 400; // must match the .splash opacity transition
+
+    // Fade the splash out, then unmount it. Idempotent: whichever of the boot
+    // completion or the hard-cap fires first wins; the other is a no-op.
+    const finish = () => {
+      if (cancelled || finished) return;
+      finished = true;
+      setSplashOut(true);
+      window.setTimeout(() => {
+        if (!cancelled) setBooting(false);
+      }, FADE_MS);
+    };
+
+    // Safety net: never strand the UI behind the splash if boot stalls.
+    const hardCap = window.setTimeout(finish, MAX_SPLASH_MS);
+
+    (async () => {
+      await Promise.allSettled([
+        getBundles()
+          .then((b) => {
+            if (!cancelled) setBundles(b);
+          })
+          .catch((e) => {
+            if (!cancelled) setError(String(e));
+          }),
+        claudeStatus()
+          .then((c) => {
+            if (!cancelled) setClaude(c);
+          })
+          .catch(() => {
+            if (!cancelled) setClaude(null);
+          }),
+        refreshRunning(), // first running-apps scan
+      ]);
+
+      // Floor the visible time so the splash reads as intentional, not a blip.
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < MIN_SPLASH_MS) {
+        await new Promise((r) => setTimeout(r, MIN_SPLASH_MS - elapsed));
+      }
+      window.clearTimeout(hardCap);
+      finish();
+    })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(hardCap);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -414,6 +498,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+    {booting && <Splash hiding={splashOut} />}
     <div className="app">
       <aside className="sidebar">
         <header className="sidebar-header">
