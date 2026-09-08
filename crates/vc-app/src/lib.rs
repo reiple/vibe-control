@@ -300,28 +300,72 @@ async fn activate_coding_session(session_ref: String) -> std::result::Result<(),
     Ok(())
 }
 
-/// A live running application for the left-hand panel (FR-2.1 / §13.1).
+/// One live window/tab of a running app (FR-2.8 / AC-20). Shown when the user
+/// expands an app group in the left panel; `handle` is an opaque, per-platform
+/// activation token (Windows: an `HWND`; macOS: `name\u{1f}title`) passed back
+/// verbatim to `activate_window`, never interpreted by the frontend.
+#[derive(Serialize)]
+pub struct RunningWindow {
+    handle: String,
+    /// Distinguishable window/tab title shown in the expanded list (FR-2.8).
+    title: String,
+    /// Whether this is the current foreground window — the green dot inside a
+    /// multi-window group (FR-2.4).
+    is_focused: bool,
+}
+
+/// A live running application for the left-hand panel (FR-2.1 / §13.1), grouped
+/// with its individual windows so the UI can expand it and let the user pick a
+/// specific window/tab to activate (FR-2.8 / AC-20). The app icon is shown once
+/// per group; `windows` may be empty when only app-level info is available
+/// (e.g. macOS without Accessibility), in which case the UI treats the app as a
+/// single activatable entry (single-window consistency).
 #[derive(Serialize)]
 pub struct RunningApp {
     name: String,
     /// Stable launch target; the bundle id when available (§13.4).
     bundle_id: Option<String>,
+    /// This app's live windows/tabs, grouped under the one icon (FR-2.2/2.8).
+    windows: Vec<RunningWindow>,
 }
 
-/// List apps currently running on this machine (FR-2.1 / §13.1).
+/// List apps currently running on this machine, each grouped with its live
+/// windows/tabs (FR-2.1 / FR-2.8 / §13.1).
 #[tauri::command]
 async fn list_running_apps() -> std::result::Result<Vec<RunningApp>, CommandError> {
-    Ok(enumerate_running_apps_detailed()
+    Ok(enumerate_running_windows()
         .into_iter()
-        .map(|(name, bundle_id)| RunningApp { name, bundle_id })
+        .map(|(name, bundle_id, windows)| RunningApp {
+            name,
+            bundle_id,
+            windows: windows
+                .into_iter()
+                .map(|(handle, title, is_focused)| RunningWindow {
+                    handle,
+                    title,
+                    is_focused,
+                })
+                .collect(),
+        })
         .collect())
 }
 
 /// Bring an app to the front, launching it if closed (FR-2.6 / FR-4.x / §13.4).
-/// `target` is a bundle id or an app name.
+/// `target` is a bundle id or an app name. Used for the app-level fallback
+/// (no per-window info) and for closed-resource re-launch.
 #[tauri::command]
 async fn activate_app(target: String) -> std::result::Result<(), CommandError> {
     open_app(&target)?;
+    Ok(())
+}
+
+/// Bring a SPECIFIC window/tab to the front (FR-2.8 / FR-4.1 / AC-20). `handle`
+/// is the opaque token from a `RunningWindow` (Windows `HWND` / macOS
+/// `name\u{1f}title`); it activates exactly that window, not just the app
+/// (FR-4.2). Errors if the window was closed since the last poll.
+#[tauri::command]
+async fn activate_window(handle: String) -> std::result::Result<(), CommandError> {
+    focus_window(&handle)?;
     Ok(())
 }
 
@@ -557,6 +601,25 @@ fn open_app(target: &str) -> std::result::Result<(), String> {
     }
 }
 
+/// Bring a specific window to the front by its opaque per-platform handle
+/// (Windows `HWND` / macOS `name\u{1f}title`), the per-window counterpart of
+/// `open_app` (FR-2.8 / FR-4.1).
+fn focus_window(handle: &str) -> std::result::Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        vc_os_macos::MacLauncher::focus_window(handle).map_err(|e| e.to_string())
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinLauncher::focus_window(handle).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        let _ = handle;
+        Err("window activation not supported on this platform".into())
+    }
+}
+
 fn open_path(target: &str) -> std::result::Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -678,6 +741,28 @@ fn enumerate_running_apps_detailed() -> Vec<(String, Option<String>)> {
     }
 }
 
+/// One app grouped with its live windows:
+/// `(name, bundle_id, [(handle, title, is_focused)])`.
+type AppWindows = (String, Option<String>, Vec<(String, String, bool)>);
+
+/// Enumerate running apps grouped with their individual windows/tabs (FR-2.8 /
+/// AC-20). Empty on unsupported platforms; per-adapter failures degrade to an
+/// empty vec.
+fn enumerate_running_windows() -> Vec<AppWindows> {
+    #[cfg(target_os = "macos")]
+    {
+        vc_os_macos::MacWindowEnumerator::list_running_windows().unwrap_or_default()
+    }
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinWindowEnumerator::list_running_windows().unwrap_or_default()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
+    {
+        Vec::new()
+    }
+}
+
 pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
@@ -695,6 +780,7 @@ pub fn run() {
             activate_coding_session,
             list_running_apps,
             activate_app,
+            activate_window,
             get_app_icon,
             create_bundle,
             delete_bundle,

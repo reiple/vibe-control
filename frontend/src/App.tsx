@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type {
   WorkBundle,
   Resource,
@@ -17,6 +17,7 @@ import {
   activateCodingSession,
   listRunningApps,
   activateApp,
+  activateWindow,
   getAppIcon,
   createBundle,
   deleteBundle,
@@ -225,6 +226,9 @@ export default function App() {
   const [bundles, setBundles] = useState<WorkBundle[]>([]);
   const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
   const [filter, setFilter] = useState("");
+  // Names of app groups the user has expanded to reveal their windows (FR-2.8).
+  // Keyed by app name so the expansion survives the 1s poll replacing the list.
+  const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
 
   // Boot splash: `booting` keeps the overlay mounted (blocking input);
@@ -362,6 +366,21 @@ export default function App() {
     setError(null);
     activateApp(target).catch((e) => setError(String(e)));
   };
+
+  // Activate exactly one window/tab by its opaque handle (FR-2.8/AC-20). Surface
+  // failures (e.g. the window was closed between polls) in the error banner.
+  const activateWin = (handle: string) => {
+    setError(null);
+    activateWindow(handle).catch((e) => setError(errText(e)));
+  };
+
+  const toggleExpanded = (name: string) =>
+    setExpandedApps((cur) => {
+      const next = new Set(cur);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
   const openGroupModal = () => {
     setError(null);
@@ -519,25 +538,65 @@ export default function App() {
           onChange={(e) => setFilter(e.target.value)}
         />
         <ul className="running-list">
-          {filteredApps.map((app) => (
-            <li
-              key={app.name}
-              className="running-item"
-              draggable
-              onDragStart={(e) => onDragStartApp(e, app)}
-              onDragEnd={() => {
-                // Clear the drag ref even when the drag is cancelled (dropped
-                // outside a group), so the paused poll resumes.
-                draggedApp.current = null;
-                setDragOverId(null);
-              }}
-              onDoubleClick={() => activate(app.bundle_id ?? app.name)}
-              title="Double-click: bring to front · Drag: add to a group"
-            >
-              <AppIcon target={app.bundle_id ?? app.name} />
-              <span className="running-name">{app.name}</span>
-            </li>
-          ))}
+          {filteredApps.map((app) => {
+            const wins = app.windows ?? [];
+            const multi = wins.length > 1;
+            const isExpanded = expandedApps.has(app.name);
+            // Clicking an app: >1 window → expand/collapse; exactly 1 → activate
+            // that window directly; 0 (only app-level info) → activate the app.
+            const onAppClick = () => {
+              if (multi) toggleExpanded(app.name);
+              else if (wins.length === 1) activateWin(wins[0].handle);
+              else activate(app.bundle_id ?? app.name);
+            };
+            return (
+              <Fragment key={app.name}>
+                <li
+                  className={`running-item${multi ? " has-windows" : ""}${
+                    multi && isExpanded ? " expanded" : ""
+                  }`}
+                  draggable
+                  onDragStart={(e) => onDragStartApp(e, app)}
+                  onDragEnd={() => {
+                    // Clear the drag ref even when the drag is cancelled (dropped
+                    // outside a group), so the paused poll resumes.
+                    draggedApp.current = null;
+                    setDragOverId(null);
+                  }}
+                  onClick={onAppClick}
+                  title={
+                    multi
+                      ? "Click: show windows · Drag: add to a group"
+                      : "Click: bring to front · Drag: add to a group"
+                  }
+                >
+                  <AppIcon target={app.bundle_id ?? app.name} />
+                  <span className="running-name">{app.name}</span>
+                  {multi && (
+                    <span className="running-count" aria-hidden>
+                      {isExpanded ? "▾" : "▸"} {wins.length}
+                    </span>
+                  )}
+                </li>
+                {multi &&
+                  isExpanded &&
+                  wins.map((w, i) => (
+                    <li
+                      key={`${app.name} ${w.handle} ${i}`}
+                      className="running-window"
+                      onClick={() => activateWin(w.handle)}
+                      title="Click: bring this window to front"
+                    >
+                      <span
+                        className={`win-dot${w.is_focused ? " active" : ""}`}
+                        aria-hidden
+                      />
+                      <span className="win-title">{w.title}</span>
+                    </li>
+                  ))}
+              </Fragment>
+            );
+          })}
           {filteredApps.length === 0 && (
             <li className="empty">No apps to show</li>
           )}

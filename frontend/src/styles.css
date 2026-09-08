@@ -380,6 +380,52 @@ body { margin: 0; background: var(--body); }
   text-overflow: ellipsis;
 }
 
+/* An app with several windows clicks to expand rather than drag-only. */
+.running-item.has-windows { cursor: pointer; }
+/* Window count + expand chevron, pushed to the row's trailing edge. */
+.running-count {
+  margin-left: auto;
+  padding-left: 8px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--ink-muted);
+  flex-shrink: 0;
+}
+
+/* One live window/tab inside an expanded app group (FR-2.8). Indented under
+   the app icon; not drag-registerable itself (app-level DnD is unchanged). */
+.running-window {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 46px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.running-window:hover { background: var(--bone); }
+.win-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pad);
+  flex-shrink: 0;
+}
+/* Current foreground window — the green "active" dot within the group (FR-2.4). */
+.win-dot.active {
+  background: #35c46a;
+  box-shadow: 0 0 0 3px rgba(53, 196, 106, 0.18);
+}
+.win-title {
+  font-family: var(--grotesk);
+  font-size: 12px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 /* ── Buttons = EP-133 keys: SHARP · FLAT · SOFT ────────────
    Teenage Engineering keys are low, near-flush pads with crisp
    square-ish corners and a matte face — sharp and flat, never a

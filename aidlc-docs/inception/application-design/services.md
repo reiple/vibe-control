@@ -15,6 +15,7 @@
 - **협력 포트**: `WindowEnumerator`, `BrowserTabReader`, `IconProvider`; 도메인 `StatusEvaluator.is_noise`, `IdentityMatcher`.
 - **오케스트레이션**: 열거 → 노이즈 제거(AC-7) → 앱별 그룹핑(FR-2.1/2.2) → 선택 창 표시(FR-2.4) → 검색 필터(FR-2.5).
 - **관련**: FR-2, EPIC-2.
+> 🔧 **창 단위 재정렬(2026-09-08 진행 중, FR-2.8/AC-20)**: 이 서비스가 규정한 "**앱별 그룹핑 + 그룹 내 창 나열 + 선택 창 표시**"가 원 설계이며 창 단위다. 출하 코드는 이를 앱 단위(프로세스당 대표 창)로 축소 시행했고, 현재 창 단위 열거로 재정렬 중이다. 상세: `known-deviations.md#G1`, `construction/vc-os-windows/functional-design/window-enumeration.md`.
 
 ## S2. BundleService
 - **책임**: 작업 묶음/리소스의 CRUD, 항목 편집(표시명·재실행 주소), 정렬.
@@ -35,6 +36,7 @@
   - 개별: 매칭되는 실행 창 있으면 `focus`, 없으면 `RestorePlanner.plan_reopen` → `reopen`/`open_url`. 앱만 활성 시 성공 처리 안 함(FR-4.2).
   - 전체: `plan_bundle_activation` 순서대로 각 스텝 실행, 실패해도 계속(AC-11), `ActivationReport`(성공/미발견/오류) 반환(FR-5.4).
 - **관련**: FR-4, FR-5, FR-9.3 · AC-2/9/10/11.
+> 🔧 **창 지정 활성화(2026-09-08 진행 중, FR-2.8/AC-20)**: "매칭되는 실행 창을 `focus`, 앱만 활성 시 성공 아님(FR-4.2)"은 **특정 창** 대상이 원 설계다. 출하 코드 `open_app`은 앱 대상(아무 창 포커스)에 머물러 있어, HWND/창 지정 활성화 경로를 추가 중이다. 상세: `known-deviations.md#G2`.
 
 ## S5. StatusService
 - **책임**: 주기적으로 실행 목록·권한·세션을 수집해 저장 리소스 상태를 갱신하고 이벤트로 방출.
