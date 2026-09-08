@@ -190,10 +190,17 @@ export default function App() {
   }, []);
 
   const refreshRunning = async (silent = false) => {
+    // Never re-render the running list mid-drag: replacing/reordering the
+    // items cancels the in-flight native HTML5 drag before it can drop. The
+    // background poll yields to an active drag; a manual ↻ can't collide with
+    // a drag (one pointer) so it isn't gated.
+    if (silent && draggedApp.current) return;
     if (!silent) setRefreshing(true);
     setSessionNonce((n) => n + 1); // also refresh inline coding-session statuses
     try {
-      setRunningApps(await listRunningApps());
+      const apps = await listRunningApps();
+      if (silent && draggedApp.current) return; // a drag began while fetching
+      setRunningApps(apps);
     } catch (e) {
       // A background poll shouldn't flash the error banner every tick — only
       // surface failures from an explicit refresh.
@@ -333,6 +340,12 @@ export default function App() {
               className="running-item"
               draggable
               onDragStart={(e) => onDragStartApp(e, app)}
+              onDragEnd={() => {
+                // Clear the drag ref even when the drag is cancelled (dropped
+                // outside a group), so the paused poll resumes.
+                draggedApp.current = null;
+                setDragOverId(null);
+              }}
               onDoubleClick={() => activate(app.bundle_id ?? app.name)}
               title="Double-click: bring to front · Drag: add to a group"
             >
