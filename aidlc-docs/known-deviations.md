@@ -31,13 +31,13 @@
 |---|---|---|---|---|
 | B1 | Windows 창 열거 = **UI Automation, 최상위 창** | PowerShell `Get-Process`에서 `MainWindowHandle != 0 && MainWindowTitle` 필터로 **사용자가 띄운 가시 창 앱만** 열거(이름 기준 dedup). UI Automation은 구현된 적 없음(설계→`tasklist /v`→`Get-Process` 이력). ⚠ 이 **프로세스당 대표 창 + 이름 dedup**은 FR-2.2/2.4(앱 그룹 안에 창 나열)를 앱 단위로 축소하는 원인 — **G1(진행 중 기능)에서 창 단위 열거로 대체 예정** | [문서반영]→[코드백로그(G1)] | `vc-os-windows/src/lib.rs:57-124` |
 | B2 | macOS 창 열거 = **AXUIElement / accessibility 크레이트** | `osascript`/JXA + `NSWorkspace` 셸아웃(네이티브 접근성 의존성 없음) | [문서반영] | `vc-os-macos/src/lib.rs:47-118` |
-| B3 | `WinBrowserTabReader`가 Edge/Chrome 탭 수집 | **스텁** — 빈 벡터 반환("Not yet implemented on Windows") | [코드백로그] | `vc-os-windows/src/lib.rs:264-275` |
+| B3 | `WinBrowserTabReader`가 Edge/Chrome 탭 수집 | **부분 해소(2026-09-09)** — 라이브 좌측 패널용 `list_tabs`(제목+활성여부)·`activate_tab`(정확한 탭 전환)을 **UI Automation**으로 구현(§H). capture용 `read_tabs`(제목+**URL**)는 UIA가 URL 미제공(FR-9.7 추측 금지)이라 여전히 빈 스텁 — DevTools 프로토콜 필요 | [문서반영(라이브)]+[코드백로그(capture URL)] | `vc-os-windows/src/lib.rs`(`WinBrowserTabReader`) |
 | B4 | `WinIconProvider`(Windows 아이콘 제공) | ✅ **구현됨** (2026-09-08 커밋 `6039456`) — `WinIconReader`가 PowerShell + C# `Add-Type`(shell32 `SHGetImageList` jumbo 256px → 48px → 32px 폴백, 투명 여백 트림)로 exe 아이콘을 base64 PNG data URI로 추출. vc-app이 `extract_app_icon`에서 호출 + 캐시. **이탈 해소** | [문서반영] | `vc-os-windows/src/lib.rs:127-259`, `vc-app/src/lib.rs:365-372` |
 | B5 | Windows 트레이/전역 단축키 훅(FR-10.13, US-10.4) | **부재** | [코드백로그] | vc-os-windows 크레이트 전반 |
 | B6 | `MacPermissionChecker`(P6, AC-13) | **부재** — PermissionChecker struct 없음 | [코드백로그] | vc-os-macos 크레이트 전반 |
 | B7 | 어댑터 이름 `*WindowActivator` / `*IconProvider` | 활성화는 `*Launcher`(macOS/Windows), 아이콘은 `MacIconReader`/`WinIconReader`로 명명. `open_app`은 실행 전 이미 떠 있는 창 포커스 시도(FR-2.6, 커밋 `1abc6ed`) | [문서반영] | `vc-os-macos/src/lib.rs:174,309`, `vc-os-windows/src/lib.rs:127,278,315` |
 
-**참고**: B3/B5/B6은 여전히 미구현. B4(Windows 아이콘)는 2026-09-08 git pull로 들어온 커밋 `6039456`에서 구현되어 이탈 해소됨. Windows 앱 활성화 중복창 문제도 커밋 `1abc6ed`에서 "실행 중이면 기존 창 포커스" 경로 추가로 해결됨(FR-2.6).
+**참고**: B5/B6은 여전히 미구현. B3은 **부분 해소** — 라이브 탭 표시·활성화는 2026-09-09 구현(§H), capture용 URL 수집만 잔존. B4(Windows 아이콘)는 2026-09-08 git pull로 들어온 커밋 `6039456`에서 구현되어 이탈 해소됨. Windows 앱 활성화 중복창 문제도 커밋 `1abc6ed`에서 "실행 중이면 기존 창 포커스" 경로 추가로 해결됨(FR-2.6).
 
 ---
 
@@ -142,7 +142,24 @@
 - **구현**: `winffi` 모듈(FFI 선언) + `enum_windows_cb`(위 검증 필터 그대로: `IsWindowVisible` + `GetWindowTextLengthW>0` + `GetWindow(GW_OWNER)==0` + `!(GWL_EXSTYLE & WS_EX_TOOLWINDOW)` + `!DWMWA_CLOAKED`) + `raw_windows`(창별 행 수집 → PID로 exe 경로/이름 해석). PID→이름은 Toolhelp 스냅샷으로 **보장**(권한 부족 프로세스도 이름 유지), PID→전체경로는 `QueryFullProcessImageNameW` best-effort(실패 시 `name.exe` 폴백 — 기존 동작 보존). HWND는 `(hwnd as usize)` 10진 문자열로 `focus_window`의 전(全)자릿수 가드와 round-trip.
 - **계약 무변경**: `raw_windows`만 교체 — `list_running_windows`(이름 dedup 그룹핑, 아이콘 1회)·`list_running_apps`(capture용)·vc-app·프론트 계약 그대로. **최소 blast radius**.
 - **실측 검증(2026-09-09, 실 Windows)**: `cargo build -p vc-app` + `clippy --workspace` 0 경고. 전용 하니스(`list_running_windows` 직접 호출) 결과 — **chrome=2창, msedge=2창, KakaoTalk=2창(메인+채팅, 포커스 창 녹색점 정확), WindowsTerminal=2**; mspaint/Code/Obsidian=1(회귀 없음); explorer Program Manager는 `tool`로 정확히 제외. 실 앱 UI 스크린샷 — KakaoTalk·msedge `▾ 2` 펼침 + 창별 하위행·점, 패딩 번호는 앱 행만 카운트. capture dedup·DnD·아이콘 그룹핑 무변경.
-- **범위 밖(후속)**: 브라우저 **탭**(한 창 안 여러 탭)은 위 별개 문제 B(`#B3`) — `EnumWindows`로도 안 보임.
+- **범위 밖(후속)**: 브라우저 **탭**(한 창 안 여러 탭)은 위 별개 문제 B(`#B3`) — `EnumWindows`로도 안 보임. → **§H에서 UI Automation으로 보완 구현(2026-09-09).**
+
+---
+
+## H. 보완 Bolt — Windows 브라우저 탭 라이브 표시·활성화 (2026-09-09) — `#B3` 부분 해소
+
+G1(창 단위)에 이어 사용자 요청("지원 브라우저의 열린 탭을 개별 세션으로 확인·선택; 선택 시 정확히 그 탭 활성화")에 따라, Chrome/Edge/Brave/Whale의 탭을 **관리형 UI Automation**으로 열거·활성화하는 경로를 추가했다. `#B3`(BrowserTabReader 스텁)의 **라이브 표시·활성화 부분을 해소**한다.
+
+- **어댑터(U4)** `crates/vc-os-windows/src/lib.rs` — `WinBrowserTabReader`에 신규:
+  - `list_tabs(process) -> Vec<(handle_token, title, is_active)>`: 인라인 PowerShell `Add-Type UIAutomationClient/Types` → 대상 프로세스 창의 `ControlType.Tab` 스트립에서 `TabItem` 방출(TSV `<hwnd>\t<idx>\t<sel>\t<name>`). `TabItem`만 취해 `+`/탭목록/설정 오인 방지(FR-9.6). handle_token = `<hwnd>\u{1f}<idx>`(10진 HWND와 구분). `clean_tab_title`이 메모리 세이버 접미사 절단.
+  - `activate_tab(handle_token) -> Result<()>`: 창 최전면화(트리 강제 생성) 후 `SelectionItemPattern.Select`(폴백 `Invoke`). `GONE`/`NOSTRIP`/`BADIDX`/`NOPATTERN` 에러 매핑(FR-4.2 — 창만 최전면화는 성공 아님).
+  - capture용 `read_tabs`는 **여전히 스텁**: UIA는 활성 탭 URL만 보이고 배경 탭 URL 미제공, FR-9.7 추측 금지 → URL 필요한 영속 등록(FR-9.2/9.3)은 DevTools 프로토콜 별개 작업으로 잔존.
+  - **인라인 `Add-Type` 수용 근거**: 탭 읽기는 **그룹 펼침 온디맨드**로만 호출 → 1초 폴링 hot-path 아님(창 열거는 FFI 필수였던 것과 대비, FR-10.7). `windows`/`winapi` 크레이트 미도입 유지.
+- **vc-app(U6)**: 신규 커맨드 `list_browser_tabs(name)`·`activate_tab(handle)`(async, `#[cfg]` 분기 — Windows만 실동작), `RunningWindow` 재사용, `generate_handler!` 등록.
+- **프론트(U7)**: 브라우저 이름 그룹은 항상 펼침 가능; 펼칠 때 `listBrowserTabs` 지연 호출(폴링 미포함), 탭 행 클릭→`activateTab`(+재fetch로 활성 점 갱신), 읽기 불가 시 OS 창으로 폴백 + 안내 문구. DnD/capture/아이콘 무변경.
+- **한계(수용·문서화)**: ① 개별 탭 URL 없음(제목만) → 라이브 패널은 표시·활성화 전용. ② Chromium 지연 접근성 → 최전면/관여 창의 탭만 안정 노출, 백그라운드 전용 창은 창 목록 폴백(요구사항 #1 창 단위는 유지). 활성화는 대상 창을 먼저 최전면화하므로 백그라운드 창 탭도 전환됨.
+- **실측 검증(2026-09-09, 실 Windows+Chrome)**: 탭 2개 열거·활성 탭 플래그 정확, TSV↔Rust 파서 일치; 인덱스 1 전환 `OK` 후 활성 플래그 이동 확인→인덱스 0 복원 확인(정확히 지정 탭만). `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test -p vc-os-windows` 5/5(신규 `tab_tests`), 프론트 `tsc --noEmit` 무오류. 회귀 없음(순수 추가). 진단 산출물 `diag_tabs.ps1`/`diag_activate.ps1`은 검증 후 삭제.
+- **설계 문서**: `construction/vc-os-windows/functional-design/window-enumeration.md` §6.
 
 ---
 
@@ -234,7 +251,7 @@
 | P4 | 죽은 API `WinWindowEnumerator::list_running` 정리 / `reqwest` 주석 정정 | **H3, H4** | — |
 | P1 | 저장 실패 시 `.tmp` 정리 + `settings.json` 원자적 쓰기 | C1, C2 | FR-11.5/11.6, SECURITY-15 |
 | P2 | 중복 식별 금지 불변식 도메인화(`add_resource`/`is_duplicate`) | D1 | FR-3.4, AC-3 |
-| P2 | Windows 브라우저 탭 읽기(Edge/Chrome) | B3 | FR-10.12, AC-7/8 |
+| 부분완료 | Windows 브라우저 탭 — 라이브 표시·활성화 **완료**(§H, UIA). 잔여: capture용 URL 수집(영속 등록, DevTools 필요) | B3 | FR-9.6/10.12, AC-20 완료 / FR-9.1·9.2·9.3, AC-8 잔여 |
 | P3 | Windows 트레이/전역 단축키 | B5 | FR-10.13 |
 | P3 | macOS 권한 체커/안내 상태 재확인 | B6 | FR-10.2, AC-13 |
 | P3 | 포트 트레이트화 + 서비스/이벤트 리팩터링(헥사고날 복원) | A1–A4 | 아키텍처 |

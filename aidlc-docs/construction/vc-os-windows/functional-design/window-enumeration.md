@@ -85,6 +85,44 @@ RunningWindow  { handle: String, title: String, is_focused: bool }
 - **AC-20**(신규): 다중 창 앱 펼침 → 특정 창 선택 → 정확한 창 최전면; 단일 창 앱 동일 상호작용; 닫힌 창 갱신 후 제거.
 - 회귀 방지: **AC-2**(정확한 창/탭 최전면), **AC-3/AC-4**(드래그 1회 등록·같은 앱 다른 창 개별 등록), **AC-7**(닫힌/보조 창 제외).
 
+---
+
+## 6. Windows 브라우저 탭 열거 + 탭 지정 활성화 (U4 보완 Bolt, 2026-09-09)
+
+§5까지의 **창 단위**(G1–G3)에 이어, 지원 브라우저(Chrome/Edge/Brave/Whale)의 **탭 단위** 확인·선택을 보완한다. 탭은 OS 최상위 창이 아니라 브라우저 내부 UI이므로 `EnumWindows`로는 안 보이고, **UI Automation**으로 창의 탭 스트립을 읽어야 한다(FR-10.12). 이 Bolt는 §5 창 단위 모델과 **연속**이며, 창 열거/활성화·capture·DnD·아이콘은 무변경(순수 추가).
+
+### 6.1 접근 방식 — 관리형 UI Automation, 온디맨드
+- **왜 UIA인가**: 브라우저 탭 제목/선택 상태/선택 동작은 `System.Windows.Automation`(UIAutomationClient + UIAutomationTypes, .NET Framework 동봉)으로 표준적으로 접근된다. `ControlType.Tab`(탭 스트립) 컨테이너 → `ControlType.TabItem`(탭들). 활성 탭 = `SelectionItemPattern.IsSelected`, 탭 전환 = `SelectionItemPattern.Select`(폴백 `InvokePattern.Invoke`). `TabItem`만 취하므로 `+`/탭 목록/설정 등은 자연 제외(FR-9.6).
+- **왜 인라인 PowerShell `Add-Type`가 허용되는가**: 창 열거(§2)는 1초 폴링이라 FFI가 필수였지만, **탭 읽기는 그룹 펼침 시 온디맨드**로만 호출된다(FR-10.7). 따라서 `WinIconReader`와 동일하게 fresh `powershell.exe` + `Add-Type -AssemblyName UIAutomationClient/…` 패턴이 수용 가능(폴링 hot-path 아님). `windows`/`winapi` 크레이트 미도입 원칙 유지.
+- **보안(NFR-S2/SECURITY-05)**: 모든 신뢰 밖 값(대상 프로세스명, HWND, 탭 인덱스)은 `$env:VC_PROC`/`$env:VC_HWND`/`$env:VC_TABIDX`로 전달, 명령줄 연결 금지. Rust 측에서 프로세스명=식별자, HWND/인덱스=전(全)자릿수 검증.
+
+### 6.2 열거 — `WinBrowserTabReader::list_tabs(process) -> Vec<(handle_token, title, is_active)>`
+- 모든 최상위 `Window`를 순회하며 대상 프로세스명(`chrome`/`msedge`/…)의 창에서 `Tab` 스트립을 찾고 `TabItem`들을 방출. 워밍업(먼저 `FindFirst(Tab)`) + 350ms 대기로 Chromium 지연 트리 생성을 유도.
+- 출력: `<hwnd>\t<index>\t<selected 0|1>\t<name>` TSV → Rust가 파싱. **handle_token = `<hwnd>\u{1f}<index>`** (단위 구분자 `\u{1f}`) — 10진 HWND(창 활성화용)와 구분되고, macOS `name\u{1f}title` 관례와 대칭.
+- **제목 정리**: Chromium 메모리 세이버 주석(`… - 메모리 사용량 - 348MB` / `… - Memory usage - 120 MB`)을 `clean_tab_title`이 제거(숫자 없는 짧은 라벨 세그먼트만 안전하게 절단 — 실제 " - " 포함 제목은 보존). 빈 제목은 `(제목 없음)`.
+- **한계(수용)**: URL 미제공(FR-9.1의 주소 부분은 라이브 탭 불가; FR-9.7에 따라 추측 금지) → 표시·활성화 전용. Chromium 지연 접근성으로 **최전면/관여 창의 탭만** 안정적으로 읽힘 → 백그라운드 전용 창은 빈 결과. 실패·빈 결과는 `Ok(vec![])`로 degrade(caller가 OS 창 목록으로 폴백).
+
+### 6.3 활성화 — `WinBrowserTabReader::activate_tab(handle_token) -> Result<()>`
+- 토큰을 `hwnd`/`index`로 분해·검증 → 대상 창을 **먼저 최전면화**(`ShowWindowAsync(SW_RESTORE)` + `SetForegroundWindow`; 이는 Chromium이 그 창의 접근성 트리를 (재)생성하게 하여 이전 백그라운드 창의 탭 스트립도 읽히게 함) → `Tab` 스트립의 `index`번째 `TabItem`을 `Select`(폴백 `Invoke`).
+- **FR-4.2 준수**: 창만 최전면화하고 탭 전환 실패면 성공으로 보고하지 않음. `GONE`(창 사라짐)/`NOSTRIP`(스트립 못 읽음)/`BADIDX`(탭 사라짐)/`NOPATTERN`을 각각 에러로 매핑 → U6가 드롭 후 재열거.
+
+### 6.4 vc-app(U6) / 프론트(U7) 계약
+- **U6**: 신규 `list_browser_tabs(name) -> Vec<RunningWindow>`(온디맨드), `activate_tab(handle)` async 커맨드. `RunningWindow{handle,title,is_focused}` **재사용**(탭=창과 동형: `is_focused`=활성 탭). `#[cfg(target_os=…)]` 분기 — Windows만 실동작, 그 외 빈 벡터/미지원 에러. `generate_handler!` 등록.
+- **U7**: 브라우저 이름(`chrome/msedge/brave/whale`) 그룹은 **항상 펼침 가능**. 펼칠 때 `listBrowserTabs` **지연 호출**(폴링에는 안 태움), 탭이 있으면 탭 행 렌더(클릭→`activateTab`, 이후 재-fetch로 활성 점 갱신), 없으면 OS 창 행으로 폴백 + 안내 문구. 앱 그룹 헤더 DnD·capture 무변경.
+
+### 6.5 테스트
+- `vc-os-windows`에 최초 단위 테스트 추가(`tab_tests`): `is_mem_token`(크기 토큰 판별), `clean_tab_title`(메모리 주석 절단 vs 실제 하이픈 제목 보존, ko/en), 토큰 라운드트립(`<hwnd>\u{1f}<index>` ↔ split). UIA 자체는 라이브 브라우저 필요 → 실측 검증으로 대체(§아래).
+
+### 6.6 실측 검증 (2026-09-09, 실 Windows + Chrome)
+- 열거: 활성 Chrome 창에서 탭 2개 방출, 활성 탭 `selected=1` 정확, TSV가 Rust 파서와 일치, 메모리 세이버 접미사 존재(정리 로직 적용 대상) 확인.
+- 활성화: 인덱스 1로 전환 → `OK`, 재열거 시 활성 플래그가 인덱스 1로 이동 확인 → 인덱스 0으로 복원까지 확인(정확히 지정 탭만 전환 = FR-4.2).
+- 회귀: `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test -p vc-os-windows` 5/5 통과, 프론트 `tsc --noEmit` 무오류. 창 열거(§2)·capture·DnD 코드 무변경(순수 추가).
+
+## AC 매핑(보완)
+- **AC-20 확장**: 브라우저 그룹 펼침 → 탭 목록 확인 → 특정 탭 선택 → 정확한 탭 최전면(활성 점 이동). 읽기 불가 창은 OS 창으로 폴백.
+- 회귀 방지: **AC-7**(탭 목록/설정 등 비-탭 UI 오인 금지 = `TabItem`만), **AC-2**(정확한 창/탭 최전면), FR-10.7(폴링 미지연).
+
 ## 미해결/후속
-- Windows 브라우저 탭 창 단위(Edge/Chrome 탭)는 여전히 `known-deviations.md#B3`(스텁) — 이 기능은 **일반 앱 창** 우선. 브라우저 탭 열거는 후속.
-- U1 `matching/window.rs` L2 매처(`app_id|role|title`)는 저장 리소스↔실행 창 재추적(FR-4.4)에 사용 가능하나 본 기능 1차 범위는 실행 목록 표시·활성화에 한정.
+- 탭 **영속 등록/복원**(작업 묶음에 탭 저장, FR-9.2/9.3·AC-8/9)은 URL이 필요 → capture용 `read_tabs`(DevTools 프로토콜) 별개 작업으로 잔존. 라이브 패널은 표시·활성화 전용.
+- macOS 라이브 탭 세션(현재 앱 창 폴백) — AX 기반 탭 열거는 후속.
+- U1 `matching/window.rs` L2 매처(`app_id|role|title`)는 저장 리소스↔실행 창 재추적(FR-4.4)에 사용 가능하나 본 기능 범위는 실행 목록 표시·활성화에 한정.

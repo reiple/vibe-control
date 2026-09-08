@@ -549,18 +549,258 @@ impl WinIconReader {
 #[cfg(target_os = "windows")]
 pub struct WinBrowserTabReader;
 
+/// Separator packing a tab activation token as `<hwnd>\u{1f}<index>` — the HWND
+/// of the browser window plus the tab's position in its strip. `\u{1f}` (unit
+/// separator) can't occur in the decimal parts, and the whole token is
+/// distinguishable from the bare-decimal HWND that `WinLauncher::focus_window`
+/// takes, so vc-app routes a tab click to `activate_tab`, a window click to
+/// `focus_window`. Mirrors the macOS `name\u{1f}title` handle convention.
+#[cfg(target_os = "windows")]
+const TAB_SEP: char = '\u{1f}';
+
+/// Strip Chromium's Memory-Saver annotation from a tab's accessibility name.
+/// Chrome/Edge expose a tab's a11y `Name` as e.g. `"실제 제목 - 메모리 사용량 -
+/// 348MB"` / `"Real title - Memory usage - 120 MB"` when the hover card / memory
+/// saver is active. We show the page title, so drop a trailing ` - <label> -
+/// <NNN><unit>` (or bare ` - <NNN><unit>`). Guarded so a real title that merely
+/// contains " - " isn't mangled: we only cut the label segment when it holds no
+/// digits and is short. Any title without a trailing size token is returned
+/// unchanged.
+#[cfg(target_os = "windows")]
+fn clean_tab_title(name: &str) -> String {
+    let t = name.trim();
+    if let Some(pos) = t.rfind(" - ") {
+        let last = t[pos + 3..].trim();
+        if is_mem_token(last) {
+            let head = t[..pos].trim_end();
+            if let Some(pos2) = head.rfind(" - ") {
+                let label = head[pos2 + 3..].trim();
+                // Only drop the middle segment when it looks like a memory
+                // LABEL (short, no digits) rather than part of the real title.
+                if label.len() <= 24 && !label.chars().any(|c| c.is_ascii_digit()) {
+                    return head[..pos2].trim().to_string();
+                }
+            }
+            return head.trim().to_string();
+        }
+    }
+    t.to_string()
+}
+
+/// A memory-size token like `348MB`, `1.2 GB`, `512KB`: starts with a digit and
+/// ends with a byte unit.
+#[cfg(target_os = "windows")]
+fn is_mem_token(s: &str) -> bool {
+    let s = s.trim();
+    let up = s.to_ascii_uppercase();
+    let unit = up.ends_with("MB") || up.ends_with("KB") || up.ends_with("GB") || up.ends_with('B');
+    unit && s.chars().next().is_some_and(|c| c.is_ascii_digit())
+}
+
 #[cfg(target_os = "windows")]
 impl WinBrowserTabReader {
-    /// Open browser tabs as `(title, url)`. Not yet implemented on Windows.
-    ///
-    /// Reliable tab extraction needs either UI Automation (Edge/IE COM) or the
-    /// Chrome DevTools protocol (localhost:9222, off by default) — both too heavy
-    /// for the MVP. We return empty so capture still succeeds; users add tabs
-    /// manually. Returning `Ok` (never launching a browser) is intentional.
+    /// Open browser tabs as `(title, url)` for CAPTURE. Still a stub: reliable
+    /// per-tab URL capture is not available through UI Automation (the omnibox
+    /// only reveals the *active* tab's URL, and background tabs expose none —
+    /// FR-9.7 forbids guessing) and would need the Chrome DevTools protocol
+    /// (`--remote-debugging-port`, off for a normally-launched browser). We
+    /// return empty so capture still succeeds without inventing addresses. The
+    /// LIVE left-panel tab list — titles + exact-tab activation — is served by
+    /// `list_tabs` / `activate_tab` below (`known-deviations.md#B3`).
     pub fn read_tabs() -> Result<Vec<(String, String)>> {
         Ok(Vec::new())
     }
+
+    /// LIVE tabs of a running browser as `(handle_token, title, is_active)` for
+    /// the expandable left-panel group (FR-2.8 / FR-9.6 / FR-10.12, AC-20).
+    /// `process` is the browser's process name (`chrome`, `msedge`, `brave`,
+    /// `whale`) — the exe stem `list_running_windows` already hands the UI.
+    ///
+    /// Reads each matching browser window's tab strip through managed UI
+    /// Automation (`System.Windows.Automation`, shipped with the .NET Framework
+    /// that backs `powershell.exe`), one `TabItem` per real tab — never the
+    /// `+`/tab-list/settings controls (FR-9.6), which aren't `ControlType.Tab`
+    /// children. `is_active` marks the selected tab (`SelectionItemPattern`),
+    /// shown as the green dot (FR-2.4).
+    ///
+    /// LIMITATION (accepted, documented — `#B3`): Chromium builds a window's
+    /// accessibility tree lazily, so only the *engaged/foreground* browser
+    /// window reliably exposes its strip; a fully-background window yields no
+    /// rows and the UI falls back to its OS-window list. Runs ONLY on demand
+    /// (group expand), never on the 1-second poll, so the `Add-Type` compile it
+    /// pays never touches the hot path (FR-10.7). Empty on any failure.
+    pub fn list_tabs(process: &str) -> Result<Vec<(String, String, bool)>> {
+        // Defense in depth: `process` only ever comes from our own enumeration,
+        // but keep it a bare identifier before it reaches PowerShell (it is also
+        // passed via an env var, never the command line — see module SECURITY).
+        if process.is_empty()
+            || !process
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        {
+            return Ok(Vec::new());
+        }
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", LIST_TABS_SCRIPT])
+            .env("VC_PROC", process)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        let output = match output {
+            Ok(o) if o.status.success() => o,
+            _ => return Ok(Vec::new()),
+        };
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let mut tabs = Vec::new();
+        for line in stdout.lines() {
+            // `<hwnd>\t<index>\t<selected 0|1>\t<name>`
+            let mut parts = line.splitn(4, '\t');
+            let (Some(hwnd), Some(idx), Some(sel), Some(name)) =
+                (parts.next(), parts.next(), parts.next(), parts.next())
+            else {
+                continue;
+            };
+            if hwnd.is_empty() || !hwnd.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            if idx.is_empty() || !idx.bytes().all(|b| b.is_ascii_digit()) {
+                continue;
+            }
+            let title = clean_tab_title(name);
+            let title = if title.is_empty() {
+                "(제목 없음)".to_string()
+            } else {
+                title
+            };
+            tabs.push((format!("{hwnd}{TAB_SEP}{idx}"), title, sel.trim() == "1"));
+        }
+        Ok(tabs)
+    }
+
+    /// Bring a SPECIFIC browser tab to the front (FR-2.8 / FR-4.1 / FR-4.2,
+    /// AC-20): the per-tab counterpart of `WinLauncher::focus_window`. `handle`
+    /// is a `list_tabs` token (`<hwnd>\u{1f}<index>`). It foregrounds the browser
+    /// window FIRST — which also forces Chromium to (re)build that window's
+    /// accessibility tree, so a previously-background window's strip becomes
+    /// readable — then selects the tab via `SelectionItemPattern.Select`
+    /// (falling back to `Invoke`). Foregrounding the app without switching the
+    /// tab is NOT reported as success (FR-4.2): a stale/closed handle or a
+    /// missing strip returns an error so vc-app can drop it and re-enumerate.
+    /// The HWND and index are validated as decimals and passed via env vars,
+    /// never the command line (see module SECURITY).
+    pub fn activate_tab(handle: &str) -> Result<()> {
+        let (hwnd, idx) = handle.split_once(TAB_SEP).ok_or_else(|| {
+            CoreError::Internal(format!("invalid tab handle: {handle:?}"))
+        })?;
+        if hwnd.is_empty() || !hwnd.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(CoreError::Internal(format!("invalid tab hwnd: {hwnd:?}")));
+        }
+        if idx.is_empty() || !idx.bytes().all(|b| b.is_ascii_digit()) {
+            return Err(CoreError::Internal(format!("invalid tab index: {idx:?}")));
+        }
+        let output = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                ACTIVATE_TAB_SCRIPT,
+            ])
+            .env("VC_HWND", hwnd)
+            .env("VC_TABIDX", idx)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| CoreError::Internal(format!("powershell activate_tab failed: {e}")))?;
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        if stdout.contains("OK") {
+            return Ok(());
+        }
+        if stdout.contains("GONE") {
+            return Err(CoreError::Internal("browser window is no longer open".into()));
+        }
+        if stdout.contains("NOSTRIP") {
+            return Err(CoreError::Internal(
+                "could not read the browser's tabs (window not engaged)".into(),
+            ));
+        }
+        if stdout.contains("BADIDX") {
+            return Err(CoreError::Internal("that tab is no longer open".into()));
+        }
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        Err(CoreError::Internal(format!(
+            "could not activate tab: {}",
+            stderr.trim()
+        )))
+    }
 }
+
+/// Read-only UIA enumeration of a browser's tab strips. Emits one TSV line per
+/// real tab: `<hwnd>\t<index>\t<selected 0|1>\t<name>`. A warm-up pass nudges
+/// Chromium to build the (engaged) window's tree before we read it. The target
+/// process name arrives in `$env:VC_PROC`. Silent on failure (empty output).
+#[cfg(target_os = "windows")]
+const LIST_TABS_SCRIPT: &str = r#"$ErrorActionPreference='SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+$AE=[System.Windows.Automation.AutomationElement]
+$CT=[System.Windows.Automation.ControlType]
+$TS=[System.Windows.Automation.TreeScope]
+$CP=$AE::ControlTypeProperty
+$proc=$env:VC_PROC
+$root=$AE::RootElement
+$winCond=New-Object System.Windows.Automation.PropertyCondition($CP,$CT::Window)
+$stripCond=New-Object System.Windows.Automation.PropertyCondition($CP,$CT::Tab)
+$itemCond=New-Object System.Windows.Automation.PropertyCondition($CP,$CT::TabItem)
+$wins=$root.FindAll($TS::Children,$winCond)
+foreach($w in $wins){
+  $p=Get-Process -Id $w.Current.ProcessId -ErrorAction SilentlyContinue
+  if($p -and $p.ProcessName -eq $proc){ $null=$w.FindFirst($TS::Descendants,$stripCond) }
+}
+Start-Sleep -Milliseconds 350
+foreach($w in $wins){
+  $p=Get-Process -Id $w.Current.ProcessId -ErrorAction SilentlyContinue
+  if(-not $p -or $p.ProcessName -ne $proc){ continue }
+  $h=[int64]$w.Current.NativeWindowHandle
+  $strip=$w.FindFirst($TS::Descendants,$stripCond)
+  if(-not $strip){ continue }
+  $items=$strip.FindAll($TS::Children,$itemCond)
+  $idx=0
+  foreach($t in $items){
+    $sel=0; $pt=$null
+    if($t.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$pt)){ if($pt.Current.IsSelected){$sel=1} }
+    $name=($t.Current.Name) -replace "[`t`r`n]"," "
+    Write-Output ("{0}`t{1}`t{2}`t{3}" -f $h,$idx,$sel,$name)
+    $idx++
+  }
+}"#;
+
+/// Foreground a browser window (which also forces Chromium to build its tab
+/// strip) and select the `$env:VC_TABIDX`-th tab. Prints `OK` on success, or a
+/// keyword (`GONE`/`NOSTRIP`/`BADIDX`/`NOPATTERN`) the caller maps to an error.
+#[cfg(target_os = "windows")]
+const ACTIVATE_TAB_SCRIPT: &str = r#"$ErrorActionPreference='SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class VcTab { [DllImport("user32.dll")] public static extern bool IsWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int n); }'
+$h=[IntPtr][int64]$env:VC_HWND
+$idx=[int]$env:VC_TABIDX
+if(-not [VcTab]::IsWindow($h)){ 'GONE'; exit 0 }
+[void][VcTab]::ShowWindowAsync($h,9)
+[void][VcTab]::SetForegroundWindow($h)
+Start-Sleep -Milliseconds 250
+$el=[System.Windows.Automation.AutomationElement]::FromHandle($h)
+if(-not $el){ 'NOSTRIP'; exit 1 }
+$CT=[System.Windows.Automation.ControlType]
+$TS=[System.Windows.Automation.TreeScope]
+$CP=[System.Windows.Automation.AutomationElement]::ControlTypeProperty
+$strip=$el.FindFirst($TS::Descendants,(New-Object System.Windows.Automation.PropertyCondition($CP,$CT::Tab)))
+if(-not $strip){ 'NOSTRIP'; exit 1 }
+$items=$strip.FindAll($TS::Children,(New-Object System.Windows.Automation.PropertyCondition($CP,$CT::TabItem)))
+if($idx -lt 0 -or $idx -ge $items.Count){ 'BADIDX'; exit 1 }
+$t=$items[$idx]
+$pt=$null
+if($t.TryGetCurrentPattern([System.Windows.Automation.SelectionItemPattern]::Pattern,[ref]$pt)){ $pt.Select(); 'OK'; exit 0 }
+$iv=$null
+if($t.TryGetCurrentPattern([System.Windows.Automation.InvokePattern]::Pattern,[ref]$iv)){ $iv.Invoke(); 'OK'; exit 0 }
+'NOPATTERN'; exit 1"#;
 
 #[cfg(target_os = "windows")]
 pub struct WinLauncher;
@@ -778,5 +1018,77 @@ try { $ws = New-Object -ComObject WScript.Shell; if ($procId -ne 0) { [void]$ws.
             .creation_flags(CREATE_NO_WINDOW)
             .output();
         Ok(())
+    }
+}
+
+// Unit tests for the pure, side-effect-free browser-tab helpers. The UI
+// Automation reads/activations themselves need a live browser and can't be
+// unit-tested, but the title cleanup and handle-token encoding are pure and
+// carry the parsing risk, so they're covered here. Windows-gated because the
+// helpers only compile on Windows.
+#[cfg(all(test, target_os = "windows"))]
+mod tab_tests {
+    use super::*;
+
+    #[test]
+    fn mem_token_detects_real_sizes() {
+        for s in ["348MB", "1.2 GB", "512KB", "5B", " 120 MB "] {
+            assert!(is_mem_token(s), "{s:?} should be a memory token");
+        }
+    }
+
+    #[test]
+    fn mem_token_rejects_non_sizes() {
+        // No leading digit, or no byte unit — must NOT be treated as a size.
+        for s in ["GitHub", "reiple/vibe-control", "MB", "", "12 downloads"] {
+            assert!(!is_mem_token(s), "{s:?} should not be a memory token");
+        }
+    }
+
+    #[test]
+    fn clean_title_strips_memory_saver_suffix() {
+        // Chromium's localized hover-card / memory-saver annotation is dropped,
+        // label segment and all, in both Korean and English forms.
+        assert_eq!(
+            clean_tab_title("해커톤 공부 내용 정리 - 메모리 사용량 - 348MB"),
+            "해커톤 공부 내용 정리"
+        );
+        assert_eq!(
+            clean_tab_title("Real title - Memory usage - 120 MB"),
+            "Real title"
+        );
+        // Bare " - <size>" with no label segment still strips the size only.
+        assert_eq!(clean_tab_title("Foo - 12KB"), "Foo");
+    }
+
+    #[test]
+    fn clean_title_keeps_ordinary_titles() {
+        // A real title that merely contains " - " (and no trailing size token)
+        // must be returned untouched.
+        assert_eq!(
+            clean_tab_title("GitHub - reiple/vibe-control"),
+            "GitHub - reiple/vibe-control"
+        );
+        assert_eq!(clean_tab_title("Plain tab title"), "Plain tab title");
+        // A trailing hyphen segment that looks like a size but sits behind a
+        // long, digit-bearing middle segment must not over-strip the title.
+        assert_eq!(
+            clean_tab_title("Report Q3 2024 breakdown - 50MB"),
+            "Report Q3 2024 breakdown"
+        );
+    }
+
+    #[test]
+    fn tab_token_roundtrips() {
+        // list_tabs formats `<hwnd>\u{1f}<index>`; activate_tab splits it back.
+        let token = format!("{}{}{}", "132456", TAB_SEP, "3");
+        let (hwnd, idx) = token.split_once(TAB_SEP).expect("token has separator");
+        assert_eq!(hwnd, "132456");
+        assert_eq!(idx, "3");
+        assert!(hwnd.bytes().all(|b| b.is_ascii_digit()));
+        assert!(idx.bytes().all(|b| b.is_ascii_digit()));
+        // A bare decimal HWND (a window handle) has no separator, so it is never
+        // mistaken for a tab token.
+        assert!("132456".split_once(TAB_SEP).is_none());
     }
 }

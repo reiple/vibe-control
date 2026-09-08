@@ -369,6 +369,40 @@ async fn activate_window(handle: String) -> std::result::Result<(), CommandError
     Ok(())
 }
 
+/// List a running browser's currently-open tabs as individual selectable
+/// sessions (FR-9.6 / FR-10.12 / AC-20). `name` is the app-group name the UI
+/// already has (the browser's process/exe stem, e.g. `chrome` / `msedge`). Each
+/// returned `RunningWindow` is one tab: `handle` an opaque per-tab activation
+/// token (never interpreted by the frontend), `title` the tab's page title,
+/// `is_focused` the active tab (green dot). Fetched ON DEMAND when the user
+/// expands a browser group — NEVER on the 1-second poll (FR-10.7) — since it
+/// reads the browser's accessibility tree, which is heavier than window
+/// enumeration. Returns empty (UI falls back to the OS-window list) when no
+/// browser window's tabs are readable — e.g. a fully-background window whose
+/// accessibility tree the browser hasn't built, or an unsupported platform.
+#[tauri::command]
+async fn list_browser_tabs(name: String) -> std::result::Result<Vec<RunningWindow>, CommandError> {
+    Ok(enumerate_browser_tab_sessions(&name)
+        .into_iter()
+        .map(|(handle, title, is_focused)| RunningWindow {
+            handle,
+            title,
+            is_focused,
+        })
+        .collect())
+}
+
+/// Bring a SPECIFIC browser tab to the front (FR-2.8 / FR-4.1 / FR-4.2, AC-20):
+/// the per-tab counterpart of `activate_window`. `handle` is the opaque token
+/// from a `list_browser_tabs` entry. It focuses exactly that tab (foregrounding
+/// its window first), not just the browser app; errors if the tab or window is
+/// gone since the last fetch so the UI can drop it and re-enumerate.
+#[tauri::command]
+async fn activate_tab(handle: String) -> std::result::Result<(), CommandError> {
+    focus_tab(&handle)?;
+    Ok(())
+}
+
 /// Return an app's icon as a `data:image/png;base64,…` URI at high resolution
 /// (§13.5), cached in-memory (NFR §9). `bundle_id` is a bundle id or app name —
 /// the same value passed to `activate_app`, so cache keys line up across
@@ -620,6 +654,39 @@ fn focus_window(handle: &str) -> std::result::Result<(), String> {
     }
 }
 
+/// A browser's live tabs as `(handle_token, title, is_active)`, on demand. Only
+/// Windows currently has a live tab reader (UI Automation over Chromium's tab
+/// strip); macOS reads Safari/Chrome tabs for CAPTURE (title+url) but not as
+/// activatable live-panel sessions, so it returns empty here (the UI falls back
+/// to the app's OS windows). Never errors — an empty list is the graceful
+/// degradation the caller expects.
+fn enumerate_browser_tab_sessions(name: &str) -> Vec<(String, String, bool)> {
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinBrowserTabReader::list_tabs(name).unwrap_or_default()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = name;
+        Vec::new()
+    }
+}
+
+/// Focus a specific browser tab by its opaque per-platform handle, the per-tab
+/// counterpart of `focus_window`. Only Windows supports it today; elsewhere the
+/// UI never surfaces tab handles, so this is an explicit unsupported error.
+fn focus_tab(handle: &str) -> std::result::Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinBrowserTabReader::activate_tab(handle).map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = handle;
+        Err("browser-tab activation not supported on this platform".into())
+    }
+}
+
 fn open_path(target: &str) -> std::result::Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -781,6 +848,8 @@ pub fn run() {
             list_running_apps,
             activate_app,
             activate_window,
+            list_browser_tabs,
+            activate_tab,
             get_app_icon,
             create_bundle,
             delete_bundle,

@@ -6,6 +6,7 @@ import type {
   SessionCompletion,
   RestoreReport,
   RunningApp,
+  RunningWindow,
   ChatMsg,
   ClaudeStatus,
 } from "./types";
@@ -18,6 +19,8 @@ import {
   listRunningApps,
   activateApp,
   activateWindow,
+  listBrowserTabs,
+  activateTab,
   getAppIcon,
   createBundle,
   deleteBundle,
@@ -27,6 +30,13 @@ import {
   setClaudeModel,
   sendClaudeMessage,
 } from "./api";
+
+// Apps whose expanded list shows browser TABS (via UI Automation) rather than
+// OS windows — matched case-insensitively against the app-group name, which on
+// Windows is the browser's exe stem (FR-9.6 / FR-10.12). A browser group is
+// always expandable so its tabs can be revealed even when it has one window.
+// Tabs are fetched lazily on expand, never on the 1-second poll (FR-10.7).
+const BROWSER_APPS = new Set(["chrome", "msedge", "brave", "whale"]);
 
 // Selectable models for the console. These are AWS Bedrock inference-profile
 // ids (the app talks to the Bedrock runtime, not api.anthropic.com), matching
@@ -229,6 +239,15 @@ export default function App() {
   // Names of app groups the user has expanded to reveal their windows (FR-2.8).
   // Keyed by app name so the expansion survives the 1s poll replacing the list.
   const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
+  // Browser tabs fetched on expand, keyed by app name (FR-9.6/FR-10.12). Held
+  // separately from runningApps so the poll never re-reads tabs (FR-10.7); a
+  // present-but-empty entry means "read, none available" → fall back to windows.
+  const [tabsByApp, setTabsByApp] = useState<Record<string, RunningWindow[]>>(
+    {}
+  );
+  const [tabsLoadingApps, setTabsLoadingApps] = useState<Set<string>>(
+    new Set()
+  );
   const [refreshing, setRefreshing] = useState(false);
 
   // Boot splash: `booting` keeps the overlay mounted (blocking input);
@@ -414,6 +433,35 @@ export default function App() {
     activateWindow(handle).catch((e) => setError(errText(e)));
   };
 
+  // Lazily read a browser's open tabs when its group is expanded (FR-9.6 /
+  // FR-10.12) — never on the poll (FR-10.7). An empty result (background/
+  // unreadable window) leaves the group falling back to its OS windows.
+  const fetchTabs = async (name: string) => {
+    setTabsLoadingApps((cur) => new Set(cur).add(name));
+    try {
+      const tabs = await listBrowserTabs(name);
+      setTabsByApp((cur) => ({ ...cur, [name]: tabs }));
+    } catch (e) {
+      setError(errText(e));
+    } finally {
+      setTabsLoadingApps((cur) => {
+        const next = new Set(cur);
+        next.delete(name);
+        return next;
+      });
+    }
+  };
+
+  // Activate exactly one browser tab (FR-2.8/FR-4.2/AC-20): focus that tab, then
+  // re-read the strip so the active-tab dot reflects the switch. On-demand, so
+  // the poll (FR-10.7) is untouched.
+  const activateTabRow = (handle: string, appName: string) => {
+    setError(null);
+    activateTab(handle)
+      .then(() => fetchTabs(appName))
+      .catch((e) => setError(errText(e)));
+  };
+
   const toggleExpanded = (name: string) =>
     setExpandedApps((cur) => {
       const next = new Set(cur);
@@ -581,19 +629,39 @@ export default function App() {
           {filteredApps.map((app) => {
             const wins = app.windows ?? [];
             const multi = wins.length > 1;
+            const isBrowser = BROWSER_APPS.has(app.name.toLowerCase());
             const isExpanded = expandedApps.has(app.name);
-            // Clicking an app: >1 window → expand/collapse; exactly 1 → activate
-            // that window directly; 0 (only app-level info) → activate the app.
+            // A browser is always expandable (to reveal its tabs); other apps
+            // expand only when they own more than one window.
+            const expandable = multi || isBrowser;
+            const tabs = tabsByApp[app.name];
+            const tabsLoading = tabsLoadingApps.has(app.name);
+            // Show TABS for an expanded browser once some were read; otherwise
+            // (non-browser, or a browser exposing no readable tabs) fall back to
+            // the OS windows so multi-window apps still list every window.
+            const showTabs = isBrowser && (tabs?.length ?? 0) > 0;
+            const rows = showTabs ? tabs! : wins;
+            const count = showTabs ? tabs!.length : wins.length;
+            // Clicking an app: expandable (browser, or >1 window) → toggle the
+            // list; exactly 1 window → activate it; nothing to expand and no
+            // window info → activate the app by name.
             const onAppClick = () => {
-              if (multi) toggleExpanded(app.name);
-              else if (wins.length === 1) activateWin(wins[0].handle);
-              else activate(app.bundle_id ?? app.name);
+              if (expandable) {
+                const opening = !isExpanded;
+                toggleExpanded(app.name);
+                // Lazily read a browser's tabs the moment its group opens.
+                if (opening && isBrowser) void fetchTabs(app.name);
+              } else if (wins.length === 1) {
+                activateWin(wins[0].handle);
+              } else {
+                activate(app.bundle_id ?? app.name);
+              }
             };
             return (
               <Fragment key={app.name}>
                 <li
-                  className={`running-item${multi ? " has-windows" : ""}${
-                    multi && isExpanded ? " expanded" : ""
+                  className={`running-item${expandable ? " has-windows" : ""}${
+                    expandable && isExpanded ? " expanded" : ""
                   }`}
                   draggable
                   onDragStart={(e) => onDragStartApp(e, app)}
@@ -605,27 +673,37 @@ export default function App() {
                   }}
                   onClick={onAppClick}
                   title={
-                    multi
+                    isBrowser
+                      ? "Click: show tabs · Drag: add to a group"
+                      : multi
                       ? "Click: show windows · Drag: add to a group"
                       : "Click: bring to front · Drag: add to a group"
                   }
                 >
                   <AppIcon target={app.bundle_id ?? app.name} />
                   <span className="running-name">{app.name}</span>
-                  {multi && (
+                  {expandable && count > 0 && (
                     <span className="running-count" aria-hidden>
-                      {isExpanded ? "▾" : "▸"} {wins.length}
+                      {isExpanded ? "▾" : "▸"} {count}
                     </span>
                   )}
                 </li>
-                {multi &&
+                {expandable &&
                   isExpanded &&
-                  wins.map((w, i) => (
+                  rows.map((w, i) => (
                     <li
                       key={`${app.name} ${w.handle} ${i}`}
                       className="running-window"
-                      onClick={() => activateWin(w.handle)}
-                      title="Click: bring this window to front"
+                      onClick={() =>
+                        showTabs
+                          ? activateTabRow(w.handle, app.name)
+                          : activateWin(w.handle)
+                      }
+                      title={
+                        showTabs
+                          ? "Click: switch to this tab"
+                          : "Click: bring this window to front"
+                      }
                     >
                       <span
                         className={`win-dot${w.is_focused ? " active" : ""}`}
@@ -634,6 +712,17 @@ export default function App() {
                       <span className="win-title">{w.title}</span>
                     </li>
                   ))}
+                {isBrowser && isExpanded && !showTabs && (
+                  <li className="running-window running-window-hint">
+                    <span className="win-title">
+                      {tabsLoading
+                        ? "탭 읽는 중…"
+                        : wins.length > 0
+                        ? "탭을 읽을 수 없어 창을 표시합니다"
+                        : "열린 탭을 찾을 수 없습니다"}
+                    </span>
+                  </li>
+                )}
               </Fragment>
             );
           })}
