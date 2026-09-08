@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
 import type {
   WorkBundle,
   Resource,
@@ -17,6 +17,7 @@ import {
   activateCodingSession,
   listRunningApps,
   activateApp,
+  activateWindow,
   getAppIcon,
   createBundle,
   deleteBundle,
@@ -129,6 +130,37 @@ function AppIcon({
   );
 }
 
+// Full-viewport boot splash. Rendered by React (not static index.html markup)
+// so it paints at the correct DPI on Windows/WebView2, and it blocks all input
+// underneath until the app has finished its first load. `hiding` fades it out
+// just before it unmounts. The EP-133 device motif — charcoal pad, orange
+// record dot, an LCD segment chase — reads as the hardware "powering on".
+function Splash({ hiding }: { hiding: boolean }) {
+  return (
+    <div
+      className={`splash ${hiding ? "splash--hidden" : ""}`}
+      role="progressbar"
+      aria-label="Loading vibe-control"
+      aria-busy="true"
+    >
+      <div className="splash-card">
+        <div className="splash-badge">
+          <span className="splash-rec" />
+        </div>
+        <div className="splash-word">vibe-control</div>
+        <div className="splash-leds" aria-hidden>
+          <span />
+          <span />
+          <span />
+          <span />
+          <span />
+        </div>
+        <div className="splash-cap">Initializing</div>
+      </div>
+    </div>
+  );
+}
+
 const completionLabel: Record<SessionCompletion, string> = {
   Waiting: "Awaiting reply",
   NotWaiting: "Working",
@@ -194,7 +226,15 @@ export default function App() {
   const [bundles, setBundles] = useState<WorkBundle[]>([]);
   const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
   const [filter, setFilter] = useState("");
+  // Names of app groups the user has expanded to reveal their windows (FR-2.8).
+  // Keyed by app name so the expansion survives the 1s poll replacing the list.
+  const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
   const [refreshing, setRefreshing] = useState(false);
+
+  // Boot splash: `booting` keeps the overlay mounted (blocking input);
+  // `splashOut` triggers its fade just before we unmount it.
+  const [booting, setBooting] = useState(true);
+  const [splashOut, setSplashOut] = useState(false);
 
   const [newGroupName, setNewGroupName] = useState("");
   const [showGroupModal, setShowGroupModal] = useState(false);
@@ -219,18 +259,66 @@ export default function App() {
   const [keyInput, setKeyInput] = useState("");
   const transcriptRef = useRef<HTMLDivElement | null>(null);
 
+  // Boot sequence. The splash overlay blocks all input; hold it until the
+  // essential shell data has loaded — saved groups, Claude status, and the
+  // first running-apps scan (the slow OS call the splash exists to cover) — so
+  // the window never appears interactive while still empty. A minimum on-screen
+  // time keeps it from flickering on a fast start; a hard cap guarantees the
+  // splash is always lifted even if a backend call hangs.
   useEffect(() => {
-    getBundles()
-      .then(setBundles)
-      .catch((e) => setError(String(e)));
-    claudeStatus()
-      .then(setClaude)
-      .catch(() => setClaude(null));
-    // Defer the running-apps scan (a comparatively slow OS call) to the next
-    // frame so the app shell + saved groups paint immediately instead of the
-    // window sitting blank until the scan returns on cold start.
-    const raf = requestAnimationFrame(() => refreshRunning());
-    return () => cancelAnimationFrame(raf);
+    let cancelled = false;
+    let finished = false;
+    const startedAt = performance.now();
+    const MIN_SPLASH_MS = 650;
+    const MAX_SPLASH_MS = 8000;
+    const FADE_MS = 400; // must match the .splash opacity transition
+
+    // Fade the splash out, then unmount it. Idempotent: whichever of the boot
+    // completion or the hard-cap fires first wins; the other is a no-op.
+    const finish = () => {
+      if (cancelled || finished) return;
+      finished = true;
+      setSplashOut(true);
+      window.setTimeout(() => {
+        if (!cancelled) setBooting(false);
+      }, FADE_MS);
+    };
+
+    // Safety net: never strand the UI behind the splash if boot stalls.
+    const hardCap = window.setTimeout(finish, MAX_SPLASH_MS);
+
+    (async () => {
+      await Promise.allSettled([
+        getBundles()
+          .then((b) => {
+            if (!cancelled) setBundles(b);
+          })
+          .catch((e) => {
+            if (!cancelled) setError(String(e));
+          }),
+        claudeStatus()
+          .then((c) => {
+            if (!cancelled) setClaude(c);
+          })
+          .catch(() => {
+            if (!cancelled) setClaude(null);
+          }),
+        refreshRunning(), // first running-apps scan
+      ]);
+
+      // Floor the visible time so the splash reads as intentional, not a blip.
+      const elapsed = performance.now() - startedAt;
+      if (elapsed < MIN_SPLASH_MS) {
+        await new Promise((r) => setTimeout(r, MIN_SPLASH_MS - elapsed));
+      }
+      window.clearTimeout(hardCap);
+      finish();
+    })();
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(hardCap);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -278,6 +366,21 @@ export default function App() {
     setError(null);
     activateApp(target).catch((e) => setError(String(e)));
   };
+
+  // Activate exactly one window/tab by its opaque handle (FR-2.8/AC-20). Surface
+  // failures (e.g. the window was closed between polls) in the error banner.
+  const activateWin = (handle: string) => {
+    setError(null);
+    activateWindow(handle).catch((e) => setError(errText(e)));
+  };
+
+  const toggleExpanded = (name: string) =>
+    setExpandedApps((cur) => {
+      const next = new Set(cur);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
 
   const openGroupModal = () => {
     setError(null);
@@ -414,6 +517,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
+    {booting && <Splash hiding={splashOut} />}
     <div className="app">
       <aside className="sidebar">
         <header className="sidebar-header">
@@ -434,25 +538,65 @@ export default function App() {
           onChange={(e) => setFilter(e.target.value)}
         />
         <ul className="running-list">
-          {filteredApps.map((app) => (
-            <li
-              key={app.name}
-              className="running-item"
-              draggable
-              onDragStart={(e) => onDragStartApp(e, app)}
-              onDragEnd={() => {
-                // Clear the drag ref even when the drag is cancelled (dropped
-                // outside a group), so the paused poll resumes.
-                draggedApp.current = null;
-                setDragOverId(null);
-              }}
-              onDoubleClick={() => activate(app.bundle_id ?? app.name)}
-              title="Double-click: bring to front · Drag: add to a group"
-            >
-              <AppIcon target={app.bundle_id ?? app.name} />
-              <span className="running-name">{app.name}</span>
-            </li>
-          ))}
+          {filteredApps.map((app) => {
+            const wins = app.windows ?? [];
+            const multi = wins.length > 1;
+            const isExpanded = expandedApps.has(app.name);
+            // Clicking an app: >1 window → expand/collapse; exactly 1 → activate
+            // that window directly; 0 (only app-level info) → activate the app.
+            const onAppClick = () => {
+              if (multi) toggleExpanded(app.name);
+              else if (wins.length === 1) activateWin(wins[0].handle);
+              else activate(app.bundle_id ?? app.name);
+            };
+            return (
+              <Fragment key={app.name}>
+                <li
+                  className={`running-item${multi ? " has-windows" : ""}${
+                    multi && isExpanded ? " expanded" : ""
+                  }`}
+                  draggable
+                  onDragStart={(e) => onDragStartApp(e, app)}
+                  onDragEnd={() => {
+                    // Clear the drag ref even when the drag is cancelled (dropped
+                    // outside a group), so the paused poll resumes.
+                    draggedApp.current = null;
+                    setDragOverId(null);
+                  }}
+                  onClick={onAppClick}
+                  title={
+                    multi
+                      ? "Click: show windows · Drag: add to a group"
+                      : "Click: bring to front · Drag: add to a group"
+                  }
+                >
+                  <AppIcon target={app.bundle_id ?? app.name} />
+                  <span className="running-name">{app.name}</span>
+                  {multi && (
+                    <span className="running-count" aria-hidden>
+                      {isExpanded ? "▾" : "▸"} {wins.length}
+                    </span>
+                  )}
+                </li>
+                {multi &&
+                  isExpanded &&
+                  wins.map((w, i) => (
+                    <li
+                      key={`${app.name} ${w.handle} ${i}`}
+                      className="running-window"
+                      onClick={() => activateWin(w.handle)}
+                      title="Click: bring this window to front"
+                    >
+                      <span
+                        className={`win-dot${w.is_focused ? " active" : ""}`}
+                        aria-hidden
+                      />
+                      <span className="win-title">{w.title}</span>
+                    </li>
+                  ))}
+              </Fragment>
+            );
+          })}
           {filteredApps.length === 0 && (
             <li className="empty">No apps to show</li>
           )}

@@ -6,6 +6,8 @@
 
 > 본 문서는 컴포넌트의 **책임과 인터페이스(포트)** 를 정의합니다. 메서드 시그니처는 `component-methods.md`, 오케스트레이션은 `services.md`, 의존 관계는 `component-dependency.md` 참조. 상세 비즈니스 규칙은 CONSTRUCTION의 Functional Design에서 정의합니다.
 
+> ⚠ **구현 현황(2026-09-08 정합화)** — 이 문서는 **원 설계 의도**다. 실제 코드는 여러 지점에서 다르다: 포트 P1–P8은 vc-core에 트레이트로 정의되지 않았고(P4는 vc-sessions, P5는 vc-store에만; OS 포트는 트레이트 없이 구체 struct), 서비스 S1–S7·`TauriCommandBridge`·`RefreshScheduler`는 별도 struct가 아니라 `AppState`+Tauri 커맨드로 평면화되어 있으며, 어댑터 이름(`*Launcher`/`*IconReader`)·플랫폼 열거 방식도 다르다. 확인된 차이 전량과 백로그는 **[`known-deviations.md`](../../known-deviations.md)** 참조.
+
 ---
 
 ## 계층 개요
@@ -66,10 +68,12 @@
 ### P1. WindowEnumerator
 - **책임**: 현재 실행 중이며 사용자에게 보이는 창/앱을 열거(앱·창 제목·아이콘 핸들·선택 여부). 보조/시스템 창 제외 힌트 제공.
 - **관련**: FR-2.1~2.4, FR-2.7, FR-10.8/10.9.
+- 🔧 **창 단위 재정렬(2026-09-08 진행 중)**: "앱·**창 제목**·선택 여부" 열거는 원래 창 단위(앱당 여러 창). 출하 어댑터는 프로세스당 대표 창만 방출 → 창 단위 열거로 복원 중(`known-deviations.md#G1`, `construction/vc-os-windows/functional-design/window-enumeration.md`). 방출 형태는 U1 `RunningItem`.
 
 ### P2. WindowActivator
 - **책임**: 특정 창을 최전면으로, 닫힌 항목을 재실행(폴더/문서/앱/URL), 창 상태(최소/최대) 가능한 보존.
 - **관련**: FR-2.6, FR-4.1~4.4, FR-10.5/10.6/10.11/10.12 · AC-2/6/9.
+- 🔧 **창 지정 활성화(2026-09-08 진행 중)**: "**특정 창**을 최전면으로"가 원 설계. 출하 `open_app`은 앱 대상 → HWND/창 지정 포커스 추가 중(`known-deviations.md#G2`).
 
 ### P3. BrowserTabReader
 - **책임**: 지원 브라우저의 탭(제목·전체 주소) 수집, 탭 개별 식별, 백그라운드 주소 미제공 시 추측 금지.

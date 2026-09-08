@@ -53,9 +53,22 @@ export interface RestoreReport {
   skipped: string[];
 }
 
+/** One live window/tab of a running app, shown when its group is expanded
+ *  (FR-2.8 / AC-20). `handle` is an opaque per-platform activation token passed
+ *  back verbatim to `activateWindow` — never parsed by the frontend. */
+export interface RunningWindow {
+  handle: string;
+  title: string;
+  is_focused: boolean;
+}
+
 export interface RunningApp {
   name: string;
   bundle_id: string | null;
+  /** This app's live windows/tabs, grouped under one icon (FR-2.2/2.8). May be
+   *  empty when only app-level info is available — the app is then a single
+   *  activatable entry. */
+  windows: RunningWindow[];
 }
 
 /** One turn of the in-app Claude prompt console. */

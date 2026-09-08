@@ -6,6 +6,8 @@
 
 > 반환 타입 `Result<T>`는 페일세이프 오류 처리(SECURITY-15)를 전제. 포트 메서드는 어댑터가 구현하며 테스트 시 모의로 대체.
 
+> ⚠ **구현 현황(2026-09-08 정합화)** — 아래 의사 시그니처는 **원 설계 의도**이며 실제 코드와 상당수 다르다: 포트 트레이트 P1–P8은 vc-core에 정의되지 않았고, `matches`는 `bool`이 아닌 `MatchResult`를, `evaluate`/`load_and_migrate`도 다른 시그니처를 반환하며, `WorkBundle::add_resource`는 중복 검사 없이 `()`를 반환하고 `is_duplicate`는 미구현이다. `AppSettings`도 필드가 다르다(`window_rect` 평탄화, Claude 3필드 추가). 메서드 단위 차이 전량은 **[`known-deviations.md#D-도메인vc-core-이탈`](../../known-deviations.md)** 참조.
+
 ---
 
 ## Domain Core

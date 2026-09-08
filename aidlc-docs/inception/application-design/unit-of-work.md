@@ -4,6 +4,8 @@
 참조: `application-design.md`, `unit-of-work-plan.md`
 배포 모델: 단일 Tauri 데스크톱 앱(플랫폼별 빌드). 단위 = Cargo 워크스페이스의 크레이트/모듈. 독립 배포 서비스가 아니라 개발·설계·테스트 경계.
 
+> ⚠ **구현 현황(2026-09-08 정합화)** — 크레이트 경계(U1–U7)는 코드와 대체로 일치하나, 각 단위의 **내부 책임 기술은 원 설계 의도**다. 실제로는 포트 트레이트 P1–P8이 vc-core에 정의되지 않았고(U1), U6의 서비스 S1–S7·브리지·스케줄러는 struct 없이 `AppState`+Tauri 커맨드로 평면화됐으며, U4 Windows 열거는 UI Automation이 아니라 PowerShell `Get-Process` 기반이다. 확인된 차이 전량: **[`known-deviations.md`](../../known-deviations.md)**.
+
 ---
 
 ## 코드 조직 전략 (Greenfield)
@@ -47,7 +49,8 @@ vibe-control/                     # 워크스페이스 루트
 - **관련**: FR-10.1~10.7 · AC-5/6/10/13/15.
 
 ### U4. vc-os-windows (Windows 어댑터)
-- **책임**: WindowEnumerator/Activator(UI Automation, 최상위 창), BrowserTabReader(Edge/Chrome), IconProvider, 트레이/전역 단축키 지원 훅. PermissionChecker=NotApplicable.
+- **책임(원 설계)**: WindowEnumerator/Activator(UI Automation, 최상위 창), BrowserTabReader(Edge/Chrome), IconProvider, 트레이/전역 단축키 지원 훅. PermissionChecker=NotApplicable.
+- **구현 현황(2026-09-08)**: 창 열거는 **UI Automation이 아니라 PowerShell `Get-Process`** — `MainWindowHandle != 0 && MainWindowTitle` 필터로 사용자가 띄운 가시 창 앱만 열거(`known-deviations.md#B1`). 활성화는 `WinLauncher`(실행 중이면 기존 창 포커스, 아니면 `Start-Process`). 아이콘은 `WinIconReader`로 **구현됨**(커밋 `6039456`, `#B4`). **미구현**: 브라우저 탭 읽기(`#B3`, 스텁), 트레이/전역 단축키(`#B5`).
 - **의존**: vc-core. 빌드 게이트: `target_os = "windows"`.
 - **관련**: FR-10.8~10.13.
 

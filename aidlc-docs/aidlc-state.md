@@ -1,18 +1,18 @@
 # AI-DLC State Tracking
 
 ## Project Information
-- **Project Type**: Greenfield
+- **Project Type**: Greenfield (built out; now in brownfield doc-reconciliation)
 - **Start Date**: 2026-09-07T07:32:51Z
-- **Current Stage**: CONSTRUCTION COMPLETE - all 7 units built, tested (24 tests pass, PBT-02/03 pass, clippy 0 warnings), Tauri app compiles and launches → ready for Operations (placeholder)
+- **Current Stage**: CONSTRUCTION built + post-construction fixes/features landed → Documentation Reconciliation FINALIZED (2026-09-08) → **NEW FEATURE in INCEPTION doc-reflection (2026-09-08): per-window expansion UX** — realign running-apps panel to the already-designed per-window model (app-grouped list, click-to-expand window/tab sub-list, exact-window activation) + new expand/collapse affordance. Units: U7/U6/U4/U3 primary, U1 supporting; U5/U2 out of scope. Requirements/design docs updated (FR-2.8, AC-20, REQUIREMENTS.ko §13.1/13.4/13.6, known-deviations G1–G3, new vc-os-windows functional-design). **G1/G2/G3 all implemented + verified on real Windows (G1 enumeration replaced with `EnumWindows` native FFI, 2026-09-09) — feature complete; browser-tab splitting (#B3) remains the only follow-up.** Operations still placeholder.
 - **Project Name**: vibe-control (작업 맥락 전환 데스크톱 앱)
 
 ## Workspace State
-- **Existing Code**: No
-- **Programming Languages**: None yet
-- **Build System**: None yet
-- **Project Structure**: Empty (requirements document only)
-- **Reverse Engineering Needed**: No
-- **Workspace Root**: /Users/ezitsu/code/ddthon/vibe-control
+- **Existing Code**: Yes — full Rust Cargo workspace + React/Vite frontend implemented
+- **Programming Languages**: Rust (workspace crates) + TypeScript/React (frontend)
+- **Build System**: Cargo workspace + Vite (Tauri v2)
+- **Project Structure**: `crates/{vc-core,vc-store,vc-os-macos,vc-os-windows,vc-sessions,vc-app}` + `frontend/` + `aidlc-docs/`
+- **Reverse Engineering Needed**: No (docs authored during construction; reconciled 2026-09-08)
+- **Workspace Root**: C:\Users\gayeon\Documents\coding\vibe-control (dev on Windows; also built on macOS)
 
 ## Code Location Rules
 - **Application Code**: Workspace root (NEVER in aidlc-docs/)
@@ -73,7 +73,7 @@ Per-unit stages: Functional Design → NFR Requirements → NFR Design → (Infr
 - [x] Code Generation (lib.rs with WindowEnumerator)
 
 **U4 vc-os-windows**
-- [x] Functional Design (UI Automation)
+- [x] Functional Design (design said UI Automation; **actual code uses PowerShell `Get-Process` filtered on `MainWindowHandle`/`MainWindowTitle`** — user-launched visible-window apps only — see `known-deviations.md#B1`. App icons now implemented via `WinIconReader` (commit `6039456`, `known-deviations.md#B4`). Still NOT implemented: browser-tab reading (`#B3`), tray/global-hotkey (`#B5`))
 - [x] NFR Requirements (auto)
 - [x] NFR Design (auto)
 - [x] Code Generation (lib.rs with WinWindowEnumerator)
@@ -93,24 +93,60 @@ Per-unit stages: Functional Design → NFR Requirements → NFR Design → (Infr
 **U7 frontend** (React + Vite + TS, Tauri v2)
 - [x] Frontend scaffold (frontend/: React + Vite + TS, types/api/App/styles)
 - [x] Tauri backend (vc-app: main.rs, lib.rs commands, build.rs, tauri.conf.json, capabilities, icons)
-- [x] Tauri commands: get_bundles, save_bundles, capture_current, get_session_snapshot
+- [x] Tauri commands (actual: **17** registered in `vc-app/src/lib.rs` invoke_handler): get_bundles, save_bundles, capture_current, get_session_snapshot, restore_bundle, resume_coding_session, activate_coding_session, list_running_apps, activate_app, get_app_icon, create_bundle, delete_bundle, add_app_resource, claude_status, set_claude_api_key, set_claude_model, send_claude_message. (`capture_current`/`save_bundles` exist but the UI no longer calls them — `known-deviations.md#E3`)
 - [x] `npm run build` succeeds; `cargo build -p vc-app` succeeds
 - [x] App binary launches (window created, no crash)
 
 ### Build & Test verification (U1–U6)
 - [x] Root workspace Cargo.toml created; missing crate manifests added
 - [x] `cargo build --workspace` succeeds
-- [x] `cargo test --workspace` — 22 tests pass (20 in vc-core incl. PBT-02/03)
-- [x] `cargo clippy --workspace --all-targets` — 0 warnings
-- [x] PBT-02 (roundtrip stable) + PBT-03 (parser robust) proptest added to vc-core
+- [x] `cargo test --workspace` — **33 test fns present** (grep: vc-core 22 / vc-sessions 8 / vc-store 2 / vc-os-macos 1; macOS-gated tests run only on macOS). Earlier "24"/"22, 20 in vc-core" figures were stale.
+- [x] `cargo clippy --workspace --all-targets` — 0 warnings (as of last recorded run)
+- [x] PBT-02 (roundtrip stable) proptest in **`vc-core/src/migrate/mod.rs`**; PBT-03 (parser robust) proptest in **`vc-sessions/src/lib.rs`** (NOT vc-core — see `known-deviations.md#D5`). Both inline, no `tests/` dir.
 - [x] Build & Test instruction docs generated (build-and-test/)
 
 ### After all units:
-- [x] Build and Test — finalized (workspace builds, 24 tests pass, clippy clean, Tauri app runs)
+- [x] Build and Test — finalized (workspace builds, tests pass — see corrected count above, clippy clean, Tauri app runs)
 
 ### 🟡 OPERATIONS PHASE
 - [ ] Operations — PLACEHOLDER
 
 ### 🔧 Post-Construction Fixes
-- [x] **Windows freeze fix (2026-09-08)** — running-apps list was empty and the window went "not responding" then closed. Cause: `WinWindowEnumerator` used `tasklist /v` (hangs for minutes when any window is unresponsive) from a SYNCHRONOUS Tauri command polled every 1s on the UI thread. Fixed by (a) enumerating via PowerShell `Get-Process`/`MainWindowTitle` (no window messaging → no hang, ~1s) in `crates/vc-os-windows/src/lib.rs`, and (b) making OS-touching commands `async` in `crates/vc-app/src/lib.rs` so they run off the main thread. Verified on real Windows: clippy 0 warnings, app stable, `Responding = True`. Detail in `audit.md`. Still open on Windows: browser-tab reading + app-icon extraction.
+- [x] **Windows freeze fix (2026-09-08)** — running-apps list was empty and the window went "not responding" then closed. Cause: `WinWindowEnumerator` used `tasklist /v` (hangs for minutes when any window is unresponsive) from a SYNCHRONOUS Tauri command polled every 1s on the UI thread. Fixed by (a) enumerating via PowerShell `Get-Process`/`MainWindowTitle` (no window messaging → no hang, ~1s) in `crates/vc-os-windows/src/lib.rs`, and (b) making OS-touching commands `async` in `crates/vc-app/src/lib.rs` so they run off the main thread. Verified on real Windows: clippy 0 warnings, app stable, `Responding = True`. Detail in `audit.md`. Still open on Windows: browser-tab reading + app-icon extraction. *(Update 2026-09-08: app-icon extraction since implemented — `WinIconReader`, commit `6039456`; browser-tab reading still open.)*
 - [x] **Windows duplicate-window fix (2026-09-08)** — double-clicking a running app opened a NEW window instead of focusing the one already open. Cause: `WinLauncher::open_app` went straight to PowerShell `Start-Process`, which always spawns a new instance; there was no "focus if already running" path (macOS `open` gets this for free, Windows does not) — violating FR-2.6 / §13.4. Fixed in `crates/vc-os-windows/src/lib.rs`: `open_app` now calls new `focus_existing_window(target)` first (finds a windowed process matching the target's ProcessName or exe Path, then restores + foregrounds it via Win32 `ShowWindowAsync`/`SetForegroundWindow` + `WScript.Shell.AppActivate`, all inline PowerShell — no native crate), and only falls back to `Start-Process` when no instance is running. Verified on real Windows: clippy 0 warnings; live test — running app → focused with no duplicate process (count before==after), bogus target → still launches. Detail in `audit.md`.
+- [x] **Windows: user-launched apps only + app icons (2026-09-08, commit `6039456`)** — running-apps list now filters `Get-Process` on `MainWindowHandle != 0 && MainWindowTitle` (excludes background services / invisible helper windows that the old title-only heuristic leaked), de-duped by name. New `WinIconReader` extracts each exe's shell icon (PowerShell + C# `Add-Type`, shell32 `SHGetImageList` 256px jumbo → 48px → 32px fallback, transparent-margin trim) as a base64 PNG data URI; `vc-app` caches icons per bundle id. Resolves `known-deviations.md#B4`. (This feature had no prior audit/state entry — backfilled in `audit.md`.)
+- [x] **In-app Claude prompt console via AWS Bedrock (2026-09-08, commit `a163d8d`)** — NEW feature not in original requirements/design: `crates/vc-app/src/claude.rs` (Bedrock runtime client) + 4 Tauri commands (`claude_status`, `set_claude_api_key`, `set_claude_model`, `send_claude_message`) + `AppSettings` fields (`claude_api_key`/`claude_model`/`claude_region`) + `reqwest` dep + frontend footer console UI. **Sends user prompts over HTTPS to Bedrock → conflicts with original NFR-S1 (local-only)**, now reconciled: NFR-S1 scoped to bundle/session DATA, console governed by new NFR-S3. Design doc: `construction/vc-app/claude-console/design.md`. Deviation: `known-deviations.md#F1`.
+
+### 📝 Documentation Reconciliation (2026-09-08)
+Read-only doc-vs-code audit (3 review agents) found the docs had drifted from the built code. Per user decision (code-as-truth + deviation record / formally document Bedrock + amend NFR / backfill audit):
+- [x] `known-deviations.md` created — central record of design-vs-code gaps (A architecture, B adapters, C persistence, D domain, E frontend, F new feature) + prioritized backlog. **No code was modified.**
+- [x] `construction/vc-app/claude-console/design.md` created — Bedrock console feature + command spec + security note.
+- [x] `aidlc-state.md` refreshed — workspace state, current stage, test counts, command list, U4 enumeration mechanism.
+- [x] `requirements.md` — NFR-S1 scoped + NFR-S3 added + SECURITY-01/12 mapping updated for the console.
+- [x] `application-design/*` (components, services, unit-of-work, component-methods) — "구현 현황" banners added; UI-Automation claim corrected.
+- [x] `audit.md` — retroactive entries backfilled for the Bedrock feature + this reconciliation.
+- **Open backlog (code, not done here)**: see `known-deviations.md` — full conversation viewer, layout persistence, temp-file rollback, duplicate-identity invariant, Windows tabs/icons/tray, port-trait refactor.
+
+### 🚧 In-Progress Feature — Running-resources per-window expansion UX (2026-09-08)
+Re-align the running-apps left panel to the ORIGINAL per-window design (which the §13 clarifications + shipped code had collapsed to app-level) and add an explicit expand/collapse affordance. **Doc-reflection stage (this turn) — no code modified yet.**
+- **Unit mapping**: U7 frontend (app-grouped list + per-window expand/collapse sub-list, distinguishable titles, click-window-to-activate, per-window green dot; preserve FR-3 DnD + bundling), U6 vc-app (per-app window list in enumeration command + per-window activate command), U4 vc-os-windows + U3 vc-os-macos (per-WINDOW enumerate + focus a specific window/HWND) — all **primary**; U1 vc-core (`RunningItem` + `matching/window.rs` L2 matcher — designed-but-unwired, now activated) — **supporting**. OUT of scope: U5 vc-sessions (different "session" concept — terminology kept distinct: window/tab vs session), U2 vc-store (live windows not persisted).
+- **Docs updated**: `requirements.md` FR-2.8 + AC-20 + FR-2 reconciliation note; `REQUIREMENTS.ko.md` §13.1/§13.4 revised (app-level → app-grouped-with-window-expansion) + new §13.6; `known-deviations.md` B1 annotated + new section G (G1 per-window enumeration, G2 per-window activation, G3 expand/collapse UI) + backlog "진행중" row; NEW `construction/vc-os-windows/functional-design/window-enumeration.md`; reconciliation notes on `application-design/{services,components}.md`, `construction/vc-core/functional-design/domain-entities.md`, `construction/vc-os-macos/functional-design/accessibility-api.md`.
+- **Implemented (2026-09-08)**:
+  - U4 `vc-os-windows`: `LIST_APPS_SCRIPT` → `LIST_WINDOWS_SCRIPT` (one row per windowed process = per-window for process-per-window apps; `HWND\tName\tPath\tFocused\tTitle`, foreground via a tiny cached `Add-Type GetForegroundWindow`); `list_running_windows()` groups by name (icon once) keeping each window; `list_running_apps()` re-derived on top (dedup) so capture is unchanged; new `WinLauncher::focus_window(hwnd)` (validated decimal HWND via env var; `IsWindow`→GONE, `ShowWindowAsync`+`AppActivate(pid)`+`SetForegroundWindow`).
+  - U3 `vc-os-macos`: `list_running_windows()` = `NSWorkspace` app list (no permission, no regression) overlaid with `System Events` per-window titles + frontmost flag; handle = `name\u{1f}title`; `MacLauncher::focus_window(handle)` activates app then best-effort `AXRaise` by title.
+  - U6 `vc-app`: `RunningApp` now carries `windows: Vec<RunningWindow{handle,title,is_focused}>`; `list_running_apps` returns grouped windows via new `enumerate_running_windows()`; new `activate_window(handle)` command + `focus_window` dispatch; registered in `generate_handler!`.
+  - U7 frontend: `types.ts` `RunningWindow` + `RunningApp.windows`; `api.ts` `activateWindow`; `App.tsx` `expandedApps` state + click-to-expand (>1 window) / click-to-activate (1) / activate-app (0 fallback) + per-window sub-rows with green `is_focused` dot; `styles.css` `.running-window`/`.win-dot`/`.win-title`/`.running-count` (indented; pad index only counts `.running-item`). DnD app-row unchanged.
+- **Verified**: frontend `tsc`+build clean; `cargo build -p vc-app` clean; enumeration script emits per-window rows (2× `mspaint` grouped, WindowsTerminal `focused=1`); `focus_window` resolves HWND→PID (58772) + `IsWindow` GONE guard; live app screenshotted — `mspaint` group shows `▸ 2`, click expands to `▾ 2` + two `제목 없음 - 그림판` sub-rows with dots, pad numbering continues to `06` (sub-rows excluded). Single-window apps show no chevron.
+- **CONFIRMED DEFECT (2026-09-08) → ✅ RESOLVED (2026-09-09, `known-deviations.md#G1` "✅ G1 해결")**: the shipped `Get-Process.MainWindowHandle` enumeration yielded **only one window per process**, collapsing every multi-window-per-process app. Fixed by re-implementing enumeration on Win32 `EnumWindows` (native Rust FFI). Verified live: msedge/chrome/KakaoTalk each now split into their real windows. macOS per-window still needs Accessibility; degrades to app-level otherwise (unchanged).
+- [x] INCEPTION doc-reflection (requirements + design updated)
+- [x] Construction / Code Generation (U4→U3→U6→U7) — **G1 enumeration NOW on `EnumWindows` native FFI; G2 activation + G3 expand/collapse UI done**
+- [x] Build + test + real-OS verification (AC-20 on Windows; regression AC-2/3/4 — DnD app-row + capture dedup unchanged) — **multi-window-per-process (Edge/Chrome/KakaoTalk) now split correctly (2026-09-09)**
+
+### ✅ DONE (2026-09-09): G1 window enumeration replaced with `EnumWindows` native FFI
+**Outcome**: The last broken piece — enumeration listing one window per process — is fixed. `crates/vc-os-windows/src/lib.rs` `raw_windows()` now walks all top-level windows via Win32 `EnumWindows` through inline native Rust FFI (`#[link]` `extern "system"` to user32/dwmapi/kernel32 — no `windows`/`winapi` crate, no per-poll `csc` recompile). Only `raw_windows()` changed; `list_running_windows`/`list_running_apps`/vc-app/frontend contracts untouched (minimal blast radius). Details + evidence in `known-deviations.md#G1` ("✅ G1 해결").
+- [x] **Reviewed yesterday's changes** (`git diff` since `bbc54e7`): UI (G3) + per-window activation (G2) confirmed complete; only enumeration needed the fix.
+- [x] **Replaced enumeration**: `Get-Process.MainWindowHandle` → `EnumWindows`. Validated filter (`IsWindowVisible` + `GetWindowTextLengthW>0` + `GetWindow(GW_OWNER=4)==0` + `!(GWL_EXSTYLE & WS_EX_TOOLWINDOW 0x80)` + `!DWMWA_CLOAKED(14)`). HWND→PID `GetWindowThreadProcessId`; PID→exe path `QueryFullProcessImageNameW` (best-effort) + PID→name Toolhelp snapshot (guaranteed, preserves elevated-app names); foreground `GetForegroundWindow`. Grouped by name (icon once). `focus_window(hwnd)` kept as-is.
+- [x] **Native Rust FFI** used (not inline C# `Add-Type`) — subprocess/compile-free per 1 s poll.
+- [x] **Verified**: `cargo build -p vc-app` + `cargo clippy --workspace` 0 warnings; harness (`list_running_windows`) → Chrome=2, msedge=2, KakaoTalk=2 (main+chat, focused dot correct), WindowsTerminal=2, mspaint/Code/Obsidian=1 (no regression), explorer Program Manager excluded as tool window; live app screenshot → KakaoTalk/msedge `▾ 2` expand to per-window sub-rows with dots, pad numbering counts app rows only.
+- [x] **Browser TABS remain OUT of scope** (`#B3`): windows now split; multiple tabs in one window still show as one (separate BrowserTabReader work).
+- [x] Updated `known-deviations.md#G1` (resolved), `aidlc-state.md`, `audit.md`; deleted `diag_windows.ps1`.

@@ -94,6 +94,143 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--body); }
 
+/* ── Boot splash ─────────────────────────────────────────────────────────
+   Full-viewport overlay React renders on mount and holds until the app has
+   finished its first load. Opaque + pointer-catching, so it blocks every
+   click, drag, and key focus underneath until it fades out. Rendered by React
+   (not static HTML) so it paints at the correct DPI scale on Windows/WebView2.
+   ------------------------------------------------------------------------- */
+.splash {
+  /* Absolute (not fixed) inside the relatively-positioned .app-shell: WebView2
+     on Windows sizes `position: fixed` boxes against an unscaled device-pixel
+     viewport on early frames, which zooms + offsets the overlay. An absolute
+     box fills its correctly-sized flow ancestor instead, so it stays centred. */
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 1000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Faint engineered grain: a soft top highlight fading to a shaded base,
+     like the EP-133 chassis catching light. */
+  background:
+    radial-gradient(130% 100% at 50% 0%, var(--edge-hi) 0%, var(--body) 45%,
+      var(--sunk) 100%);
+  transition: opacity 0.4s ease;
+  opacity: 1;
+  user-select: none;
+}
+.splash--hidden {
+  opacity: 0;
+  pointer-events: none;
+}
+
+.splash-card {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 22px;
+}
+
+/* Charcoal "rubber pad" tile cradling a glowing orange record dot — the
+   product's hero accent, reading as "powering on". */
+.splash-badge {
+  width: 76px;
+  height: 76px;
+  border-radius: 18px;
+  background: linear-gradient(180deg, var(--pad-hi) 0%, var(--pad) 60%,
+    var(--pad-edge) 100%);
+  box-shadow:
+    0 1px 0 #4a4a4d inset,
+    0 -2px 4px rgba(0, 0, 0, 0.4) inset,
+    0 10px 22px var(--shadow);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.splash-rec {
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, var(--accent-hi),
+    var(--accent) 60%, var(--accent-deep));
+  box-shadow: 0 0 0 2px rgba(240, 67, 30, 0.25);
+  animation: splash-pulse 1.15s ease-in-out infinite;
+}
+@keyframes splash-pulse {
+  0%, 100% {
+    box-shadow: 0 0 0 2px rgba(240, 67, 30, 0.15);
+    transform: scale(0.94);
+  }
+  50% {
+    box-shadow: 0 0 0 7px rgba(240, 67, 30, 0);
+    transform: scale(1);
+  }
+}
+
+.splash-word {
+  font-family: var(--display);
+  font-weight: 700;
+  font-size: 26px;
+  letter-spacing: 0.06em;
+  color: var(--ink);
+}
+
+/* Row of LCD-green segment blocks doing a left-to-right chase, echoing a
+   hardware boot sequence on the device's readout. */
+.splash-leds {
+  display: flex;
+  gap: 8px;
+}
+.splash-leds span {
+  width: 16px;
+  height: 7px;
+  border-radius: 2px;
+  background: var(--lcd-seg-off);
+  animation: splash-chase 1.2s ease-in-out infinite;
+}
+.splash-leds span:nth-child(2) { animation-delay: 0.12s; }
+.splash-leds span:nth-child(3) { animation-delay: 0.24s; }
+.splash-leds span:nth-child(4) { animation-delay: 0.36s; }
+.splash-leds span:nth-child(5) { animation-delay: 0.48s; }
+@keyframes splash-chase {
+  0%, 70%, 100% {
+    background: var(--lcd-seg-off);
+    box-shadow: none;
+  }
+  35% {
+    background: var(--lcd-seg);
+    box-shadow: 0 0 6px rgba(28, 34, 26, 0.6);
+  }
+}
+
+.splash-cap {
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  font-size: 10px;
+  color: var(--ink-muted);
+  animation: splash-blink 1.6s steps(1, end) infinite;
+}
+@keyframes splash-blink {
+  0%, 60% { opacity: 1; }
+  80%, 100% { opacity: 0.35; }
+}
+
+/* Respect reduced-motion: keep the splash, drop the animation. */
+@media (prefers-reduced-motion: reduce) {
+  .splash,
+  .splash-rec,
+  .splash-leds span,
+  .splash-cap {
+    animation: none;
+    transition: none;
+  }
+}
+
 /* Small technical-caption utility (uppercase mono, wide tracking). */
 .te-label {
   font-family: var(--mono);
@@ -110,6 +247,7 @@ body { margin: 0; background: var(--body); }
   flex-direction: column;
   height: 100vh;
   overflow: hidden;
+  position: relative; /* containing block for the boot splash overlay */
 }
 .app {
   display: flex;
@@ -237,6 +375,52 @@ body { margin: 0; background: var(--body); }
   font-family: var(--grotesk);
   font-size: 13px;
   color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* An app with several windows clicks to expand rather than drag-only. */
+.running-item.has-windows { cursor: pointer; }
+/* Window count + expand chevron, pushed to the row's trailing edge. */
+.running-count {
+  margin-left: auto;
+  padding-left: 8px;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10px;
+  color: var(--ink-muted);
+  flex-shrink: 0;
+}
+
+/* One live window/tab inside an expanded app group (FR-2.8). Indented under
+   the app icon; not drag-registerable itself (app-level DnD is unchanged). */
+.running-window {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 10px 5px 46px;
+  border-radius: 6px;
+  cursor: pointer;
+  user-select: none;
+}
+.running-window:hover { background: var(--bone); }
+.win-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--pad);
+  flex-shrink: 0;
+}
+/* Current foreground window — the green "active" dot within the group (FR-2.4). */
+.win-dot.active {
+  background: #35c46a;
+  box-shadow: 0 0 0 3px rgba(53, 196, 106, 0.18);
+}
+.win-title {
+  font-family: var(--grotesk);
+  font-size: 12px;
+  color: var(--ink-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
