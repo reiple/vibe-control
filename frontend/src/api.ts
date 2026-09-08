@@ -4,6 +4,7 @@ import type {
   SessionSnapshot,
   RestoreReport,
   RunningApp,
+  RunningWindow,
   ChatMsg,
   ClaudeStatus,
 } from "./types";
@@ -63,6 +64,24 @@ export async function activateApp(target: string): Promise<void> {
  *  just the app. */
 export async function activateWindow(handle: string): Promise<void> {
   await invoke("activate_window", { handle });
+}
+
+/** Lazily fetch a running browser's open tabs as individual selectable
+ *  sessions (FR-9.6 / FR-10.12 / AC-20). `name` is the browser app-group name
+ *  (e.g. "chrome" / "msedge"). Each RunningWindow is one tab; `handle` is an
+ *  opaque per-tab token for `activateTab`. Fetched ON DEMAND when a browser
+ *  group is expanded — never on the poll. Empty when no window's tabs are
+ *  readable (UI then shows the OS windows instead). */
+export async function listBrowserTabs(name: string): Promise<RunningWindow[]> {
+  if (!inTauri()) return [];
+  return await invoke<RunningWindow[]>("list_browser_tabs", { name });
+}
+
+/** Bring a SPECIFIC browser tab to the front (FR-2.8 / FR-4.2 / AC-20).
+ *  `handle` is the opaque token from a listBrowserTabs entry; it focuses
+ *  exactly that tab (foregrounding its window first), not just the browser. */
+export async function activateTab(handle: string): Promise<void> {
+  await invoke("activate_tab", { handle });
 }
 
 /** Lazily fetch a running app's icon as a base64 PNG data URI, or null.
