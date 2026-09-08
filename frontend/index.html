@@ -1,9 +1,18 @@
 <!doctype html>
-<html lang="ko">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>vibe-control</title>
+    <!-- Paint the EP-133 chassis colour instantly, before the JS bundle + CSS
+         load, so cold start shows the themed grey rather than a white flash. -->
+    <style>
+      html,
+      body {
+        margin: 0;
+        background: #d4d1c9;
+      }
+    </style>
   </head>
   <body>
     <div id="root"></div>

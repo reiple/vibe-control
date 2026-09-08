@@ -24,12 +24,12 @@ import {
 } from "./api";
 
 const kindLabel: Record<string, string> = {
-  WindowRef: "창",
-  BrowserTab: "브라우저 탭",
-  Folder: "폴더",
-  AppLaunch: "앱",
+  WindowRef: "Window",
+  BrowserTab: "Tab",
+  Folder: "Folder",
+  AppLaunch: "App",
   Url: "URL",
-  CodingSession: "코딩 세션",
+  CodingSession: "Session",
 };
 
 const isActivatable = (kind: string) =>
@@ -100,9 +100,9 @@ function AppIcon({
 }
 
 const completionLabel: Record<SessionCompletion, string> = {
-  Waiting: "답변 대기 중",
-  NotWaiting: "진행 중",
-  Unknown: "상태 불명",
+  Waiting: "Awaiting reply",
+  NotWaiting: "Working",
+  Unknown: "Unknown",
 };
 
 // Inline live status for a coding session, shown right inside the context-group
@@ -141,7 +141,7 @@ function SessionStatus({
 
   if (!snap || !snap.available) {
     return loading ? (
-      <div className="session-status loading">상태 확인 중…</div>
+      <div className="session-status loading">Checking…</div>
     ) : null;
   }
 
@@ -181,7 +181,11 @@ export default function App() {
     getBundles()
       .then(setBundles)
       .catch((e) => setError(String(e)));
-    refreshRunning();
+    // Defer the running-apps scan (a comparatively slow OS call) to the next
+    // frame so the app shell + saved groups paint immediately instead of the
+    // window sitting blank until the scan returns on cold start.
+    const raf = requestAnimationFrame(() => refreshRunning());
+    return () => cancelAnimationFrame(raf);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -208,7 +212,7 @@ export default function App() {
 
   const handleCreateGroup = async () => {
     setError(null);
-    const name = newGroupName.trim() || `그룹 ${bundles.length + 1}`;
+    const name = newGroupName.trim() || `Group ${bundles.length + 1}`;
     try {
       setBundles(await createBundle(name));
       setNewGroupName("");
@@ -234,7 +238,7 @@ export default function App() {
   const handleCapture = async () => {
     setError(null);
     try {
-      const bundle = await captureCurrent(`캡처 ${new Date().toLocaleString()}`);
+      const bundle = await captureCurrent(`Capture ${new Date().toLocaleString()}`);
       const next = [...bundles, bundle];
       setBundles(next);
       await saveBundles(next);
@@ -278,9 +282,9 @@ export default function App() {
     }
   };
 
-  // "대화 보기": bring the session's already-open Claude Code terminal to the
-  // front so the user reads/continues the real conversation there. Does NOT
-  // spawn a new terminal (that's "이어가기" → resume).
+  // "View": bring the session's already-open Claude Code terminal to the front
+  // so the user reads/continues the real conversation there. Does NOT spawn a
+  // new terminal (that's "Resume" → resumeCodingSession).
   const handleActivateSession = (resource: Resource) => {
     setError(null);
     activateCodingSession(resource.identity.descriptor).catch((e) =>
@@ -299,19 +303,19 @@ export default function App() {
     <div className="app">
       <aside className="sidebar">
         <header className="sidebar-header">
-          <h1>실행 중인 앱</h1>
+          <h1>Running Apps</h1>
           <button
             className="ghost icon"
             onClick={refreshRunning}
             disabled={refreshing}
-            title="새로고침"
+            title="Refresh"
           >
             ↻
           </button>
         </header>
         <input
           className="search"
-          placeholder="앱 검색…"
+          placeholder="Search apps…"
           value={filter}
           onChange={(e) => setFilter(e.target.value)}
         />
@@ -323,14 +327,14 @@ export default function App() {
               draggable
               onDragStart={(e) => onDragStartApp(e, app)}
               onDoubleClick={() => activate(app.bundle_id ?? app.name)}
-              title="더블 클릭: 최전면으로 · 드래그: 그룹에 추가"
+              title="Double-click: bring to front · Drag: add to a group"
             >
               <AppIcon target={app.bundle_id ?? app.name} />
               <span className="running-name">{app.name}</span>
             </li>
           ))}
           {filteredApps.length === 0 && (
-            <li className="empty">표시할 앱이 없습니다</li>
+            <li className="empty">No apps to show</li>
           )}
         </ul>
       </aside>
@@ -341,16 +345,16 @@ export default function App() {
           <div className="header-actions">
             <input
               className="group-input"
-              placeholder="새 그룹 이름"
+              placeholder="New group name"
               value={newGroupName}
               onChange={(e) => setNewGroupName(e.target.value)}
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleCreateGroup();
               }}
             />
-            <button onClick={handleCreateGroup}>그룹 추가</button>
-            <button className="ghost" onClick={handleCapture}>
-              현재 상태 캡처
+            <button onClick={handleCreateGroup}>Add Group</button>
+            <button className="rec" onClick={handleCapture}>
+              Capture State
             </button>
           </div>
         </header>
@@ -360,8 +364,8 @@ export default function App() {
         <div className="group-grid">
           {bundles.length === 0 && (
             <div className="placeholder">
-              그룹이 없습니다. “그룹 추가”로 컨텍스트 그룹을 만들고, 왼쪽의 실행
-              중인 앱을 끌어다 넣으세요.
+              No groups yet. Create one with “Add Group”, then drag running apps
+              from the left into it.
             </div>
           )}
           {bundles.map((b) => (
@@ -378,7 +382,9 @@ export default function App() {
               onDrop={(e) => onDropToBundle(e, b)}
             >
               <header className="group-card-header">
-                <span className="group-name">{b.name}</span>
+                <span className="group-name" title={b.name}>
+                  {b.name}
+                </span>
                 <span className="group-count">{b.resources.length}</span>
                 <div className="group-actions">
                   <button
@@ -386,7 +392,7 @@ export default function App() {
                     onClick={() => handleRestore(b)}
                     disabled={restoringId === b.id || b.resources.length === 0}
                   >
-                    {restoringId === b.id ? "복원 중…" : "복원"}
+                    {restoringId === b.id ? "Restoring…" : "Restore"}
                   </button>
                   {confirmDeleteId === b.id ? (
                     <>
@@ -394,13 +400,13 @@ export default function App() {
                         className="mini danger"
                         onClick={() => handleDeleteGroup(b.id)}
                       >
-                        삭제 확인
+                        Confirm
                       </button>
                       <button
                         className="mini"
                         onClick={() => setConfirmDeleteId(null)}
                       >
-                        취소
+                        Cancel
                       </button>
                     </>
                   ) : (
@@ -408,7 +414,7 @@ export default function App() {
                       className="mini"
                       onClick={() => setConfirmDeleteId(b.id)}
                     >
-                      삭제
+                      Delete
                     </button>
                   )}
                 </div>
@@ -416,7 +422,7 @@ export default function App() {
 
               <ul className="resource-list">
                 {b.resources.length === 0 && (
-                  <li className="empty drop-hint">여기로 앱을 드래그하세요</li>
+                  <li className="empty drop-hint">Drag apps here</li>
                 )}
                 {b.resources.map((r) => (
                   <li
@@ -428,7 +434,7 @@ export default function App() {
                     }
                     title={
                       isActivatable(r.kind)
-                        ? "더블 클릭: 최전면으로 · 닫혀 있으면 열기"
+                        ? "Double-click: bring to front · opens it if closed"
                         : undefined
                     }
                   >
@@ -445,16 +451,16 @@ export default function App() {
                         <button
                           className="mini"
                           onClick={() => handleActivateSession(r)}
-                          title="열려 있는 Claude Code 터미널을 최전면으로"
+                          title="Bring the open Claude Code terminal to front"
                         >
-                          대화 보기
+                          View
                         </button>
                         <button
                           className="mini resume-button"
                           onClick={() => handleResumeSession(r)}
-                          title="새 터미널에서 세션 이어가기"
+                          title="Resume this session in a new terminal"
                         >
-                          이어가기
+                          Resume
                         </button>
                         <SessionStatus
                           sessionRef={r.identity.descriptor}
@@ -469,11 +475,11 @@ export default function App() {
               {reportBundleId === b.id && report && (
                 <div className="restore-report">
                   <p>
-                    <strong>{report.opened.length}개</strong> 열림
+                    <strong>{report.opened.length}</strong> opened
                     {report.failed.length > 0 && (
                       <span className="failed-count">
                         {" "}
-                        · {report.failed.length}개 실패
+                        · {report.failed.length} failed
                       </span>
                     )}
                   </p>
@@ -486,8 +492,9 @@ export default function App() {
                   )}
                   {report.skipped.length > 0 && (
                     <p className="skipped-note">
-                      코딩 세션 {report.skipped.length}개는 각 세션의 “이어가기”
-                      버튼으로 여세요.
+                      {report.skipped.length} coding session
+                      {report.skipped.length > 1 ? "s" : ""} — open each with its
+                      “Resume” button.
                     </p>
                   )}
                 </div>

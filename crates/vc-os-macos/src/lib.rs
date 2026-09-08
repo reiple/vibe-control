@@ -18,6 +18,26 @@ fn run_osascript(script: &str) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Run a JavaScript-for-Automation (JXA) snippet via `osascript -l JavaScript`,
+/// returning trimmed stdout on success. Trailing `args` are passed as `run()`'s
+/// argv (never string-interpolated into the script), matching the ObjC-bridge
+/// approach `MacIconReader` uses. Unlike `System Events` automation, the AppKit
+/// APIs reached this way (e.g. `NSWorkspace`) need no Automation permission, so
+/// they don't prompt or stall on first launch.
+#[cfg(target_os = "macos")]
+fn run_jxa(script: &str, args: &[&str]) -> Option<String> {
+    let mut cmd = Command::new("osascript");
+    cmd.arg("-l").arg("JavaScript").arg("-e").arg(script);
+    for a in args {
+        cmd.arg(a);
+    }
+    let output = cmd.output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
 #[cfg(target_os = "macos")]
 pub struct MacWindowEnumerator;
 
@@ -43,20 +63,36 @@ impl MacWindowEnumerator {
     /// id is the stable restore target; it's `None` for the rare process that
     /// doesn't expose one. Name and id come from a single query so they stay
     /// aligned even if the process list changes between calls.
+    ///
+    /// Backed by `NSWorkspace.runningApplications` (via JXA) rather than a
+    /// `System Events` process loop: it's a single fast AppKit call, needs no
+    /// Automation permission (so no cold-start prompt/stall — this runs on app
+    /// launch), and reports the LaunchServices `localizedName`/`bundleIdentifier`
+    /// directly. Only regular (Dock) apps are kept — `activationPolicy == 0`,
+    /// which JXA surfaces as the string "0".
     pub fn list_running_apps() -> Result<Vec<(String, Option<String>)>> {
-        // tab-separated `name<TAB>bundleid` per line; bundle id may be empty.
-        let script = "tell application \"System Events\"\n\
-             set out to \"\"\n\
-             repeat with p in (every process whose background only is false)\n\
-             set bid to \"\"\n\
-             try\n\
-             set bid to bundle identifier of p\n\
-             end try\n\
-             set out to out & (name of p) & tab & bid & linefeed\n\
-             end repeat\n\
-             return out\n\
-             end tell";
-        let Some(out) = run_osascript(script) else {
+        // Emits `name<TAB>bundleid` per line; bundle id may be empty.
+        const SCRIPT: &str = r#"
+ObjC.import('AppKit');
+function run() {
+  var apps = $.NSWorkspace.sharedWorkspace.runningApplications;
+  var out = '';
+  var n = apps.count;
+  for (var i = 0; i < n; i++) {
+    var a = apps.objectAtIndex(i);
+    if (String(a.activationPolicy) !== '0') { continue; }
+    var name = a.localizedName;
+    if (name.isNil()) { continue; }
+    var nameStr = ObjC.unwrap(name);
+    if (nameStr === '') { continue; }
+    var bid = a.bundleIdentifier;
+    var bidStr = bid.isNil() ? '' : ObjC.unwrap(bid);
+    out += nameStr + '\t' + bidStr + '\n';
+  }
+  return out;
+}
+"#;
+        let Some(out) = run_jxa(SCRIPT, &[]) else {
             return Ok(vec![]);
         };
         let mut apps: Vec<(String, Option<String>)> = out
