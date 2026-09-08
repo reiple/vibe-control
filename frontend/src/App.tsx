@@ -242,6 +242,13 @@ export default function App() {
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedApp = useRef<RunningApp | null>(null);
 
+  // Polling economy (FR-7.5 / FR-7.6 / NFR-Pf3). `pollInFlight` keeps a slow
+  // refresh from overlapping the next tick; `resizingUntil` suppresses polls
+  // for a short window after each window resize, so dragging the app's edges
+  // isn't competing with a 1s OS enumeration.
+  const pollInFlight = useRef(false);
+  const resizingUntil = useRef(0);
+
   // Bumped by ↻ to force every visible SessionStatus to re-fetch its snapshot.
   const [sessionNonce, setSessionNonce] = useState(0);
   const [report, setReport] = useState<RestoreReport | null>(null);
@@ -328,6 +335,11 @@ export default function App() {
     // background poll yields to an active drag; a manual ↻ can't collide with
     // a drag (one pointer) so it isn't gated.
     if (silent && draggedApp.current) return;
+    // FR-7.6 concurrency guard: if the previous poll is still fetching, skip
+    // this tick rather than stacking another OS enumeration on top of it. Only
+    // background polls are gated — an explicit ↻ is a deliberate user action.
+    if (silent && pollInFlight.current) return;
+    if (silent) pollInFlight.current = true;
     if (!silent) setRefreshing(true);
     setSessionNonce((n) => n + 1); // also refresh inline coding-session statuses
     try {
@@ -339,6 +351,7 @@ export default function App() {
       // surface failures from an explicit refresh.
       if (!silent) setError(String(e));
     } finally {
+      if (silent) pollInFlight.current = false;
       if (!silent) setRefreshing(false);
     }
   };
@@ -346,9 +359,36 @@ export default function App() {
   // Live status: poll running apps + coding-session snapshots every second so
   // the left panel and each group's session status stay current without the
   // user pressing ↻. Silent (no spinner / no error banner) to avoid flicker.
+  //
+  // Economy (FR-7.5 / NFR-Pf3): the poll drives a real OS window enumeration,
+  // so it is suppressed whenever the result can't be seen or would compete with
+  // the user — while the window is hidden/minimised, and briefly after each
+  // resize. Coming back into view refreshes immediately rather than waiting out
+  // the remaining tick, so the panel is never shown stale.
   useEffect(() => {
-    const id = setInterval(() => refreshRunning(true), 1000);
-    return () => clearInterval(id);
+    const RESIZE_QUIET_MS = 400;
+
+    const onResize = () => {
+      resizingUntil.current = performance.now() + RESIZE_QUIET_MS;
+    };
+    const onVisibility = () => {
+      if (!document.hidden) refreshRunning(true); // catch up on return
+    };
+
+    window.addEventListener("resize", onResize);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    const id = setInterval(() => {
+      if (document.hidden) return; // nothing on screen to update
+      if (performance.now() < resizingUntil.current) return; // mid-resize
+      refreshRunning(true);
+    }, 1000);
+
+    return () => {
+      clearInterval(id);
+      window.removeEventListener("resize", onResize);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 

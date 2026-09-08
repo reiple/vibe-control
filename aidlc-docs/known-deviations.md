@@ -17,7 +17,7 @@
 | # | 원 설계 | 실제 코드 | 유형 | 근거(file:line) |
 |---|---|---|---|---|
 | A1 | vc-core가 포트 트레이트 **P1–P8**를 모두 정의(도메인이 능력을 선언, 어댑터가 구현) | vc-core에 `trait` 정의 **0개**. P4는 `vc-sessions`, P5는 `vc-store`에 트레이트로 존재. P1/P3는 트레이트 없이 OS별 구체 struct만. P2/P6/P7/P8은 트레이트로 존재하지 않음 | [문서반영]+[코드백로그] | `vc-core/src/*`(trait 없음), `vc-sessions/src/lib.rs:17`, `vc-store/src/lib.rs:5` |
-| A2 | 애플리케이션 서비스 **S1–S7** + `TauriCommandBridge` + `RefreshScheduler`로 유스케이스 오케스트레이션(포트 DI) | 서비스/브리지/스케줄러 struct 부재. 기능이 `AppState` + 17개 `#[tauri::command]` 핸들러 + 자유 함수로 평면화, 어댑터는 `#[cfg(target_os=…)]` 블록에서 **구체 타입 직접 호출** | [문서반영]+[코드백로그] | `vc-app/src/lib.rs:23`(AppState), `:683-701`(invoke_handler), `:542-668`(cfg dispatch) |
+| A2 | 애플리케이션 서비스 **S1–S7** + `TauriCommandBridge` + `RefreshScheduler`로 유스케이스 오케스트레이션(포트 DI) | 서비스/브리지/스케줄러 struct 부재. 기능이 `AppState` + **18개**(`activate_window` 추가 반영, 2026-09-08 재검증) `#[tauri::command]` 핸들러 + 자유 함수로 평면화, 어댑터는 `#[cfg(target_os=…)]` 블록에서 **구체 타입 직접 호출** | [문서반영]+[코드백로그] | `vc-app/src/lib.rs:23`(AppState), `:683-701`(invoke_handler), `:542-668`(cfg dispatch) |
 | A3 | 프론트엔드는 코어 이벤트를 **구독하는 얇은 뷰**(`status_delta`/`activation_report` emit) | 백엔드 `emit` 없음, 프론트 `listen()` 없음. 프론트가 1초 `setInterval`로 **폴링** | [문서반영]+[코드백로그] | `frontend/src/App.tsx:262` |
 | A4 | 도메인 코어(`IdentityMatcher`/`RestorePlanner`/`StatusEvaluator`)를 서비스가 조합 | vc-app이 이들을 **import조차 하지 않음**; 매칭/복원계획/노이즈판정이 오케스트레이션에 연결되지 않음 | [코드백로그] | `vc-app/src/lib.rs:13`(import 목록) |
 
@@ -59,7 +59,7 @@
 | D2 | `AppSettings { panel_width, card_height, window_rect: Option<Rect>, card_columns_hint }` | `window_rect`가 `window_x/y/width/height`로 평탄화, `card_columns_hint` **삭제**, Claude 3필드(`claude_api_key/model/region`) 추가 | [문서반영] | `vc-core/src/models/settings.rs:5-26` |
 | D3 | 시그니처: `matches -> bool`(component-methods), `evaluate(saved,running,perm,sessions) -> Vec<(ResourceId,ResourceStatus)>`, `load_and_migrate -> StoreState`, `reorder(order: Vec<ResourceId>) -> Result<()>` | `matches -> MatchResult`, `evaluate(&[Resource],&[String],bool) -> Vec<StatusSnapshot>`, `load_and_migrate -> Vec<WorkBundle>`, `reorder(&mut self)`(인자 없이 순번 재부여). `RunningItem`/`PermissionState`/`SessionSnapshot`은 vc-core에 없거나 축소 | [문서반영] | `matching/window.rs:14`, `evaluate/mod.rs:38`, `migrate/mod.rs:14`, `bundle.rs:88` |
 | D4 | 파일 레이아웃: `normalize/{url,path,app_id}.rs`, `matching/{signature,distinct}.rs`, `restore/plan.rs`, `evaluate/{status,session}.rs`, `migrate/{rules,transforms}.rs`, `tests/*.rs`, `benches/*.rs` | 각 영역이 단일 `mod.rs`(+`matching/window.rs`)로 통합. `tests/`·`benches/` 디렉터리 없음 | [문서반영] | `vc-core/src/` 트리 |
-| D5 | PBT-02(라운드트립)·PBT-03(파서 견고성)이 vc-core `tests/pbt_*.rs` | PBT-02는 `vc-core/migrate/mod.rs`(인라인), **PBT-03는 `vc-sessions/lib.rs:461`**(vc-core 아님) | [문서반영] | `migrate/mod.rs:131-146`, `vc-sessions/src/lib.rs:461-474` |
+| D5 | PBT-02(라운드트립)·PBT-03(파서 견고성)이 vc-core `tests/pbt_*.rs` | 둘 다 **인라인 `#[cfg(test)] mod pbt`**. PBT-02(`prop_roundtrip_stable`)와 PBT-03(`prop_parser_robust`)은 **`vc-core/migrate/mod.rs`에 함께** 있고, `vc-sessions/lib.rs`에도 별도의 PBT-03 계열 2건(`prop_parser_robust`, `prop_lines_robust`)이 있다. ⚠ **2026-09-08 정정**: 종전 기술 "PBT-03는 vc-core 아님"은 **부정확**했다(`migrate/mod.rs:143`에 존재) | [문서반영] | `migrate/mod.rs:131-146`, `vc-sessions/src/lib.rs:456-474` |
 | D6 | — | 미사용 `sha2` 의존성(매칭은 `std::DefaultHasher` 사용) | [코드백로그] | `vc-core/Cargo.toml`, `matching/mod.rs:27` |
 
 **일치 확인(이탈 아님)**: `ResourceKind`(6개), `ResourceStatus`(4개), `SessionCompletion`(Waiting/NotWaiting/Unknown) enum은 설계와 **정확히 일치**.
@@ -146,6 +146,57 @@
 
 ---
 
+## H. 2026-09-08 정합화 재실행에서 신규 검출
+
+출처: `inception/reverse-engineering/drift-analysis.md`(발견 45건). 직전 정합화(2026-09-08 오전)가 다루지 않았던 항목만 여기 모은다.
+
+### H-1 ~ H-4 코드 이탈
+
+| # | 내용 | 유형 | 근거 | 처리 |
+|---|---|---|---|---|
+| **H1** | **부팅 스플래시** — 전체 화면 오버레이가 최초 로드(묶음·Claude 상태·첫 실행앱 스캔)까지 입력 차단, 최소 650ms·하드캡 8초·페이드 후 언마운트. 요구사항·스토리·설계 **어디에도 없던 신규 기능** | [문서반영] — **정식 승격 완료** | 커밋 `7ab755a`; `App.tsx:133-162,234-323,520`; `styles.css`; `index.html:7-14` | ✅ `requirements.md` **FR-13 + AC-21** 신설, `stories.md` **EPIC-13/US-13.1** 신설(사용자 결정 Q2=A) |
+| **H2** | **스플래시 고DPI 렌더 결함** — 고DPI Windows에서 WebView2가 초기 프레임을 모니터 배율로 래스터화한 뒤 창 DPI에 동기화 → 스플래시 카드가 잠시 확대되어 보임. 커밋 메시지가 결함으로 명시했으나 **문서에 미등록이었음** | [코드백로그] — **수정 보류** | 커밋 `7ab755a` "Known caveat"; `index.html:7-14` 주석 | 등록만 하고 수정 보류. 로드 완료 후 화면은 항상 정상. 후보 수정: Tauri 창 nudge(생성 직후 1px 리사이즈)로 DPI 동기화 강제 |
+| **H3** | **죽은 공개 API** — G1 재구현 이후 `WinWindowEnumerator::list_running()`이 어디서도 호출되지 않음(macOS 동명 함수는 탭 리더가 사용하므로 대칭이 깨짐) | [코드백로그] | `vc-os-windows/src/lib.rs:307`; 호출처 grep 0건 | 제거 또는 `#[allow(dead_code)]` + 사유 주석 |
+| **H4** | **`reqwest` 의존성 주석 오류** — "Claude (Anthropic Messages API) client"라 적혀 있으나 실제 대상은 **Bedrock**. 직전 정합화가 후속 과제로 지목했으나 미수정 | [코드백로그] | `vc-app/Cargo.toml` | 주석 1줄 정정 |
+
+### H-5 확장 규칙(Security Full / PBT Partial) 미이행 — ✅ **승인된 면제 (Approved Waiver, 2026-09-08)**
+
+`aidlc-state.md`의 Extension Configuration은 **Security Baseline = Full(전 규칙 차단)**, **PBT = Partial(PBT-02/03/07/08/09 차단)** 로 승인되어 있다. 아래 8건은 그 차단 규칙의 미이행이며, 직전 정합화에서 **전혀 다루어지지 않았다**.
+
+| # | 승인된 규칙 | 현행 코드 | 근거 |
+|---|---|---|---|
+| H5-a | **SECURITY-13** — serde `deny_unknown_fields`, 중첩 5단계·문자열 1MB 제한 | `deny_unknown_fields` **0건**, 깊이·크기 제한 없음 | `vc-core/src/models/*`, `migrate/mod.rs:14-41` |
+| H5-b | **SECURITY-04** — Tauri WebView에 제한적 CSP 적용 | `"csp": null` | `tauri.conf.json:25` |
+| H5-c | **PBT-02/03** — 임의 입력 **1000회 이상** | `ProptestConfig` 미설정 → proptest 기본 **256회** | `migrate/mod.rs:131`, `vc-sessions:457` |
+| H5-d | **PBT-08** — 시드 로깅 + CI 통합 | CI 자체 부재(`.github/` 없음), 시드 파일 미커밋 | 리포 전역 |
+| H5-e | NFR 성능 측정(<1ms/<100ms/<200ms, criterion) | criterion·`benches/` 부재 → **성능 목표 미검증** | `crates/*/Cargo.toml` |
+| H5-f | 커버리지 ≥90% | 커버리지 도구 부재. vc-app(795 LOC)·vc-os-windows(782 LOC)·frontend(957 LOC) **테스트 0개** | 정적 카운트 |
+| H5-g | **PBT-09** — 프론트 `fast-check` | 미도입(프론트 테스트 러너 자체 없음) | `frontend/package.json` |
+| H5-h | **SECURITY-10** — 의존성 취약점 스캔 | lock 파일 커밋은 ✅. 스캔 설정·실행 없음. 미사용 `sha2` 잔존 | `vc-core/Cargo.toml:13` |
+
+#### 면제 결정 (Waiver Record)
+
+**결정**: 사용자 확정(2026-09-08) — *"Q3의 답과 같이 D-50~D-57 전부 면제로 결정"*. Q1(옵션 B, 이행)과의 모순은 **Q3 우선**으로 해소되었다(`reconciliation-clarification-questions.md`).
+**유형**: [수용] — 개인 프로젝트/PoC 성격에 맞춘 확장 모드 하향. **코드 무수정.**
+**적용 범위**: 아래 8건에 **한정**한다. 다른 SECURITY 규칙(01/03/05/09/11/12/15)은 **여전히 차단 제약으로 유효**하다.
+
+| # | 면제 대상 | 수용하는 리스크 | 재검토 트리거 (면제 해제 조건) |
+|---|---|---|---|
+| H5-a | SECURITY-13 강화(`deny_unknown_fields`, 깊이·크기 상한) | 손상·조작된 `bundles.json`/`settings.json`이 알 수 없는 필드나 과대 중첩을 담아도 거부되지 않는다. **완화 요인**: 저장 파일은 사용자 본인 소유의 OS config 디렉터리에만 존재하고, 미래 버전 거부와 손상 JSON 오류 처리는 이미 동작한다 | 저장 파일이 사용자 밖에서 오거나(가져오기/동기화/공유) 다중 사용자 환경이 되면 즉시 해제 |
+| H5-b | SECURITY-04 CSP (`csp: null`) | WebView에 콘텐츠 보안 정책이 없다. **완화 요인**: 프론트가 렌더하는 값은 전부 로컬 출처(창 제목·앱 이름·세션 파일)이고 외부 CDN을 쓰지 않으며 자산이 로컬 번들이다. **잔여 리스크**: 창 제목·세션 내용은 결국 *외부에서 유입된 문자열*이며, Bedrock 응답도 렌더된다 | 원격 콘텐츠를 로드하거나, 사용자 입력 HTML을 렌더하거나, 배포용 서명 빌드를 만들 때 해제 |
+| H5-c | PBT-02/03 실행 **1000회** | 기본 256회로 실행되어 희귀 반례 탐지 확률이 낮다. **완화 요인**: 테스트 자체는 존재하고 통과한다 | PBT 회귀가 실제로 발생하면 해제 |
+| H5-d | PBT-08 시드 보존 + CI | 실패 재현이 수동이며, 회귀 방지 자동화가 없다 | CI를 도입하는 시점에 함께 해제 |
+| H5-e | 성능 측정(criterion) | 창 열거<500ms 등 **성능 목표가 계속 미검증**으로 남는다. **완화 요인**: 실 OS에서 체감 검증은 반복적으로 수행됨(프리즈 사고 후 `async` 전환 등) | 폴링 지연·UI 프리즈가 재발하면 해제 |
+| H5-f | 커버리지 ≥90% | vc-app(795 LOC)·vc-os-windows(782 LOC)·frontend(957 LOC)가 **테스트 0개**로 유지된다. **프로젝트 최대 리스크 지점** | 해당 단위를 리팩터링하거나 결함이 반복되면 해제 |
+| H5-g | PBT-09 프론트 `fast-check` | 프론트 자동 테스트가 전혀 없다. **완화 요인**: `tsc`가 빌드에 포함되어 타입 수준 검증은 있다 | 프론트 테스트 러너 도입 시 함께 |
+| H5-h | SECURITY-10 취약점 스캔 | 의존성 CVE를 자동 감지하지 못한다. **완화 요인**: `Cargo.lock`·`package-lock.json` 커밋됨(재현 가능 빌드) | 배포/공개 시점, 또는 CI 도입 시 해제 |
+
+**확장 설정 조정**: `aidlc-state.md`의 Extension Configuration을 다음과 같이 조정한다 — Security Baseline은 **Full 유지 + 위 2건(SECURITY-04, SECURITY-13 강화 조항)만 명시적 예외**, PBT는 **Partial(차단) → Advisory(권고)** 로 하향. Security를 통째로 내리지 않는 이유는, 현재 **충족 중인** SECURITY-05/12/15 등이 함께 면제되어 앞으로의 검증에서 빠지는 것을 막기 위함이다.
+
+> ℹ️ **정직한 부기**: H5-b(CSP)는 `tauri.conf.json` 한 줄 변경으로 끝나는 항목이라 비용 대비 효과가 가장 컸다. 사용자에게 그 점을 제시했고(작업량 "매우 작음"), 그럼에도 **전부 면제**로 확정되었다 — 위 재검토 트리거에 도달하면 가장 먼저 되살릴 항목으로 기록해 둔다.
+
+---
+
 ## 백로그 (우선순위)
 
 원 설계 의도가 유효하나 코드에 아직 반영되지 않은 항목(이번 정합화에서 **코드는 수정하지 않음**; 향후 반복 후보).
@@ -153,8 +204,16 @@
 | 우선 | 항목 | 관련 이탈 | 관련 FR/AC |
 |---|---|---|---|
 | ✅완료 | 창 단위 모델 재정렬 **완료**(G1·G2·G3). 열거를 `EnumWindows` 네이티브 FFI로 교체 — Edge/Chrome/카톡 다중 창이 각각 표시됨(실측 검증, 2026-09-09) | **G1✔, G2✔, G3✔** | **FR-2.2/2.4/2.6/2.8, FR-4.1/4.2, AC-20** |
-| P1 | 세션 전체 대화 뷰어 복원(fetch된 `conversation` 렌더) | E1 | FR-12.3, AC-17 |
+| P1 | **묶음에서 리소스 제거** 경로 배선(`remove_resource`는 도메인에 이미 존재) | 신규 `#D-33` | FR-1.2 |
 | P1 | 레이아웃 설정 영속화(get/update_settings 배선) | E2 | FR-8.10, AC-14 |
+| P1 | 저장 리소스 상태 표시 배선(`evaluate` 호출 + 프론트 `status` 필드) | A4, 신규 `#D-30` | FR-7.1~7.3 |
+| ✅완료 | **폴링 절약 구현 완료 (2026-09-08)** — 창이 숨겨짐/최소화 시 폴링 중단, 리사이즈 후 400ms 유예, 복귀 시 즉시 갱신, 진행 중 폴링과 중첩 방지. `frontend/src/App.tsx` | ~~`#D-37`~~ | FR-7.5, **FR-7.6**, NFR-Pf3 |
+| P2 | 항목 편집(표시명·재실행 주소) | 신규 `#D-31` | FR-6.1/6.2(연기) |
+| P2 | 묶음 이름 변경 | 신규 `#D-32` | FR-1.1(연기) |
+| P2 | 사용자 문서(저장 위치·권한·사용법 + Claude 콘솔 외부 전송 고지) | 신규 `#D-36` | NFR-U1, DoD |
+| P3 | ~~세션 전체 대화 뷰어 복원~~ → **요구사항 v1.1에서 축소**(터미널 포커스로 대체). 되돌릴 경우에만 착수 | E1 | FR-12.3(개정), AC-17(개정) |
+| P3 | 스플래시 고DPI 렌더 보정(Tauri 창 nudge) | **H2** | FR-13(알려진 제약) |
+| P4 | 죽은 API `WinWindowEnumerator::list_running` 정리 / `reqwest` 주석 정정 | **H3, H4** | — |
 | P1 | 저장 실패 시 `.tmp` 정리 + `settings.json` 원자적 쓰기 | C1, C2 | FR-11.5/11.6, SECURITY-15 |
 | P2 | 중복 식별 금지 불변식 도메인화(`add_resource`/`is_duplicate`) | D1 | FR-3.4, AC-3 |
 | P2 | Windows 브라우저 탭 읽기(Edge/Chrome) | B3 | FR-10.12, AC-7/8 |
