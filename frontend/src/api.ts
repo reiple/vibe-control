@@ -58,6 +58,13 @@ export async function activateApp(target: string): Promise<void> {
   await invoke("activate_app", { target });
 }
 
+/** Bring a SPECIFIC window/tab to the front (FR-2.8 / AC-20). `handle` is the
+ *  opaque token from a RunningWindow; it activates exactly that window, not
+ *  just the app. */
+export async function activateWindow(handle: string): Promise<void> {
+  await invoke("activate_window", { handle });
+}
+
 /** Lazily fetch a running app's icon as a base64 PNG data URI, or null.
  *  `id` is a bundle id when known, else an app name (same value used to
  *  activate the app). Returns null outside Tauri or when no icon exists. */

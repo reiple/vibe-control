@@ -29,7 +29,7 @@
 
 | # | 원 설계 | 실제 코드 | 유형 | 근거 |
 |---|---|---|---|---|
-| B1 | Windows 창 열거 = **UI Automation, 최상위 창** | PowerShell `Get-Process`에서 `MainWindowHandle != 0 && MainWindowTitle` 필터로 **사용자가 띄운 가시 창 앱만** 열거(이름 기준 dedup). UI Automation은 구현된 적 없음(설계→`tasklist /v`→`Get-Process` 이력) | [문서반영] | `vc-os-windows/src/lib.rs:57-124` |
+| B1 | Windows 창 열거 = **UI Automation, 최상위 창** | PowerShell `Get-Process`에서 `MainWindowHandle != 0 && MainWindowTitle` 필터로 **사용자가 띄운 가시 창 앱만** 열거(이름 기준 dedup). UI Automation은 구현된 적 없음(설계→`tasklist /v`→`Get-Process` 이력). ⚠ 이 **프로세스당 대표 창 + 이름 dedup**은 FR-2.2/2.4(앱 그룹 안에 창 나열)를 앱 단위로 축소하는 원인 — **G1(진행 중 기능)에서 창 단위 열거로 대체 예정** | [문서반영]→[코드백로그(G1)] | `vc-os-windows/src/lib.rs:57-124` |
 | B2 | macOS 창 열거 = **AXUIElement / accessibility 크레이트** | `osascript`/JXA + `NSWorkspace` 셸아웃(네이티브 접근성 의존성 없음) | [문서반영] | `vc-os-macos/src/lib.rs:47-118` |
 | B3 | `WinBrowserTabReader`가 Edge/Chrome 탭 수집 | **스텁** — 빈 벡터 반환("Not yet implemented on Windows") | [코드백로그] | `vc-os-windows/src/lib.rs:264-275` |
 | B4 | `WinIconProvider`(Windows 아이콘 제공) | ✅ **구현됨** (2026-09-08 커밋 `6039456`) — `WinIconReader`가 PowerShell + C# `Add-Type`(shell32 `SHGetImageList` jumbo 256px → 48px → 32px 폴백, 투명 여백 트림)로 exe 아이콘을 base64 PNG data URI로 추출. vc-app이 `extract_app_icon`에서 호출 + 캐시. **이탈 해소** | [문서반영] | `vc-os-windows/src/lib.rs:127-259`, `vc-app/src/lib.rs:365-372` |
@@ -86,12 +86,73 @@
 
 ---
 
+## G. 진행 중 기능 — 창 단위 모델 재정렬 (2026-09-08 착수)
+
+원 설계는 **창 단위 열거 + 정확한 창 활성화**를 규정했으나(FR-2.2/2.4/2.6, FR-4.1/4.2, 포트 P1/P2, U1 `RunningItem`+`matching/window.rs` L2 매처), `REQUIREMENTS.ko.md §13.1/§13.4`의 사후 명확화와 출하 코드가 이를 **앱 단위**로 축소했다. 사용자 요청(실행 앱 패널 창/탭 펼치기·선택 UX)에 따라 원 창 단위 설계로 **재정렬**한다. 이 항목은 [코드백로그]가 아니라 **[진행 중]** — 코드 수정 예정.
+
+| # | 원 설계(유효) | 현행 코드(축소) | 재정렬 방향 | 근거(file:line) |
+|---|---|---|---|---|
+| G1 | 앱당 **여러 창**을 각각 열거(제목·핸들·포커스여부); FR-2.2 앱 아이콘 1회+창 제목 나열, FR-2.4 그룹 내 활성 창 녹색점 | `RunningApp { name, bundle_id }` — 창 목록 없음. Windows `visible_window_apps()`가 프로세스당 대표 창 + **이름 dedup**. macOS `list_running_apps()`도 앱 단위 | 어댑터가 **창 단위 스냅샷**(U1 `RunningItem` 형태) 방출 → U6가 앱별 그룹 + 창 리스트로 커맨드 반환 → U7이 펼침/접기 UI. Win: `EnumWindows`/HWND+제목, mac: AX/CGWindowList 창 | `vc-app/src/lib.rs`(`RunningApp`), `vc-os-windows/src/lib.rs:57-124`, `vc-os-macos/src/lib.rs:73-118`, `vc-core/src/matching/window.rs:5-11` |
+| G2 | FR-2.6/FR-4.1 **특정 창/탭** 최전면; FR-4.2 앱만 활성화는 성공 아님 | `open_app(target)`이 앱 대상 — `focus_existing_window`가 매칭되는 **아무 창**이나 포커스(창 지정 불가) | 창(HWND/네이티브 핸들) 지정 활성화 커맨드 신설; U6에 per-window activate. Win: 특정 HWND `SetForegroundWindow`, mac: 특정 창 raise | `vc-os-windows/src/lib.rs:278-340`, `vc-app/src/lib.rs`(`activate_app`) |
+| G3 | (신규) 앱 클릭 시 창/탭 목록 펼침/접기 — 원 설계·§13에 없던 명시적 어포던스 | 없음(클릭 즉시 활성화) | U7 프론트에 expand/collapse 상태 + 창 하위목록 렌더 (FR-2.8, §13.6, AC-20) | `frontend/src/App.tsx:436-459` |
+
+**용어 주의**: 본 기능의 "창/탭"은 U5 vc-sessions의 코딩 에이전트 **"세션"**과 다른 개념이다. 문서·코드에서 실행 창은 **window/tab**, 코딩 세션은 **session**으로 구분한다.
+
+**미영향(보존 확인 대상)**: FR-3.1 드래그 앤 드롭, Resource/Workspace 묶음(U2 vc-store 영속 스키마), Claude 콘솔(F1)은 이 기능으로 변경되지 않는다.
+
+### G1 확정 진단 (2026-09-08 추가) — 출하 코드가 프로세스당 창 1개만 노출
+
+**증상(사용자 보고)**: 그림판(mspaint) 외에는 창 나누기/창 띄우기가 반영되지 않음. 카카오톡(메인+채팅 창), Edge(창을 나눠도, 한 창에 탭이 여러 개여도) 모두 창 목록에 1개만 표시.
+
+**근본 원인(진단으로 확정)**: G1의 1차 구현은 창 단위 열거를 표방했으나 실제로는 PowerShell `Get-Process | Where MainWindowHandle -ne 0` 방식이다. `MainWindowHandle`은 **프로세스당 대표 창 딱 1개**만 가리킨다. 따라서 **한 프로세스가 여러 최상위 창을 호스팅하는 앱**(카카오톡 = 메인+각 채팅 창, Edge/Chrome = 여러 브라우저 창)은 전부 창 1개로 축소된다. 그림판이 "되는 것처럼 보인" 이유는 그림판은 인스턴스마다 **별도 프로세스**라서 창 2개 = 프로세스 2개였기 때문(=예외 케이스). 즉 1차 구현은 "프로세스-당-창" 앱에서만 우연히 동작했다.
+
+**진단 증거**(`diag_windows.ps1` — `Get-Process.MainWindowHandle` count vs `EnumWindows`(top·non-tool·non-cloaked) count, 실측 2026-09-08):
+
+| 앱 | 프로세스 PID | MainWindowHandle(현행) | EnumWindows(실제 최상위 창) | 갭 |
+|---|---|---|---|---|
+| msedge | 35552 | 1 | **2** ("AI-DLC 1Day Workshop", "ChatGPT") | -1 |
+| chrome | 52688 | 1 | **2** ("해커톤 공부 내용 정리", "GitHub - reiple/vibe-control") | -1 |
+| KakaoTalk | 36648 | 1 | 1 (현재 메인만 열림) | 0* |
+| explorer(Program Manager) | 51444 | 0 | 0 (`tool`로 정확히 제외됨) | 0 |
+
+*KakaoTalk은 진단 시점에 메인 창만 열려 있어 1개. 채팅 창을 팝아웃하면 같은 PID 아래 최상위 창이 늘어 동일하게 축소된다(원인 동일).
+
+**결론**: 본 항목은 **"연기 가능한 단순화"가 아니라 실사용에서 재현되는 결함**이다. `EnumWindows` 기반 재구현이 **필수**. (1차 구현 시 "1초 폴링을 C# 컴파일러에서 떼어 두려고" 미룬 것은 오판 — 대다수 실제 앱이 프로세스-당-여러-창).
+
+**검증된 수정 방향(내일 바로 착수 가능)**:
+1. **열거를 `EnumWindows`로 교체** — 모든 최상위 창을 순회. HWND별 필터(진단으로 검증됨):
+   - `IsWindowVisible(h)` 참
+   - `GetWindowTextLength(h) > 0` (제목 있음)
+   - `GetWindow(h, GW_OWNER=4) == 0` (owned 창 아님 = 최상위)
+   - `GetWindowLong(h, GWL_EXSTYLE=-20) & WS_EX_TOOLWINDOW(0x80) == 0` (툴윈도우 아님)
+   - `DwmGetWindowAttribute(h, DWMWA_CLOAKED=14) == 0` (클로킹 안 됨 — UWP/가상데스크톱 유령 창 제외)
+   - HWND→PID는 `GetWindowThreadProcessId`, PID→exe 경로는 `QueryFullProcessImageNameW`(그룹/아이콘 키)
+2. **성능** — 인라인 PowerShell `Add-Type`(C#)는 fresh powershell.exe마다 csc 재컴파일(~150-400ms). 1초 폴링에서 매번 컴파일은 부적절 → **네이티브 Rust FFI(user32/dwmapi 직접 호출)** 권장: `EnumWindows`, `GetWindowTextW`, `GetWindowThreadProcessId`, `IsWindowVisible`, `GetWindow`, `GetWindowLongW`, `GetForegroundWindow`, `DwmGetWindowAttribute`, `QueryFullProcessImageNameW`. 서브프로세스·컴파일 없음. (대안: 캐시된 `Add-Type` 세션을 유지하는 장수 헬퍼 프로세스 — 더 복잡.)
+3. **활성화(G2)** — 이미 구현된 `focus_window(hwnd)`는 HWND 지정이라 그대로 유효. 열거가 진짜 HWND들을 주면 다중 창이 각각 활성화된다.
+4. **회귀 방지** — `list_running_apps()`(capture용 dedup)와 DnD·아이콘 그룹핑은 그대로. `EnumWindows` 결과를 PID/exe로 그룹핑해 아이콘 1회 규칙 유지.
+
+**진단 산출물**: `diag_windows.ps1`(루트, 임시). 위 필터 휴리스틱이 실증된 스크립트였음 — 재구현 완료 후 **삭제됨(2026-09-09)**.
+
+**별개 문제 B(브라우저 탭)**: "한 창에 여러 탭"은 `EnumWindows`로도 안 보인다 — 탭은 OS 창이 아니라 브라우저 내부 UI. Edge/Chrome 탭 열거는 창 열거와 **범위가 다르며** `known-deviations.md#B3`(BrowserTabReader 스텁, DevTools 프로토콜/UI Automation 필요)의 별도 작업이다. 이번 `EnumWindows` 수정으로 **브라우저 창은 개별 표시되지만 탭은 여전히 창 1개로 묶여** 보인다 — 탭 분리는 후속.
+
+### ✅ G1 해결 (2026-09-09) — `EnumWindows` 네이티브 FFI로 교체 완료
+
+`crates/vc-os-windows/src/lib.rs`의 열거를 `Get-Process.MainWindowHandle`(프로세스당 창 1개) → **Win32 `EnumWindows` 네이티브 Rust FFI**로 재구현했다. 인라인 PowerShell `Add-Type`(매 폴링 csc 재컴파일 ~150-400ms) 대신 `#[link(name=…)]` `extern "system"` 블록으로 user32/dwmapi/kernel32를 직접 링크 — 서브프로세스·컴파일 0(1초 폴링 적합). `windows`/`winapi` 크레이트 미도입(표면이 작고 macOS 빌드에는 `#[cfg(target_os="windows")]`로 미방출).
+
+- **구현**: `winffi` 모듈(FFI 선언) + `enum_windows_cb`(위 검증 필터 그대로: `IsWindowVisible` + `GetWindowTextLengthW>0` + `GetWindow(GW_OWNER)==0` + `!(GWL_EXSTYLE & WS_EX_TOOLWINDOW)` + `!DWMWA_CLOAKED`) + `raw_windows`(창별 행 수집 → PID로 exe 경로/이름 해석). PID→이름은 Toolhelp 스냅샷으로 **보장**(권한 부족 프로세스도 이름 유지), PID→전체경로는 `QueryFullProcessImageNameW` best-effort(실패 시 `name.exe` 폴백 — 기존 동작 보존). HWND는 `(hwnd as usize)` 10진 문자열로 `focus_window`의 전(全)자릿수 가드와 round-trip.
+- **계약 무변경**: `raw_windows`만 교체 — `list_running_windows`(이름 dedup 그룹핑, 아이콘 1회)·`list_running_apps`(capture용)·vc-app·프론트 계약 그대로. **최소 blast radius**.
+- **실측 검증(2026-09-09, 실 Windows)**: `cargo build -p vc-app` + `clippy --workspace` 0 경고. 전용 하니스(`list_running_windows` 직접 호출) 결과 — **chrome=2창, msedge=2창, KakaoTalk=2창(메인+채팅, 포커스 창 녹색점 정확), WindowsTerminal=2**; mspaint/Code/Obsidian=1(회귀 없음); explorer Program Manager는 `tool`로 정확히 제외. 실 앱 UI 스크린샷 — KakaoTalk·msedge `▾ 2` 펼침 + 창별 하위행·점, 패딩 번호는 앱 행만 카운트. capture dedup·DnD·아이콘 그룹핑 무변경.
+- **범위 밖(후속)**: 브라우저 **탭**(한 창 안 여러 탭)은 위 별개 문제 B(`#B3`) — `EnumWindows`로도 안 보임.
+
+---
+
 ## 백로그 (우선순위)
 
 원 설계 의도가 유효하나 코드에 아직 반영되지 않은 항목(이번 정합화에서 **코드는 수정하지 않음**; 향후 반복 후보).
 
 | 우선 | 항목 | 관련 이탈 | 관련 FR/AC |
 |---|---|---|---|
+| ✅완료 | 창 단위 모델 재정렬 **완료**(G1·G2·G3). 열거를 `EnumWindows` 네이티브 FFI로 교체 — Edge/Chrome/카톡 다중 창이 각각 표시됨(실측 검증, 2026-09-09) | **G1✔, G2✔, G3✔** | **FR-2.2/2.4/2.6/2.8, FR-4.1/4.2, AC-20** |
 | P1 | 세션 전체 대화 뷰어 복원(fetch된 `conversation` 렌더) | E1 | FR-12.3, AC-17 |
 | P1 | 레이아웃 설정 영속화(get/update_settings 배선) | E2 | FR-8.10, AC-14 |
 | P1 | 저장 실패 시 `.tmp` 정리 + `settings.json` 원자적 쓰기 | C1, C2 | FR-11.5/11.6, SECURITY-15 |
@@ -107,4 +168,5 @@
 ## 관련 문서
 - 원 설계: `inception/application-design/components.md`, `services.md`, `component-methods.md`, `unit-of-work.md`
 - 신규 기능: `construction/vc-app/claude-console/design.md`
+- 창 단위 재정렬(G): `construction/vc-os-windows/functional-design/window-enumeration.md`, `inception/requirements/requirements.md`(FR-2.8/AC-20), `REQUIREMENTS.ko.md`(§13.1/§13.4/§13.6)
 - 상태/이력: `aidlc-state.md`, `audit.md`

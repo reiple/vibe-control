@@ -68,6 +68,7 @@
 
 ### RunningItem (실행 창/탭 스냅샷)
 `{ app_id, role, title, native_handle, is_focused, group_key, kind_hint }`
+> 🔧 **활성화(2026-09-08 진행 중)**: 이 **창 단위** 스냅샷 타입과 `matching/window.rs` L2 매처는 설계돼 있으나 어댑터/앱이 아직 방출·소비하지 않았다(앱 단위로 축소 시행). 창 단위 열거·활성화 기능(FR-2.8/AC-20)이 이를 어댑터→vc-app 방출 형태로 활성화한다. `group_key`=앱 그룹(아이콘 1회), `is_focused`=그룹 내 녹색 점(FR-2.4), `native_handle`=HWND/창번호(비영속 힌트, FR-11.4). 상세: `known-deviations.md#G1`, `construction/vc-os-windows/functional-design/window-enumeration.md`.
 
 ### SessionSnapshot (세션 provider 결과)
 `{ session_ref, conversation: Vec<Turn>, last_question: Option<String>, completion: SessionCompletion, available: bool }`

@@ -38,6 +38,11 @@ fn run_jxa(script: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// One app grouped with its live windows:
+/// `(display name, bundle id, [(handle, title, is_focused)])`.
+#[cfg(target_os = "macos")]
+type AppWindows = (String, Option<String>, Vec<(String, String, bool)>);
+
 #[cfg(target_os = "macos")]
 pub struct MacWindowEnumerator;
 
@@ -115,6 +120,94 @@ function run() {
         apps.sort();
         apps.dedup();
         Ok(apps)
+    }
+
+    /// Apps grouped WITH their individual windows:
+    /// `(display name, bundle id, [(handle, title, is_focused)])` (FR-2.8/AC-20).
+    ///
+    /// The app list + bundle ids come from `NSWorkspace` (no permission, never
+    /// regresses the current app-level list). Per-window titles are OVERLAID
+    /// from a single `System Events` pass — which needs Accessibility permission,
+    /// as any per-window enumeration on macOS inherently does. When that pass
+    /// yields nothing (permission not granted) or a process name doesn't line up
+    /// with the LaunchServices name, the app simply carries no window detail and
+    /// the UI treats it as one entry that activates the app (single-window
+    /// consistency). The per-window `handle` is `display_name\u{1f}title` so
+    /// `MacLauncher::focus_window` can raise exactly that window by title.
+    pub fn list_running_windows() -> Result<Vec<AppWindows>> {
+        let apps = Self::list_running_apps()?;
+        let windows_by_proc = Self::windows_by_process();
+        let out = apps
+            .into_iter()
+            .map(|(name, bundle_id)| {
+                let windows = windows_by_proc
+                    .get(&name.to_lowercase())
+                    .cloned()
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|(title, focused)| {
+                        let handle = format!("{name}\u{1f}{title}");
+                        (handle, title, focused)
+                    })
+                    .collect();
+                (name, bundle_id, windows)
+            })
+            .collect();
+        Ok(out)
+    }
+
+    /// process-name(lowercased) → its windows `(title, is_focused)`, via a single
+    /// `System Events` pass. Empty when Accessibility permission isn't granted —
+    /// callers fall back to app-level activation. The frontmost process's front
+    /// window (index 1) is flagged focused (FR-2.4).
+    fn windows_by_process() -> std::collections::HashMap<String, Vec<(String, bool)>> {
+        const SCRIPT: &str = "tell application \"System Events\"\n\
+            set out to \"\"\n\
+            set frontApp to \"\"\n\
+            try\n\
+            set frontApp to name of first process whose frontmost is true\n\
+            end try\n\
+            repeat with p in (processes whose background only is false)\n\
+            set pn to name of p\n\
+            set idx to 0\n\
+            try\n\
+            repeat with w in windows of p\n\
+            set idx to idx + 1\n\
+            set wt to \"\"\n\
+            try\n\
+            set wt to name of w\n\
+            end try\n\
+            set foc to \"0\"\n\
+            if (pn is frontApp) and (idx is 1) then set foc to \"1\"\n\
+            set out to out & pn & tab & foc & tab & wt & linefeed\n\
+            end repeat\n\
+            end try\n\
+            end repeat\n\
+            return out\n\
+            end tell";
+        let mut map: std::collections::HashMap<String, Vec<(String, bool)>> =
+            std::collections::HashMap::new();
+        let Some(out) = run_osascript(SCRIPT) else {
+            return map;
+        };
+        for line in out.lines() {
+            let mut parts = line.splitn(3, '\t');
+            let pn = parts.next().unwrap_or("").trim();
+            let focused = parts.next().unwrap_or("0").trim() == "1";
+            let title = parts.next().unwrap_or("").trim();
+            if pn.is_empty() {
+                continue;
+            }
+            let title = if title.is_empty() {
+                pn.to_string()
+            } else {
+                title.to_string()
+            };
+            map.entry(pn.to_lowercase())
+                .or_default()
+                .push((title, focused));
+        }
+        map
     }
 }
 
@@ -196,6 +289,41 @@ impl MacLauncher {
         Err(CoreError::Internal(format!(
             "could not open application '{target}' (no matching app name or bundle id)"
         )))
+    }
+
+    /// Bring a SPECIFIC window to the front (FR-2.8 / FR-4.1). `handle` is
+    /// `display_name\u{1f}title` as produced by `list_running_windows`: activate
+    /// the app first (works without Accessibility), then best-effort raise the
+    /// window whose title matches via `System Events` `AXRaise`. Raising the
+    /// exact window needs Accessibility permission; failure is non-fatal because
+    /// the app is already frontmost. When the handle carries no title part, this
+    /// degrades to plain app activation (single-window consistency).
+    pub fn focus_window(handle: &str) -> Result<()> {
+        let (app, title) = handle.split_once('\u{1f}').unwrap_or((handle, ""));
+        // Always bring the app forward first.
+        Self::open_app(app)?;
+        if title.is_empty() {
+            return Ok(());
+        }
+        let esc_app = app.replace('\\', "\\\\").replace('"', "\\\"");
+        let esc_title = title.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            "tell application \"System Events\"\n\
+             try\n\
+             set p to first process whose name is \"{esc_app}\"\n\
+             repeat with w in windows of p\n\
+             if (name of w) is \"{esc_title}\" then\n\
+             perform action \"AXRaise\" of w\n\
+             set frontmost of p to true\n\
+             return\n\
+             end if\n\
+             end repeat\n\
+             end try\n\
+             end tell"
+        );
+        // Advisory: the app is already frontmost even if the raise fails.
+        let _ = run_osascript(&script);
+        Ok(())
     }
 
     /// Open a file or folder in its default handler / Finder.
