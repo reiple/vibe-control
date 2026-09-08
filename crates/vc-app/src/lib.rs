@@ -142,7 +142,11 @@ fn enumerate_browser_tabs() -> Vec<(String, String)> {
     {
         vc_os_macos::MacBrowserTabReader::read_tabs().unwrap_or_default()
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinBrowserTabReader::read_tabs().unwrap_or_default()
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         Vec::new()
     }
@@ -376,10 +380,14 @@ fn open_app(target: &str) -> std::result::Result<(), String> {
     {
         vc_os_macos::MacLauncher::open_app(target).map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinLauncher::open_app(target).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = target;
-        Err("app launch not supported on this platform yet".into())
+        Err("app launch not supported on this platform".into())
     }
 }
 
@@ -388,10 +396,14 @@ fn open_path(target: &str) -> std::result::Result<(), String> {
     {
         vc_os_macos::MacLauncher::open_path(target).map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinLauncher::open_path(target).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = target;
-        Err("open path not supported on this platform yet".into())
+        Err("open path not supported on this platform".into())
     }
 }
 
@@ -400,10 +412,14 @@ fn open_url(target: &str) -> std::result::Result<(), String> {
     {
         vc_os_macos::MacLauncher::open_url(target).map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinLauncher::open_url(target).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = target;
-        Err("open url not supported on this platform yet".into())
+        Err("open url not supported on this platform".into())
     }
 }
 
@@ -415,20 +431,26 @@ fn resume_session(session_ref: &str) -> std::result::Result<(), String> {
         let command = format!("cd {} && claude --resume {}", shell_quote(&cwd), id);
         vc_os_macos::MacLauncher::run_in_terminal(&command).map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let (cwd, id) = ClaudeCodeSessionProvider::resume_info(session_ref)
+            .ok_or_else(|| "cannot resolve session cwd/id".to_string())?;
+        let command = format!("cd /d \"{}\" && claude --resume {}", cwd, id);
+        vc_os_windows::WinLauncher::run_in_terminal(&command).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = session_ref;
-        Err("session resume not supported on this platform yet".into())
+        Err("session resume not supported on this platform".into())
     }
 }
 
-/// Bring the existing Terminal running this session to the front, best-effort
-/// focusing the window whose title matches the session's working-directory
-/// name. Never spawns a new terminal.
+/// Bring the existing Terminal/PowerShell running this session to the front,
+/// best-effort focusing the window whose title matches the session's
+/// working-directory name. Never spawns a new terminal.
 fn activate_session_terminal(session_ref: &str) -> std::result::Result<(), String> {
     #[cfg(target_os = "macos")]
     {
-        // Use the cwd's last path component as a focus hint (best-effort).
         let hint = ClaudeCodeSessionProvider::resume_info(session_ref).and_then(|(cwd, _)| {
             std::path::Path::new(&cwd)
                 .file_name()
@@ -437,10 +459,20 @@ fn activate_session_terminal(session_ref: &str) -> std::result::Result<(), Strin
         });
         vc_os_macos::MacLauncher::activate_terminal(hint.as_deref()).map_err(|e| e.to_string())
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        let hint = ClaudeCodeSessionProvider::resume_info(session_ref).and_then(|(cwd, _)| {
+            std::path::Path::new(&cwd)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        });
+        vc_os_windows::WinLauncher::activate_terminal(hint.as_deref()).map_err(|e| e.to_string())
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = session_ref;
-        Err("terminal activation not supported on this platform yet".into())
+        Err("terminal activation not supported on this platform".into())
     }
 }
 
@@ -457,11 +489,7 @@ fn enumerate_running_apps_detailed() -> Vec<(String, Option<String>)> {
     }
     #[cfg(target_os = "windows")]
     {
-        vc_os_windows::WinWindowEnumerator::list_running()
-            .unwrap_or_default()
-            .into_iter()
-            .map(|n| (n, None))
-            .collect()
+        vc_os_windows::WinWindowEnumerator::list_running_apps().unwrap_or_default()
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
