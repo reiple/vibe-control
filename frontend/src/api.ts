@@ -41,6 +41,12 @@ export async function resumeCodingSession(sessionRef: string): Promise<void> {
   await invoke("resume_coding_session", { sessionRef });
 }
 
+/** Bring the already-open Claude Code terminal for this session to the front
+ *  (does NOT spawn a new terminal — use resumeCodingSession for that). */
+export async function activateCodingSession(sessionRef: string): Promise<void> {
+  await invoke("activate_coding_session", { sessionRef });
+}
+
 export async function listRunningApps(): Promise<RunningApp[]> {
   if (!inTauri()) return [];
   return await invoke<RunningApp[]>("list_running_apps");

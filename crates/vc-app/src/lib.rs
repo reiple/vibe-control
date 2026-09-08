@@ -206,6 +206,16 @@ fn resume_coding_session(session_ref: String) -> std::result::Result<(), Command
     Ok(())
 }
 
+/// Bring the already-open Claude Code terminal for a session to the front
+/// (do NOT spawn a new one — that's what `resume_coding_session` is for).
+/// This is what the "대화 보기" button now does: jump to the live terminal so
+/// the user reads/continues the real conversation there.
+#[tauri::command]
+fn activate_coding_session(session_ref: String) -> std::result::Result<(), CommandError> {
+    activate_session_terminal(&session_ref)?;
+    Ok(())
+}
+
 /// A live running application for the left-hand panel (FR-2.1 / §13.1).
 #[derive(Serialize)]
 pub struct RunningApp {
@@ -412,6 +422,28 @@ fn resume_session(session_ref: &str) -> std::result::Result<(), String> {
     }
 }
 
+/// Bring the existing Terminal running this session to the front, best-effort
+/// focusing the window whose title matches the session's working-directory
+/// name. Never spawns a new terminal.
+fn activate_session_terminal(session_ref: &str) -> std::result::Result<(), String> {
+    #[cfg(target_os = "macos")]
+    {
+        // Use the cwd's last path component as a focus hint (best-effort).
+        let hint = ClaudeCodeSessionProvider::resume_info(session_ref).and_then(|(cwd, _)| {
+            std::path::Path::new(&cwd)
+                .file_name()
+                .and_then(|s| s.to_str())
+                .map(str::to_string)
+        });
+        vc_os_macos::MacLauncher::activate_terminal(hint.as_deref()).map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        let _ = session_ref;
+        Err("terminal activation not supported on this platform yet".into())
+    }
+}
+
 /// Single-quote a string for safe use in a POSIX shell command.
 #[cfg(target_os = "macos")]
 fn shell_quote(s: &str) -> String {
@@ -451,6 +483,7 @@ pub fn run() {
             get_session_snapshot,
             restore_bundle,
             resume_coding_session,
+            activate_coding_session,
             list_running_apps,
             activate_app,
             get_app_icon,

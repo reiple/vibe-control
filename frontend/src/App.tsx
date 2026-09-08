@@ -3,6 +3,7 @@ import type {
   WorkBundle,
   Resource,
   SessionSnapshot,
+  SessionCompletion,
   RestoreReport,
   RunningApp,
 } from "./types";
@@ -13,6 +14,7 @@ import {
   getSessionSnapshot,
   restoreBundle,
   resumeCodingSession,
+  activateCodingSession,
   listRunningApps,
   activateApp,
   getAppIcon,
@@ -97,6 +99,66 @@ function AppIcon({
   );
 }
 
+const completionLabel: Record<SessionCompletion, string> = {
+  Waiting: "답변 대기 중",
+  NotWaiting: "진행 중",
+  Unknown: "상태 불명",
+};
+
+// Inline live status for a coding session, shown right inside the context-group
+// card (no separate conversation panel). Shows a completion chip plus the last
+// question Claude is waiting on. Re-fetches whenever `nonce` changes (the ↻
+// button bumps it) so the status stays current without polling. This never
+// surfaces full conversation content — only the single last-question line the
+// snapshot already exposes — keeping with the no-content-logging constraint.
+function SessionStatus({
+  sessionRef,
+  nonce,
+}: {
+  sessionRef: string;
+  nonce: number;
+}) {
+  const [snap, setSnap] = useState<SessionSnapshot | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getSessionSnapshot("claude-code", sessionRef)
+      .then((s) => {
+        if (!cancelled) setSnap(s);
+      })
+      .catch(() => {
+        if (!cancelled) setSnap(null);
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true; // ignore late resolves after unmount/ref change
+    };
+  }, [sessionRef, nonce]);
+
+  if (!snap || !snap.available) {
+    return loading ? (
+      <div className="session-status loading">상태 확인 중…</div>
+    ) : null;
+  }
+
+  return (
+    <div className="session-status">
+      <span className={`completion ${snap.completion.toLowerCase()}`}>
+        {completionLabel[snap.completion]}
+      </span>
+      {snap.last_question && (
+        <p className="last-q" title={snap.last_question}>
+          {snap.last_question}
+        </p>
+      )}
+    </div>
+  );
+}
+
 export default function App() {
   const [bundles, setBundles] = useState<WorkBundle[]>([]);
   const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
@@ -108,7 +170,8 @@ export default function App() {
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedApp = useRef<RunningApp | null>(null);
 
-  const [session, setSession] = useState<SessionSnapshot | null>(null);
+  // Bumped by ↻ to force every visible SessionStatus to re-fetch its snapshot.
+  const [sessionNonce, setSessionNonce] = useState(0);
   const [report, setReport] = useState<RestoreReport | null>(null);
   const [reportBundleId, setReportBundleId] = useState<string | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
@@ -124,6 +187,7 @@ export default function App() {
 
   const refreshRunning = async () => {
     setRefreshing(true);
+    setSessionNonce((n) => n + 1); // also refresh inline coding-session statuses
     try {
       setRunningApps(await listRunningApps());
     } catch (e) {
@@ -214,16 +278,14 @@ export default function App() {
     }
   };
 
-  const handleViewSession = async (resource: Resource) => {
+  // "대화 보기": bring the session's already-open Claude Code terminal to the
+  // front so the user reads/continues the real conversation there. Does NOT
+  // spawn a new terminal (that's "이어가기" → resume).
+  const handleActivateSession = (resource: Resource) => {
     setError(null);
-    setSession(null);
-    try {
-      setSession(
-        await getSessionSnapshot("claude-code", resource.identity.descriptor)
-      );
-    } catch (e) {
-      setError(String(e));
-    }
+    activateCodingSession(resource.identity.descriptor).catch((e) =>
+      setError(String(e))
+    );
   };
 
   const handleResumeSession = (resource: Resource) => {
@@ -382,16 +444,22 @@ export default function App() {
                       <>
                         <button
                           className="mini"
-                          onClick={() => handleViewSession(r)}
+                          onClick={() => handleActivateSession(r)}
+                          title="열려 있는 Claude Code 터미널을 최전면으로"
                         >
                           대화 보기
                         </button>
                         <button
                           className="mini resume-button"
                           onClick={() => handleResumeSession(r)}
+                          title="새 터미널에서 세션 이어가기"
                         >
                           이어가기
                         </button>
+                        <SessionStatus
+                          sessionRef={r.identity.descriptor}
+                          nonce={sessionNonce}
+                        />
                       </>
                     )}
                   </li>
@@ -427,40 +495,6 @@ export default function App() {
             </section>
           ))}
         </div>
-
-        {session && (
-          <section className="session">
-            <h3>
-              코딩 세션 대화
-              <span className={`completion ${session.completion.toLowerCase()}`}>
-                {session.completion === "Waiting"
-                  ? "답변 대기 중"
-                  : session.completion === "NotWaiting"
-                    ? "완료"
-                    : "알 수 없음"}
-              </span>
-              <button className="mini close" onClick={() => setSession(null)}>
-                닫기
-              </button>
-            </h3>
-            <div className="conversation">
-              {session.conversation.map((t, i) => (
-                <div key={i} className={`turn ${t.role}`}>
-                  <span className="role">{t.role}</span>
-                  <p>{t.content}</p>
-                </div>
-              ))}
-              {session.conversation.length === 0 && (
-                <p className="empty">대화 내용이 없습니다</p>
-              )}
-            </div>
-            {session.last_question && (
-              <div className="last-question">
-                <strong>마지막 질문:</strong> {session.last_question}
-              </div>
-            )}
-          </section>
-        )}
       </main>
     </div>
   );

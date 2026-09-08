@@ -6,8 +6,10 @@
   --panel-2: #24272f;
   --line: #2e323b;
   --muted: #8a90a0;
-  --accent: #3b82f6;
-  --accent-hover: #2f6fe0;
+  --accent: #6366f1;
+  --accent-2: #8b5cf6;
+  --accent-hover: #7c7ff5;
+  --accent-glow: rgba(99, 102, 241, 0.35);
   --green: #22c55e;
 }
 
@@ -114,33 +116,106 @@ body { margin: 0; }
   text-overflow: ellipsis;
 }
 
-/* ── Buttons ──────────────────────────────────────────── */
+/* ── Buttons ──────────────────────────────────────────────
+   Hierarchy over "everything is blue":
+   · primary   → indigo→violet gradient, soft lift + glow on hover
+   · .ghost    → translucent surface, hairline border (secondary)
+   · .mini     → soft neutral chips inside cards (NOT solid fills)
+   · .resume   → the one accent call-to-action that pops
+   · .danger   → tinted red, only on destructive confirm
+   ------------------------------------------------------------ */
 button {
-  background: var(--accent);
-  color: #fff;
-  border: none;
-  border-radius: 6px;
-  padding: 8px 12px;
-  cursor: pointer;
+  font: inherit;
   font-size: 13px;
+  font-weight: 500;
+  color: #fff;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3),
+    inset 0 1px 0 rgba(255, 255, 255, 0.14);
+  transition: filter 0.14s ease, transform 0.06s ease, box-shadow 0.14s ease,
+    background 0.14s ease, border-color 0.14s ease;
 }
-button:hover { background: var(--accent-hover); }
-button:disabled { background: #3a3f4a; color: #7c828f; cursor: not-allowed; }
+button:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 4px 14px var(--accent-glow),
+    inset 0 1px 0 rgba(255, 255, 255, 0.2);
+}
+button:active { transform: translateY(1px); filter: brightness(0.96); }
+button:focus-visible { outline: 2px solid var(--accent-2); outline-offset: 2px; }
+button:disabled {
+  background: var(--panel-2);
+  color: #656b78;
+  box-shadow: none;
+  cursor: not-allowed;
+  filter: none;
+  transform: none;
+}
+
+/* Secondary — translucent, no fill. */
 button.ghost {
-  background: transparent;
+  background: rgba(255, 255, 255, 0.045);
   border: 1px solid var(--line);
   color: #cfd3dc;
+  box-shadow: none;
 }
-button.ghost:hover { background: var(--panel-2); }
+button.ghost:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: #3d434f;
+  filter: none;
+  box-shadow: none;
+}
 button.icon { padding: 6px 10px; font-size: 15px; line-height: 1; }
+
+/* Small neutral chips inside cards. */
 button.mini {
-  padding: 4px 9px;
+  padding: 5px 11px;
   font-size: 12px;
-  border-radius: 5px;
+  border-radius: 7px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--line);
+  color: #d7dbe4;
+  box-shadow: none;
 }
-button.mini.danger { background: #dc2626; }
-button.mini.danger:hover { background: #b91c1c; }
-button.mini.close { background: transparent; border: 1px solid var(--line); color: #cfd3dc; }
+button.mini:hover {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: #414753;
+  filter: none;
+  box-shadow: none;
+}
+button.mini:disabled {
+  background: var(--panel-2);
+  border-color: var(--line);
+  color: #5b616e;
+}
+
+/* The one accent call-to-action (이어가기). */
+button.mini.resume-button {
+  background: linear-gradient(180deg, var(--accent) 0%, var(--accent-2) 100%);
+  border-color: transparent;
+  color: #fff;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.16);
+}
+button.mini.resume-button:hover {
+  filter: brightness(1.08);
+  box-shadow: 0 4px 14px var(--accent-glow);
+}
+
+/* Destructive confirm — tinted, not a loud fill. */
+button.mini.danger {
+  background: rgba(220, 38, 38, 0.14);
+  border-color: rgba(220, 38, 38, 0.5);
+  color: #ff8f8f;
+}
+button.mini.danger:hover {
+  background: rgba(220, 38, 38, 0.24);
+  border-color: rgba(220, 38, 38, 0.75);
+  filter: none;
+  box-shadow: none;
+}
 
 /* ── Right: main dashboard ────────────────────────────── */
 .main {
@@ -216,7 +291,8 @@ button.mini.close { background: transparent; border: 1px solid var(--line); colo
 }
 .group-card.drag-over {
   border-color: var(--accent);
-  background: #1c2432;
+  background: #211f33;
+  box-shadow: 0 0 0 1px var(--accent-glow) inset;
 }
 .group-card-header {
   display: flex;
@@ -253,6 +329,8 @@ button.mini.close { background: transparent; border: 1px solid var(--line); colo
 .resource {
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  row-gap: 4px;
   gap: 10px;
   padding: 8px 0;
   border-bottom: 1px solid var(--line);
@@ -296,49 +374,34 @@ button.mini.close { background: transparent; border: 1px solid var(--line); colo
 }
 .skipped-note { margin-top: 6px; color: var(--muted); font-size: 12px; }
 
-/* ── Session viewer ───────────────────────────────────── */
-.session {
-  margin-top: 24px;
-  background: var(--panel);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 16px;
-}
-.session h3 {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin: 0;
-  font-size: 15px;
-}
-.session h3 .close { margin-left: auto; }
+/* ── Inline coding-session status (inside group cards) ──── */
 .completion {
-  font-size: 12px;
-  padding: 2px 10px;
+  font-size: 11px;
+  padding: 2px 8px;
   border-radius: 10px;
+  flex-shrink: 0;
 }
 .completion.waiting { background: #4a3c12; color: #ffd76a; }
 .completion.notwaiting { background: #14351f; color: #7ee0a0; }
 .completion.unknown { background: #2b2e35; color: #b8bcc6; }
 
-.conversation { margin-top: 12px; }
-.turn {
-  padding: 8px 12px;
-  border-radius: 6px;
-  margin-bottom: 8px;
+/* Own line below the session's buttons (the .resource row wraps). Indented
+   past the icon column so it lines up under the session name. */
+.session-status {
+  flex-basis: 100%;
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-left: 32px;
 }
-.turn.user { background: #1c2735; }
-.turn.assistant { background: var(--panel-2); }
-.turn .role {
-  font-size: 11px;
-  text-transform: uppercase;
+.session-status.loading { color: var(--muted); font-size: 12px; }
+.last-q {
+  margin: 0;
+  flex: 1;
+  min-width: 0;
+  font-size: 12px;
   color: var(--muted);
-}
-.turn p { margin: 4px 0 0; white-space: pre-wrap; }
-
-.last-question {
-  margin-top: 12px;
-  padding: 8px 12px;
-  background: #33290c;
-  border-radius: 6px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }

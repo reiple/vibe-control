@@ -206,6 +206,45 @@ impl MacLauncher {
             )
         })
     }
+
+    /// Bring the already-open Terminal (hosting a Claude Code session) to the
+    /// front WITHOUT spawning anything new. `match_hint` is an optional string
+    /// (e.g. the session's working-directory name) used for best-effort focus
+    /// of the specific window/tab whose title contains it; if no tab matches,
+    /// the plain `activate` still brings Terminal forward. Requires Automation
+    /// permission for Terminal, like `run_in_terminal`.
+    pub fn activate_terminal(match_hint: Option<&str>) -> Result<()> {
+        let selector = match match_hint {
+            Some(hint) if !hint.is_empty() => {
+                let escaped = hint.replace('\\', "\\\\").replace('"', "\\\"");
+                format!(
+                    "try\n\
+                     repeat with w in windows\n\
+                     repeat with t in tabs of w\n\
+                     if (custom title of t) contains \"{escaped}\" then\n\
+                     set index of w to 1\n\
+                     set selected of t to true\n\
+                     return\n\
+                     end if\n\
+                     end repeat\n\
+                     end repeat\n\
+                     end try\n"
+                )
+            }
+            _ => String::new(),
+        };
+        let script = format!(
+            "tell application \"Terminal\"\n\
+             activate\n\
+             {selector}\
+             end tell"
+        );
+        run_osascript(&script).map(|_| ()).ok_or_else(|| {
+            CoreError::Internal(
+                "Terminal automation failed (grant Automation permission for Terminal)".into(),
+            )
+        })
+    }
 }
 
 /// Heuristic: reverse-DNS-looking strings (has a dot, no spaces, ≥2 segments)
