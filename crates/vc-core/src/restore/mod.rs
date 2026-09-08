@@ -36,6 +36,9 @@ pub fn plan_reopen(res: &Resource) -> ReopenAction {
                 url: url.to_string(),
             }
         }
+        // A live tab has no URL to open (FR-9.7) — restore by re-focusing the
+        // tab in its running browser, never by launching a URL.
+        ResourceKind::BrowserTabLive => ReopenAction::FocusLinkedWindow,
         ResourceKind::Folder => {
             let path = res.identity.reopen_info.as_deref().unwrap_or(&res.identity.descriptor);
             ReopenAction::OpenPath {
@@ -93,6 +96,27 @@ mod tests {
             }
             _ => panic!("Expected OpenUrl"),
         }
+    }
+
+    // FR-9.7: a live tab has no URL — it must restore by re-focusing the tab,
+    // never by opening a (fabricated) URL.
+    #[test]
+    fn test_plan_reopen_live_tab_is_focus_only() {
+        let res = Resource::new(
+            "GitHub - reiple/vibe-control",
+            ResourceKind::BrowserTabLive,
+            crate::models::ResourceIdentity {
+                kind: ResourceKind::BrowserTabLive,
+                descriptor: "GitHub - reiple/vibe-control".to_string(),
+                hint: Some("chrome\u{1f}12345\u{1f}1".to_string()),
+                reopen_info: None,
+            },
+        );
+
+        assert!(matches!(
+            plan_reopen(&res),
+            ReopenAction::FocusLinkedWindow
+        ));
     }
 
     #[test]

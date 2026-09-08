@@ -112,6 +112,35 @@ export async function addAppResource(
   });
 }
 
+/** Register ONE live browser tab (dragged from the left panel) into a group as
+ *  its own focus-only resource (FR-9.6 / AC-20). No URL is stored (FR-9.7) — the
+ *  tab is keyed by `title` + an opaque `handle` under `browser`. The same tab
+ *  can't be added twice; two different tabs of one window both can. Returns the
+ *  updated bundle list. */
+export async function addTabResource(
+  bundleId: string,
+  title: string,
+  browser: string,
+  handle: string
+): Promise<WorkBundle[]> {
+  return await invoke<WorkBundle[]>("add_tab_resource", {
+    bundleId,
+    title,
+    browser,
+    handle,
+  });
+}
+
+/** Activate a SAVED live browser tab (FR-4.1 / FR-4.2 / AC-20). `hint` is the
+ *  stored opaque token and `title` the saved tab title (fallback match key when
+ *  the token has gone stale). Focuses exactly that tab, not just the browser. */
+export async function activateTabResource(
+  hint: string,
+  title: string
+): Promise<void> {
+  await invoke("activate_tab_resource", { hint, title });
+}
+
 // ── Claude prompt console ─────────────────────────────────────────────
 const NO_CLAUDE: ClaudeStatus = {
   configured: false,
