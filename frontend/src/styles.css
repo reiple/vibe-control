@@ -7,11 +7,11 @@
    self-hosted so the release bundle stays fully offline.
    ============================================================ */
 @font-face {
-  font-family: "Jaro";
+  font-family: "Chakra Petch";
   font-style: normal;
-  font-weight: 400;
+  font-weight: 700;
   font-display: swap;
-  src: url("./fonts/jaro-400.woff2") format("woff2");
+  src: url("https://fonts.gstatic.com/s/chakrapetch/v13/cIflMapbsEk7TDLdtEz1BwkeJI9FQA.ttf") format("truetype");
 }
 @font-face {
   font-family: "Space Grotesk";
@@ -36,8 +36,8 @@
 }
 
 :root {
-  /* Type — refined self-hosted faces, system fallbacks */
-  --jaro: "Jaro", system-ui, sans-serif;
+  /* Type — refined remote faces, system fallbacks */
+  --display: "Chakra Petch", system-ui, sans-serif;
   --grotesk: "Space Grotesk", -apple-system, "SF Pro Text", "Helvetica Neue",
     Arial, system-ui, sans-serif;
   --mono: "Space Mono", "SF Mono", "SFMono-Regular", ui-monospace, Menlo,
@@ -421,11 +421,11 @@ button.mini.danger {
   align-items: center;
   gap: 10px;
   margin: 0;
-  font-family: var(--jaro);
+  font-family: var(--display);
   text-transform: uppercase;
-  letter-spacing: 0.02em;
-  font-size: 20px;
-  font-weight: 400;
+  letter-spacing: 0.06em;
+  font-size: 21px;
+  font-weight: 700;
   color: var(--ink);
 }
 /* Orange record-dot logo mark. */
