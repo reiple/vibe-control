@@ -338,7 +338,9 @@ export default function App() {
         <header className="main-header">
           <h2>vibe-control</h2>
           <div className="header-actions">
-            <button onClick={openGroupModal}>Add Group</button>
+            <button className="rec add-group" onClick={openGroupModal}>
+              Add Group
+            </button>
           </div>
         </header>
 
