@@ -146,6 +146,24 @@
 
 ---
 
+## H. 빌드/실행 도구 이탈 — `tauri dev` 개발 실행이 문서대로 동작하지 않음
+
+`build-instructions.md`의 개발 실행 절차(`cd crates/vc-app && cargo tauri dev`)가 **그대로는 실패**했다. 사용자 요청("실행 시 프론트엔드와 Rust 앱을 동시에 실행")을 처리하던 중 확인됨.
+
+| # | 문서/설정 | 실제 동작 | 유형 | 근거 |
+|---|---|---|---|---|
+| H1 | `tauri.conf.json`의 `beforeDevCommand: "npm --prefix ../../frontend run dev"` — `crates/vc-app`에서 실행 시 vite 개발 서버 기동 | 설치된 npm 프리빌트 CLI(`@tauri-apps/cli`)로 `tauri dev` 실행 시, tauri가 `beforeDevCommand`를 **`crates/` 디렉터리(cwd)** 에서 돌려 `../../frontend`가 `D:\claude\frontend`로 잘못 해석 → `npm ENOENT` → vite 미기동 → dev 실패 | [문서반영] (설정 수정 + 문서 갱신) | `crates/vc-app/tauri.conf.json:9`, 실측 오류 로그 2026-09-08 |
+
+**근본 원인**: `beforeDevCommand`의 상대 경로(`../../frontend`)가, 이 워크스페이스에서 npm 프리빌트 CLI가 명령을 실행하는 실제 작업 디렉터리(`crates/`)와 두 레벨 어긋난다. `crates/`에서 `frontend`로 가려면 `../frontend`(한 레벨)여야 한다.
+
+**적용한 수정(2026-09-08, 실측 검증)**:
+1. `tauri.conf.json`의 `beforeDevCommand`를 `npm --prefix ../../frontend run dev` → **`npm --prefix ../frontend run dev`** 로 수정. (`frontendDist`/`devUrl`/`beforeBuildCommand` 무변경 → `cargo build -p vc-app` 프로덕션 임베드 경로 **무영향**.)
+2. Tauri CLI를 `frontend`에 devDependency로 설치(`@tauri-apps/cli`, 프리빌트). 문서의 `cargo install tauri-cli`(소스 컴파일)는 미설치·미검증이라 프리빌트 경로를 정본으로 문서화.
+3. `build-instructions.md` 개발 실행 절차를 검증된 명령(`crates/vc-app`에서 `../../frontend/node_modules/.bin/tauri dev`)으로 갱신. CLI가 `frontend/node_modules`에 있어 `crates/vc-app`에서 `npx tauri`로는 못 찾는 점도 명시.
+
+**검증**: 수정 후 오버라이드 없이 `tauri dev` 단독 실행 → vite `:1420` LISTENING + `vibe-control.exe` 기동 동시 확인(실측 2026-09-08, Windows). 앱 창의 WebView가 `:1420`을 로드, 프론트/Rust 핫리로드 정상.
+
+**범위 밖(미검증)**: cargo 플러그인 `cargo tauri dev`는 이 머신에 미설치라 검증하지 않음 — 해당 도구는 `beforeDevCommand`를 다른 cwd(`crates/vc-app`)에서 돌릴 수 있어 `../frontend`와 어긋날 여지가 있다. cargo 플러그인 도입 시 재확인 필요.
 ## H. 2026-09-08 정합화 재실행에서 신규 검출
 
 출처: `inception/reverse-engineering/drift-analysis.md`(발견 45건). 직전 정합화(2026-09-08 오전)가 다루지 않았던 항목만 여기 모은다.

@@ -447,6 +447,20 @@
 **Context**: CONSTRUCTION — Code Generation (U4 vc-os-windows) + Build and Test. Resolves known-deviations.md#G1 (FR-2.2/2.4/2.6/2.8, FR-4.1/4.2, AC-20). AUTO MODE: reviewed + implemented + built + clippy-clean + verified live + cleaned up + documented in one pass.
 
 ---
+
+## Build/Tooling Fix — dev-run (`tauri dev`) launches frontend + Rust app simultaneously
+**Timestamp**: 2026-09-08T22:50:00Z
+**User Input**: "실행할 때는 프론트엔드와 Rust 앱 둘 다 동시에 실행되도록 해줘."
+**AI Response**: "Set up simultaneous frontend + Rust dev-run. Installed the prebuilt Tauri CLI (@tauri-apps/cli) as a frontend devDependency (docs referenced an un-installed `cargo install tauri-cli`). Launching `tauri dev` initially failed: tauri ran `beforeDevCommand` from the `crates/` dir, so the config's `npm --prefix ../../frontend run dev` resolved to D:\claude\frontend (ENOENT) and vite never started. Confirmed working via a runtime `--config` override with the corrected path (`../frontend`); verified vite :1420 LISTENING + vibe-control.exe both up."
+**Context**: Dev tooling — first surfaced the beforeDevCommand path defect (documented `cargo tauri dev` flow was broken). Fix applied to config in the follow-up turn below.
+
+---
+
+## Documentation Reconciliation — dev-run tooling defect (known-deviations.md#H1)
+**Timestamp**: 2026-09-08T23:05:00Z
+**User Input**: "오류를 수정했다. AI-DLC 워크플로우에 따라 이 오류를 문서에 반영할 수 있나?"
+**AI Response**: "Yes — reflected per AI-DLC. Confirmed root cause: `build-instructions.md:47-52` documents `cd crates/vc-app && cargo tauri dev`, which fails because `tauri.conf.json` `beforeDevCommand` used `npm --prefix ../../frontend run dev` while tauri runs that command from the `crates/` cwd (overshoots two levels → D:\claude\frontend ENOENT → vite never starts → dev fails). ROOT-CAUSE FIX (not just the earlier runtime workaround): edited `crates/vc-app/tauri.conf.json` `beforeDevCommand` `../../frontend` → `../frontend`; `frontendDist`/`devUrl`/`beforeBuildCommand` unchanged so the `cargo build -p vc-app` production-embed path is unaffected. VERIFIED: plain `tauri dev` with NO `--config` override now brings up vite :1420 LISTENING (PID 14084) + vibe-control.exe (PID 13096) together, hot-reload intact (live, Windows). DOCS UPDATED: known-deviations.md new '## H. 빌드/실행 도구 이탈' (#H1 table + root cause + applied fix + verification + out-of-scope note that the cargo-plugin `cargo tauri dev` is uninstalled/unverified and its differing cwd could mismatch `../frontend`); build-instructions.md dev-run section rewritten to the verified prebuilt-CLI command (`../../frontend/node_modules/.bin/tauri dev`) + prereq note that npx from crates/vc-app can't find the CLI; aidlc-state.md new '✅ DONE (2026-09-08)' tooling entry. Was honest that the earlier launch used a runtime override, not a code fix — this turn applied the actual config fix and re-verified without the override."
+**Context**: CONSTRUCTION — Build and Test / documentation reconciliation. Records + fixes the dev-run tooling deviation (known-deviations.md#H1). AUTO MODE: diagnosed + fixed config + verified live + documented in one pass.
 ## Reconciliation Request — Re-run Reverse Engineering + Drift Impact Analysis
 **Timestamp**: 2026-09-08T22:00:00Z
 **User Input**: "Using AI-DLC, reconcile this existing project.
