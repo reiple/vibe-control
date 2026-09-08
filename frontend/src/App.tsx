@@ -25,6 +25,8 @@ import {
   createBundle,
   deleteBundle,
   addAppResource,
+  addTabResource,
+  activateTabResource,
   claudeStatus,
   setClaudeApiKey,
   setClaudeModel,
@@ -67,6 +69,7 @@ function errText(e: unknown): string {
 const kindLabel: Record<string, string> = {
   WindowRef: "Window",
   BrowserTab: "Tab",
+  BrowserTabLive: "Tab",
   Folder: "Folder",
   AppLaunch: "App",
   Url: "URL",
@@ -75,6 +78,10 @@ const kindLabel: Record<string, string> = {
 
 const isActivatable = (kind: string) =>
   kind === "AppLaunch" || kind === "WindowRef";
+
+// A saved live browser tab (FR-9.6 / AC-20): double-clickable to re-focus the
+// exact tab, but with no per-tab icon (the browser has one icon for all tabs).
+const isSavedTab = (kind: string) => kind === "BrowserTabLive";
 
 // Module-level cache: an app's high-res icon (§13.5) is fetched once per
 // identifier for the app's lifetime. Seeding useState from this on mount keeps
@@ -260,6 +267,14 @@ export default function App() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedApp = useRef<RunningApp | null>(null);
+  // The live browser tab being dragged (distinct from an app drag). Holds the
+  // browser group name + the tab's opaque handle + title so a drop can register
+  // it as a focus-only resource (FR-9.6 / AC-20).
+  const draggedTab = useRef<{
+    browser: string;
+    handle: string;
+    title: string;
+  } | null>(null);
 
   // Polling economy (FR-7.5 / FR-7.6 / NFR-Pf3). `pollInFlight` keeps a slow
   // refresh from overlapping the next tick; `resizingUntil` suppresses polls
@@ -353,7 +368,7 @@ export default function App() {
     // items cancels the in-flight native HTML5 drag before it can drop. The
     // background poll yields to an active drag; a manual ↻ can't collide with
     // a drag (one pointer) so it isn't gated.
-    if (silent && draggedApp.current) return;
+    if (silent && (draggedApp.current || draggedTab.current)) return;
     // FR-7.6 concurrency guard: if the previous poll is still fetching, skip
     // this tick rather than stacking another OS enumeration on top of it. Only
     // background polls are gated — an explicit ↻ is a deliberate user action.
@@ -363,7 +378,7 @@ export default function App() {
     setSessionNonce((n) => n + 1); // also refresh inline coding-session statuses
     try {
       const apps = await listRunningApps();
-      if (silent && draggedApp.current) return; // a drag began while fetching
+      if (silent && (draggedApp.current || draggedTab.current)) return; // a drag began while fetching
       setRunningApps(apps);
     } catch (e) {
       // A background poll shouldn't flash the error banner every tick — only
@@ -462,6 +477,16 @@ export default function App() {
       .catch((e) => setError(errText(e)));
   };
 
+  // Double-clicking a SAVED live tab in a group re-focuses exactly that tab
+  // (FR-4.1/4.2, AC-20): try the stored handle, else re-match by title. No URL
+  // is ever opened (FR-9.7).
+  const activateSavedTab = (r: Resource) => {
+    setError(null);
+    activateTabResource(r.identity.hint ?? "", r.identity.descriptor).catch((e) =>
+      setError(errText(e))
+    );
+  };
+
   const toggleExpanded = (name: string) =>
     setExpandedApps((cur) => {
       const next = new Set(cur);
@@ -505,20 +530,38 @@ export default function App() {
 
   const onDragStartApp = (e: React.DragEvent, app: RunningApp) => {
     draggedApp.current = app;
+    draggedTab.current = null; // an app drag isn't a tab drag
     e.dataTransfer.effectAllowed = "copy";
     e.dataTransfer.setData("text/plain", app.name);
+  };
+
+  // Dragging an individual browser tab row registers just that tab (not the
+  // whole browser app) on drop (FR-9.6 / AC-20). `browser` is the group name.
+  const onDragStartTab = (e: React.DragEvent, browser: string, w: RunningWindow) => {
+    draggedTab.current = { browser, handle: w.handle, title: w.title };
+    draggedApp.current = null;
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("text/plain", w.title);
   };
 
   const onDropToBundle = async (e: React.DragEvent, bundle: WorkBundle) => {
     e.preventDefault();
     setDragOverId(null);
+    const tab = draggedTab.current;
     const app = draggedApp.current;
+    draggedTab.current = null;
     draggedApp.current = null;
-    if (!app) return;
     setError(null);
     try {
-      const target = app.bundle_id ?? app.name;
-      setBundles(await addAppResource(bundle.id, app.name, target));
+      if (tab) {
+        // A live browser tab → focus-only tab resource (no URL, FR-9.7).
+        setBundles(
+          await addTabResource(bundle.id, tab.title, tab.browser, tab.handle)
+        );
+      } else if (app) {
+        const target = app.bundle_id ?? app.name;
+        setBundles(await addAppResource(bundle.id, app.name, target));
+      }
     } catch (e) {
       setError(String(e));
     }
@@ -694,6 +737,20 @@ export default function App() {
                     <li
                       key={`${app.name} ${w.handle} ${i}`}
                       className="running-window"
+                      draggable={showTabs}
+                      onDragStart={
+                        showTabs
+                          ? (e) => onDragStartTab(e, app.name, w)
+                          : undefined
+                      }
+                      onDragEnd={
+                        showTabs
+                          ? () => {
+                              draggedTab.current = null;
+                              setDragOverId(null);
+                            }
+                          : undefined
+                      }
                       onClick={() =>
                         showTabs
                           ? activateTabRow(w.handle, app.name)
@@ -701,7 +758,7 @@ export default function App() {
                       }
                       title={
                         showTabs
-                          ? "Click: switch to this tab"
+                          ? "Click: switch to this tab · Drag: add to a group"
                           : "Click: bring this window to front"
                       }
                     >
@@ -810,15 +867,22 @@ export default function App() {
                 {b.resources.map((r) => (
                   <li
                     key={r.id}
-                    className={`resource ${isActivatable(r.kind) ? "activatable" : ""}`}
-                    onDoubleClick={() =>
-                      isActivatable(r.kind) &&
-                      activate(r.identity.reopen_info ?? r.identity.descriptor)
-                    }
+                    className={`resource ${
+                      isActivatable(r.kind) || isSavedTab(r.kind)
+                        ? "activatable"
+                        : ""
+                    }`}
+                    onDoubleClick={() => {
+                      if (isSavedTab(r.kind)) activateSavedTab(r);
+                      else if (isActivatable(r.kind))
+                        activate(r.identity.reopen_info ?? r.identity.descriptor);
+                    }}
                     title={
-                      isActivatable(r.kind)
-                        ? "Double-click: bring to front · opens it if closed"
-                        : undefined
+                      isSavedTab(r.kind)
+                        ? "Double-click: switch to this tab"
+                        : isActivatable(r.kind)
+                          ? "Double-click: bring to front · opens it if closed"
+                          : undefined
                     }
                   >
                     {isActivatable(r.kind) && (

@@ -122,7 +122,21 @@ RunningWindow  { handle: String, title: String, is_focused: bool }
 - **AC-20 확장**: 브라우저 그룹 펼침 → 탭 목록 확인 → 특정 탭 선택 → 정확한 탭 최전면(활성 점 이동). 읽기 불가 창은 OS 창으로 폴백.
 - 회귀 방지: **AC-7**(탭 목록/설정 등 비-탭 UI 오인 금지 = `TabItem`만), **AC-2**(정확한 창/탭 최전면), FR-10.7(폴링 미지연).
 
+## 6.7 라이브 탭의 작업 묶음 등록 (보완 Bolt, 2026-09-09) — `#B3` 추가 해소
+
+§6이 "표시·활성화 전용"으로 남긴 라이브 탭을, 사용자 요청에 따라 **작업 묶음에 개별 리소스로 영속 등록**하도록 보완한다. URL을 얻을 수 없으므로(FR-9.7) **제목 기반 포커스 전용**으로 구현 — vc-os-windows 어댑터는 무변경(§6.2/6.3의 `list_tabs`/`activate_tab` 재사용), 도메인·vc-app·프론트만 확장한다.
+
+- **도메인(vc-core)**: 신규 `ResourceKind::BrowserTabLive`. `descriptor`=탭 제목, `hint`=`<browser>\u{1f}<hwnd>\u{1f}<idx>`(비영속 활성화 토큰), `reopen_info`=없음. 컴파일러가 강제하는 exhaustive match 지점 갱신: `distinct_key`(hint로 구분 — 같은 탭=중복, 다른 인덱스=별개), `plan_reopen`(→`FocusLinkedWindow`, URL 미개방), migrate PBT `prop_oneof!`(6→7종, 라운드트립 대상).
+- **vc-app(U6)**: 신규 커맨드 `add_tab_resource(bundle_id,title,browser,handle)`(hint 조합 후 **hint 전체로 중복 방지** FR-3.4), `activate_tab_resource(hint,title)`. 헬퍼 `activate_live_tab`: hint를 `(browser, <hwnd>\u{1f}<idx>)`로 분해(`split_tab_hint`) → 저장 토큰으로 `activate_tab` 시도 → 낡았으면 그 브라우저를 재열거해 **제목으로 재매칭**, 실패 시 에러(FR-4.2 — 앱만 최전면화는 성공 아님). `reopen_resource`에도 `BrowserTabLive`→`activate_live_tab` 분기(복원도 포커스 전용).
+- **프론트(U7)**: 탭 행을 **draggable**로(창 행은 기존대로 클릭 전용), 드롭 시 `addTabResource`로 등록. 저장된 탭 리소스는 아이콘 없이 배지 "Tab", 더블클릭 시 `activateTabResource`로 정확히 그 탭 재포커스. 앱 드래그와 탭 드래그는 별도 ref로 구분, 폴링은 두 드래그 중 어느 것이든 진행 중이면 양보(드래그 취소 방지).
+- **테스트**: vc-core `distinct_key`(hint 구분: 동일=중복/다른 인덱스=별개), `plan_reopen`(BrowserTabLive→FocusLinkedWindow) 신규 단위 테스트. vc-app 최초 단위 테스트(`split_tab_hint` 조합↔분해 라운드트립, malformed 거부). 라운드트립 PBT-02는 신규 종류 포함해 통과(24/24).
+- **실측 검증(2026-09-09, 실 Windows + Chrome)**: 임시 하니스(`list_tabs`→vc-app 방식으로 hint 조합→분해→`activate_tab`→재열거)로 Chrome 9탭 열거, 조합 hint `chrome\u{1f}525722\u{1f}1` 분해가 원 토큰과 일치, 인덱스 1로 정확 전환(활성 플래그 이동 확인) 후 원탭 복원 — **정확히 지정 탭만 활성화(FR-4.2)** 확인. `cargo build/clippy -p vc-core -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2, 프론트 `tsc --noEmit` 무오류. 순수 추가라 기존 앱 등록/DnD/복원 무변경. 하니스는 검증 후 삭제.
+
+## AC 매핑(보완 2)
+- **AC-20 추가 확장**: 브라우저 탭을 그룹으로 드래그 → 개별 탭 리소스 등록 → 같은 창 여러 탭 각각 등록 → 저장 탭 더블클릭 시 정확한 탭 활성화 → 같은 탭 중복 방지.
+- 회귀 방지: **AC-3/AC-4**(드래그 1회 등록·같은 앱/창 다른 탭 개별 등록), **AC-2**(정확한 탭 최전면), FR-9.7(URL 미추측).
+
 ## 미해결/후속
-- 탭 **영속 등록/복원**(작업 묶음에 탭 저장, FR-9.2/9.3·AC-8/9)은 URL이 필요 → capture용 `read_tabs`(DevTools 프로토콜) 별개 작업으로 잔존. 라이브 패널은 표시·활성화 전용.
+- 탭 **URL 수집**(캡처 경로 `read_tabs`, FR-9.1의 주소 부분·DevTools 프로토콜)만 잔존 — 라이브 탭의 **작업 묶음 등록/복원은 §6.7에서 제목 기반 포커스 전용으로 해소**(URL 불필요).
 - macOS 라이브 탭 세션(현재 앱 창 폴백) — AX 기반 탭 열거는 후속.
 - U1 `matching/window.rs` L2 매처(`app_id|role|title`)는 저장 리소스↔실행 창 재추적(FR-4.4)에 사용 가능하나 본 기능 범위는 실행 목록 표시·활성화에 한정.
