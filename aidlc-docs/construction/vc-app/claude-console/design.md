@@ -38,12 +38,14 @@
 
 | 커맨드 | 역할 | 위치 |
 |---|---|---|
-| `claude_status` | 키 설정 여부·현재 모델·리전 등 상태 반환(키 값 자체는 반환 안 함) | `vc-app/src/lib.rs:468` |
-| `set_claude_api_key` | Bedrock bearer 토큰을 로컬 설정에 저장 | `:478` |
-| `set_claude_model` | 선호 모델 id 저장 | `:491` |
-| `send_claude_message` | 대화 메시지 배열을 Bedrock에 전송, 답변 텍스트 반환 (async) | `:507` |
+| `claude_status` | 키 설정 여부·현재 모델·리전 등 상태 반환(키 값 자체는 반환 안 함) | `vc-app/src/lib.rs:512` |
+| `set_claude_api_key` | Bedrock bearer 토큰을 로컬 설정에 저장 | `:522` |
+| `set_claude_model` | 선호 모델 id 저장 | `:535` |
+| `send_claude_message` | 대화 메시지 배열을 Bedrock에 전송, 답변 텍스트 반환 (async) | `:551` |
 
-> 줄 번호는 2026-09-08 git pull 이후 기준. `ClaudeStatus` struct는 `:448`, 상태 산출 `claude_status_of`는 `:457`.
+> ⚠ 줄 번호 갱신 **2026-09-08 정합화 재실행** (커밋 `d1e0f2f` 기준). `activate_window` 커맨드 추가로 종전 표기(`:468/:478/:491/:507`)가 모두 밀렸다 — `drift-analysis.md#D-61`. `ClaudeStatus` struct는 `:492`, 상태 산출 `claude_status_of`는 `:501`.
+>
+> **유지보수 노트**: 줄 번호는 구조적으로 낡는다. 다음 개정 시 줄 번호 대신 **심볼 이름 기준** 참조로 바꾸는 것을 권한다.
 
 **키 해석 순서**(호출 시점): 로컬 설정(`claude_api_key`) → 환경변수 `AWS_BEARER_TOKEN_BEDROCK`. 리전: 설정(`claude_region`) → `AWS_REGION` → 앱 기본.
 
