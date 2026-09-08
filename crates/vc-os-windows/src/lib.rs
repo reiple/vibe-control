@@ -1,6 +1,17 @@
 // Windows adapters for vibe-control.
-// Enumerates running GUI apps (windowed processes via `tasklist /v`) and
-// launches apps / URLs / folders / coding-session terminals via PowerShell.
+// Enumerates running GUI apps (processes owning a visible main window, via
+// PowerShell `Get-Process`) and launches apps / URLs / folders / coding-session
+// terminals via PowerShell. Launching an app first tries to FOCUS an
+// already-running instance's window (so double-click brings the existing window
+// to the front instead of opening a duplicate) and only starts a new process
+// when none is running — see `WinLauncher::open_app`.
+//
+// WHY NOT `tasklist /v`: verbose `tasklist` fetches each process's window title
+// by pumping messages to the window, so a single unresponsive app makes the
+// whole call hang for minutes. Because enumeration runs on the app's 1s poll
+// loop, that froze the UI ("not responding") and left the running-apps list
+// empty. `Get-Process` reads `MainWindowTitle` from the process table without
+// messaging any window, so it never hangs and returns in ~1s.
 //
 // SECURITY: every untrusted value (app target, URL, folder path, the command a
 // session terminal runs, a focus hint) is passed to PowerShell through an
@@ -23,9 +34,9 @@ use std::process::Command;
 use vc_core::{CoreError, Result};
 
 /// `CREATE_NO_WINDOW` process-creation flag. Without it, every short-lived
-/// `tasklist.exe` / `powershell.exe` we spawn allocates and briefly shows a
-/// console window — and because app enumeration polls once a second, that
-/// console flashes on screen continuously. Applied to the OUTER helper process
+/// `powershell.exe` we spawn allocates and briefly shows a console window — and
+/// because app enumeration polls once a second, that console would flash on
+/// screen continuously (stealing focus). Applied to the OUTER helper process
 /// only; `run_in_terminal`'s inner `Start-Process powershell` still opens its
 /// own intended visible window.
 #[cfg(target_os = "windows")]
@@ -36,34 +47,42 @@ pub struct WinWindowEnumerator;
 
 #[cfg(target_os = "windows")]
 impl WinWindowEnumerator {
-    /// Names (without the `.exe` suffix) of running apps that own a window.
+    /// Names of running apps that own a visible main window.
     pub fn list_running() -> Result<Vec<String>> {
-        Ok(Self::windowed_process_exes()
+        Ok(Self::windowed_processes()
             .into_iter()
-            .map(|exe| display_name(&exe))
+            .map(|(name, _target)| name)
             .collect())
     }
 
-    /// Running windowed apps as `(display name, launch target)`. On Windows the
-    /// launch target is the executable name (e.g. `chrome.exe`), which PowerShell
-    /// `Start-Process` resolves via the App Paths registry / PATH. There is no
-    /// stable "bundle identifier" equivalent, so the target doubles as the id.
+    /// Running windowed apps as `(display name, launch target)`. The launch
+    /// target is the full executable path when readable, else the process name
+    /// plus `.exe` (which PowerShell `Start-Process` resolves via the App Paths
+    /// registry / PATH). There is no stable "bundle identifier" equivalent on
+    /// Windows, so the target doubles as the id.
     pub fn list_running_apps() -> Result<Vec<(String, Option<String>)>> {
-        Ok(Self::windowed_process_exes()
+        Ok(Self::windowed_processes()
             .into_iter()
-            .map(|exe| (display_name(&exe), Some(exe)))
+            .map(|(name, target)| (name, Some(target)))
             .collect())
     }
 
-    /// Executable names of processes that currently own a top-level window.
+    /// Processes that currently own a visible main window, as `(process name,
+    /// launch target)`.
     ///
-    /// We use `tasklist /v` (verbose) and keep only rows whose Window Title is a
-    /// real title (not `N/A` / empty), which approximates macOS's "regular app"
-    /// filter and keeps background/service processes (svchost.exe, RuntimeBroker,
-    /// …) out of the list. Any failure yields an empty vec (never a hard error).
-    fn windowed_process_exes() -> Vec<String> {
-        let output = Command::new("tasklist.exe")
-            .args(["/v", "/fo", "csv", "/nh"])
+    /// Uses PowerShell `Get-Process`, keeping only processes whose
+    /// `MainWindowTitle` is non-empty — the "has a real window" signal, read
+    /// straight from the process table. Unlike `tasklist /v` this never messages
+    /// the windows, so an unresponsive app can't hang the call. The query emits
+    /// one `name|path` line per process (`path` is empty when the executable
+    /// path isn't readable); it takes no untrusted input, so it is a fixed
+    /// literal. Any failure yields an empty vec (never a hard error).
+    fn windowed_processes() -> Vec<(String, String)> {
+        const QUERY: &str = "Get-Process | Where-Object { $_.MainWindowTitle -ne '' } | \
+             Select-Object ProcessName,Path -Unique | \
+             ForEach-Object { \"$($_.ProcessName)|$($_.Path)\" }";
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", QUERY])
             .creation_flags(CREATE_NO_WINDOW)
             .output();
         let output = match output {
@@ -71,60 +90,34 @@ impl WinWindowEnumerator {
             _ => return Vec::new(),
         };
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut names: Vec<String> = stdout.lines().filter_map(parse_windowed_row).collect();
-        names.sort();
-        names.dedup();
-        names
+        let mut apps: Vec<(String, String)> = stdout.lines().filter_map(parse_process_line).collect();
+        apps.sort();
+        apps.dedup();
+        apps
     }
 }
 
-/// Parse one `tasklist /v /fo csv /nh` row, returning the image name only for
-/// rows that own a real window. Columns (verbose): Image Name, PID, Session
-/// Name, Session#, Mem Usage, Status, User Name, CPU Time, Window Title.
+/// Parse one `name|path` enumeration line into `(display name, launch target)`.
+/// The target is the executable path when present, else `name.exe` (App Paths /
+/// PATH resolves it at launch). Blank/nameless lines are skipped.
 #[cfg(target_os = "windows")]
-fn parse_windowed_row(line: &str) -> Option<String> {
-    let fields = split_tasklist_csv(line);
-    if fields.len() < 9 {
+fn parse_process_line(line: &str) -> Option<(String, String)> {
+    let line = line.trim();
+    if line.is_empty() {
         return None;
     }
-    let image = fields[0].trim();
-    let title = fields[8].trim();
-    if image.is_empty() || image.eq_ignore_ascii_case("Image Name") {
-        return None; // header or blank
-    }
-    // Background/service processes report "N/A" (or empty) as their window title.
-    if title.is_empty() || title.eq_ignore_ascii_case("N/A") {
+    let (name, path) = line.split_once('|').unwrap_or((line, ""));
+    let name = name.trim();
+    if name.is_empty() {
         return None;
     }
-    Some(image.to_string())
-}
-
-/// Split a `tasklist /fo csv` line whose every field is wrapped in double
-/// quotes. Splitting on the literal `","` delimiter (then stripping the leading
-/// and trailing quote) preserves commas *inside* a field — critical because the
-/// Mem Usage column is formatted like `"12,345 K"`, which a naive `split(',')`
-/// would shred, misaligning every later column.
-#[cfg(target_os = "windows")]
-fn split_tasklist_csv(line: &str) -> Vec<String> {
-    let trimmed = line.trim();
-    let inner = trimmed
-        .strip_prefix('"')
-        .unwrap_or(trimmed)
-        .strip_suffix('"')
-        .unwrap_or(trimmed);
-    inner.split("\",\"").map(|s| s.to_string()).collect()
-}
-
-/// Drop a trailing `.exe` (case-insensitive) for a friendlier display name;
-/// the launch target keeps the full executable name.
-#[cfg(target_os = "windows")]
-fn display_name(exe: &str) -> String {
-    let lower = exe.to_ascii_lowercase();
-    if let Some(stripped) = lower.strip_suffix(".exe") {
-        exe[..stripped.len()].to_string()
+    let path = path.trim();
+    let target = if path.is_empty() {
+        format!("{name}.exe")
     } else {
-        exe.to_string()
-    }
+        path.to_string()
+    };
+    Some((name.to_string(), target))
 }
 
 #[cfg(target_os = "windows")]
@@ -148,9 +141,64 @@ pub struct WinLauncher;
 
 #[cfg(target_os = "windows")]
 impl WinLauncher {
-    /// Launch (or focus) an application by executable name or path.
+    /// Launch an application, OR — if a windowed instance is already running —
+    /// bring that existing window to the front instead of starting a second
+    /// copy (FR-2.6 / §13.4: "bring to front, launching it if closed").
+    ///
+    /// WHY THIS EXISTS: `Start-Process` unconditionally spawns a NEW process, so
+    /// double-clicking a running app used to open a duplicate window. Unlike
+    /// macOS `open` (which naturally re-activates a running app), Windows has no
+    /// single call for "focus if running, else launch", so we do it in two
+    /// steps: try to focus an existing window first, and only launch when none
+    /// is found.
     pub fn open_app(target: &str) -> Result<()> {
+        if Self::focus_existing_window(target) {
+            return Ok(());
+        }
         Self::start_process(target)
+    }
+
+    /// Focus an already-running instance's main window. Returns `true` when a
+    /// matching windowed process was found (so the caller must NOT launch a
+    /// duplicate), `false` when none is running.
+    ///
+    /// A process matches by executable path (what enumeration hands back as the
+    /// launch target) or, as a fallback, by process name, and must own a real
+    /// main window (`MainWindowHandle != 0`). We restore (un-minimize) and
+    /// foreground it via Win32 `ShowWindowAsync` + `SetForegroundWindow` —
+    /// compiled inline with `Add-Type`, present on every Windows install, so no
+    /// native crate is needed — reinforced by `WScript.Shell.AppActivate`
+    /// (which Windows treats permissively for activation). The focus calls are
+    /// best-effort and wrapped in a `try`: once a windowed instance is found we
+    /// report `ACTIVATED` regardless, because "an instance exists" is what
+    /// decides not to launch a duplicate; a failed focus just leaves the
+    /// existing window where it was rather than spawning a new one. The target
+    /// is passed via an env var, never the command line (see module SECURITY).
+    fn focus_existing_window(target: &str) -> bool {
+        const SCRIPT: &str = "\
+$target = $env:VC_TARGET; \
+$base = [System.IO.Path]::GetFileNameWithoutExtension($target); \
+$proc = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.ProcessName -eq $base -or ($(try { $_.Path } catch { $null }) -eq $target)) } | Select-Object -First 1; \
+if ($proc) { \
+    try { \
+        Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class VcWin { [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport(\"user32.dll\")] public static extern bool ShowWindowAsync(IntPtr h, int n); }'; \
+        [void][VcWin]::ShowWindowAsync($proc.MainWindowHandle, 9); \
+        $ws = New-Object -ComObject WScript.Shell; \
+        [void]$ws.AppActivate($proc.Id); \
+        [void][VcWin]::SetForegroundWindow($proc.MainWindowHandle); \
+    } catch {} \
+    'ACTIVATED'; \
+} else { 'NOTFOUND'; }";
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .env("VC_TARGET", target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        match output {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).contains("ACTIVATED"),
+            // Couldn't even run PowerShell — fall back to launching.
+            Err(_) => false,
+        }
     }
 
     /// Open a file or folder in Explorer / its default handler.

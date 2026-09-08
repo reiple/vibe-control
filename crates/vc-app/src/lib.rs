@@ -165,7 +165,7 @@ fn save_bundles(
 }
 
 #[tauri::command]
-fn capture_current(name: String) -> std::result::Result<WorkBundle, CommandError> {
+async fn capture_current(name: String) -> std::result::Result<WorkBundle, CommandError> {
     let mut bundle = WorkBundle::new(name);
 
     // Running applications. The bundle id (when available) is a stable restore
@@ -239,7 +239,7 @@ fn discover_coding_sessions() -> Vec<SessionInfo> {
 }
 
 #[tauri::command]
-fn get_session_snapshot(
+async fn get_session_snapshot(
     tool_id: String,
     session_ref: String,
 ) -> std::result::Result<SessionSnapshot, CommandError> {
@@ -265,7 +265,7 @@ pub struct RestoreReport {
 /// deliberately NOT resumed here: that would spawn a Terminal even when one is
 /// already open, so they're resumed individually via `resume_coding_session`.
 #[tauri::command]
-fn restore_bundle(bundle: WorkBundle) -> std::result::Result<RestoreReport, CommandError> {
+async fn restore_bundle(bundle: WorkBundle) -> std::result::Result<RestoreReport, CommandError> {
     let mut report = RestoreReport::default();
     for resource in &bundle.resources {
         if matches!(resource.kind, ResourceKind::CodingSession) {
@@ -285,7 +285,7 @@ fn restore_bundle(bundle: WorkBundle) -> std::result::Result<RestoreReport, Comm
 /// Resume a single coding session in a new Terminal window (explicit, per
 /// session — the user chooses when to spawn a terminal).
 #[tauri::command]
-fn resume_coding_session(session_ref: String) -> std::result::Result<(), CommandError> {
+async fn resume_coding_session(session_ref: String) -> std::result::Result<(), CommandError> {
     resume_session(&session_ref)?;
     Ok(())
 }
@@ -295,7 +295,7 @@ fn resume_coding_session(session_ref: String) -> std::result::Result<(), Command
 /// This is what the "대화 보기" button now does: jump to the live terminal so
 /// the user reads/continues the real conversation there.
 #[tauri::command]
-fn activate_coding_session(session_ref: String) -> std::result::Result<(), CommandError> {
+async fn activate_coding_session(session_ref: String) -> std::result::Result<(), CommandError> {
     activate_session_terminal(&session_ref)?;
     Ok(())
 }
@@ -310,7 +310,7 @@ pub struct RunningApp {
 
 /// List apps currently running on this machine (FR-2.1 / §13.1).
 #[tauri::command]
-fn list_running_apps() -> std::result::Result<Vec<RunningApp>, CommandError> {
+async fn list_running_apps() -> std::result::Result<Vec<RunningApp>, CommandError> {
     Ok(enumerate_running_apps_detailed()
         .into_iter()
         .map(|(name, bundle_id)| RunningApp { name, bundle_id })
@@ -320,7 +320,7 @@ fn list_running_apps() -> std::result::Result<Vec<RunningApp>, CommandError> {
 /// Bring an app to the front, launching it if closed (FR-2.6 / FR-4.x / §13.4).
 /// `target` is a bundle id or an app name.
 #[tauri::command]
-fn activate_app(target: String) -> std::result::Result<(), CommandError> {
+async fn activate_app(target: String) -> std::result::Result<(), CommandError> {
     open_app(&target)?;
     Ok(())
 }
