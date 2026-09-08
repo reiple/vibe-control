@@ -390,19 +390,32 @@ body { margin: 0; background: var(--body); }
 
 /* An app with several windows clicks to expand rather than drag-only. */
 .running-item.has-windows { cursor: pointer; }
-/* Window count + expand chevron, pushed to the row's trailing edge. */
-.running-count {
+/* Expand chevron + item count, pushed to the row's trailing edge. It's a real
+   button so expanding never collides with clicking the row to activate. */
+.running-expand {
   margin-left: auto;
-  padding-left: 8px;
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  /* No keycap chrome — kill the global button box-shadow so only the glyph shows. */
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-size: 10px;
   color: var(--ink-muted);
+  cursor: pointer;
   flex-shrink: 0;
 }
+.running-expand:hover { background: transparent; color: var(--ink); filter: none; }
+.running-expand:active { transform: none; box-shadow: none; filter: none; }
+.running-expand:focus-visible { outline: none; box-shadow: none; }
 
-/* One live window/tab inside an expanded app group (FR-2.8). Indented under
-   the app icon; not drag-registerable itself (app-level DnD is unchanged). */
+/* One live window/tab/folder inside an expanded app group (FR-2.2/2.8).
+   Indented under the app icon; drag-registerable into a context group. */
 .running-window {
   display: flex;
   align-items: center;
@@ -413,6 +426,23 @@ body { margin: 0; background: var(--body); }
   user-select: none;
 }
 .running-window:hover { background: var(--bone); }
+/* Placeholder rows (Loading… / No windows or tabs): non-interactive, dimmed. */
+.running-window.muted {
+  color: var(--ink-muted);
+  font-size: 12px;
+  cursor: default;
+}
+.running-window.muted:hover { background: transparent; }
+/* Actionable permission hint: clickable (re-check after granting), tinted to
+   read as a call to action rather than a dead placeholder. */
+.running-window.muted.access-needed {
+  color: var(--rust, #c4501e);
+  cursor: pointer;
+}
+.running-window.muted.access-needed:hover {
+  background: var(--bone);
+  text-decoration: underline;
+}
 .win-dot {
   width: 7px;
   height: 7px;
@@ -607,9 +637,12 @@ button.mini.danger {
 /* ── Right: main dashboard = the labeled pad grid ───────── */
 .main {
   flex: 1;
-  /* Top padding matches the sidebar so both titles clear the traffic lights
-     and sit on the same line. */
-  padding: 34px 24px 20px;
+  /* No TOP padding here: it now lives on .main-header so the header (which is the
+     window drag region) owns the top strip. On the sidebar the 34px clearance is
+     the header's own padding, so its top edge drags + double-click-maximizes; the
+     main panel must match, or grabbing the top of the right pane hits non-draggable
+     .main padding. Horizontal + bottom padding stay for content below the header. */
+  padding: 0 24px 20px;
   overflow-y: auto;
   background: var(--body);
 }
@@ -619,7 +652,12 @@ button.mini.danger {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 18px;
+  /* Bleed into .main's horizontal padding so the draggable top strip spans the
+     full width (incl. corners); re-add the side inset via padding so the title and
+     actions still line up with the content below. 34px top clears the traffic
+     lights and makes the whole top band a drag region (FR: move + dbl-click max). */
+  margin: 0 -24px 18px;
+  padding: 34px 24px 0;
 }
 .main-header h2 {
   display: flex;
@@ -665,12 +703,12 @@ button.mini.danger {
   position: relative;
   overflow: hidden;
   height: 88px;
-  padding: 0 26px;
+  padding: 12px 24px;
   border-radius: 0; /* sharp, square corners */
   display: flex;
-  align-items: center;
+  align-items: stretch;
   justify-content: space-between;
-  gap: 16px;
+  gap: 24px;
   /* black OLED/LCD face with a faint top-lit sheen baked in */
   background: radial-gradient(130% 150% at 28% -10%, #191d20 0%, #0b0d0f 55%, #050607 100%);
   box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.85),
@@ -693,55 +731,135 @@ button.mini.danger {
   );
 }
 
-/* Left readout: big phosphor numerals with tiny labels. */
-.ko-readout {
-  display: flex;
-  align-items: baseline;
-  gap: 16px;
+/* ── Graphical Claude usage meter on the black LCD (K.O. II, primary hues) ── */
+
+/* Left column: title row, big token counter, legend chips. */
+.ko-usage {
   position: relative;
   z-index: 1;
-}
-.ko-metric {
-  display: inline-flex;
-  align-items: baseline;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
   gap: 8px;
 }
-.ko-metric b {
+.ko-usage-model {
+  margin-left: auto;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 9px;
+  font-weight: 700;
+  color: #0a0c0e;
+  background: #ffd21e;
+  padding: 2px 7px;
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(255, 210, 30, 0.5);
+}
+.ko-usage-total {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ko-usage-total b {
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-weight: 700;
-  font-size: 30px;
+  font-size: 32px;
   line-height: 1;
-  color: #b9d3bc; /* dim green-grey phosphor */
-  text-shadow: 0 0 8px rgba(150, 210, 165, 0.35),
-    0 0 1px rgba(190, 225, 195, 0.7);
+  letter-spacing: 0.01em;
+  color: #ffcf33; /* bright amber LED counter */
+  text-shadow: 0 0 10px rgba(255, 190, 40, 0.55), 0 0 2px rgba(255, 220, 120, 0.9);
 }
-.ko-metric i {
+.ko-legend {
+  display: flex;
+  gap: 14px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.ko-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #b0bbb2;
+}
+.ko-chip em {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  font-style: normal;
+}
+.ko-chip.in em {
+  background: #22c6e0;
+  box-shadow: 0 0 6px rgba(34, 198, 224, 0.9);
+}
+.ko-chip.out em {
+  background: #ff8f1f;
+  box-shadow: 0 0 6px rgba(255, 143, 31, 0.9);
+}
+.ko-chip.req em {
+  background: #35c46a;
+  box-shadow: 0 0 6px rgba(53, 196, 106, 0.9);
+}
+
+/* Right column: last-call readout + small group/app counts. */
+.ko-side {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 12px;
+}
+.ko-last {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ko-last b {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 22px;
+  line-height: 1;
+  color: #ffcf33; /* amber LED, matches the today counter */
+  text-shadow: 0 0 8px rgba(255, 190, 40, 0.45), 0 0 2px rgba(255, 220, 120, 0.85);
+}
+.ko-last i {
   font-family: var(--mono);
   font-style: normal;
   text-transform: uppercase;
-  letter-spacing: 0.18em;
-  font-size: 10px;
-  color: #5f7066;
-}
-.ko-sep {
-  font-family: var(--mono);
-  font-size: 22px;
-  color: #3d4a41;
-}
-
-/* Right status: a lit indicator LED + label. */
-.ko-status {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  position: relative;
-  z-index: 1;
-  font-family: var(--mono);
-  text-transform: uppercase;
   letter-spacing: 0.16em;
-  font-size: 11px;
-  color: #7d8c81;
+  font-size: 9px;
+  color: #6f7d73;
+}
+.ko-mini {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+}
+.ko-mini b {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 15px;
+  color: #b9d3bc;
+  text-shadow: 0 0 6px rgba(150, 210, 165, 0.3);
+}
+.ko-mini i {
+  font-family: var(--mono);
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 8px;
+  color: #5f7066;
+  margin-left: 4px;
 }
 .ko-led {
   width: 9px;
@@ -946,6 +1064,35 @@ button.mini.danger {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Bare × to drop a single item from the group — no button chrome, just the mark,
+   pushed to the far right of the row. Dim by default, rust on hover. */
+.resource-remove {
+  flex: none;
+  margin-left: auto;
+  border: 0;
+  background: none;
+  /* No keycap chrome — kill the global button box-shadow/radius so only the × shows. */
+  box-shadow: none;
+  border-radius: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0 2px;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--ink-muted);
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.resource-remove:hover {
+  opacity: 1;
+  color: var(--rust, #c4501e);
+  filter: none;
+}
+.resource-remove:active { transform: none; box-shadow: none; filter: none; }
+.resource-remove:focus-visible { outline: none; box-shadow: none; }
 
 /* ── Restore report = recessed instrument readout ───────── */
 .restore-report {
