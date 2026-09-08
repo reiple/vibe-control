@@ -17,7 +17,8 @@
         "height": 700,
         "minWidth": 700,
         "minHeight": 500,
-        "backgroundColor": "#d4d1c9"
+        "backgroundColor": "#d4d1c9",
+        "dragDropEnabled": false
       }
     ],
     "security": {
