@@ -1,0 +1,13 @@
+[package]
+name = "vc-sessions"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vc-core = { path = "../vc-core" }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+dirs = "5.0"
+
+[dev-dependencies]
+proptest = "1.0"

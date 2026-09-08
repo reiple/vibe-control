@@ -1,0 +1,15 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/vc-core",
+    "crates/vc-store",
+    "crates/vc-os-macos",
+    "crates/vc-os-windows",
+    "crates/vc-sessions",
+    "crates/vc-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"

@@ -1,0 +1,7 @@
+[package]
+name = "vc-os-macos"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+vc-core = { path = "../vc-core" }

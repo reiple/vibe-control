@@ -1,0 +1,9 @@
+# Rust build output
+/target
+
+# Node / frontend
+**/node_modules
+frontend/dist
+
+# OS
+.DS_Store
