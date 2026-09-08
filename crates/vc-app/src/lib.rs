@@ -435,7 +435,15 @@ fn resume_session(session_ref: &str) -> std::result::Result<(), String> {
     {
         let (cwd, id) = ClaudeCodeSessionProvider::resume_info(session_ref)
             .ok_or_else(|| "cannot resolve session cwd/id".to_string())?;
-        let command = format!("cd /d \"{}\" && claude --resume {}", cwd, id);
+        // Build a PowerShell-valid command (the window we open is PowerShell, so
+        // cmd's `cd /d ... &&` would be invalid there). `Set-Location` changes
+        // dir, `;` sequences, and the cwd is PowerShell-single-quoted; the id is
+        // a session UUID.
+        let command = format!(
+            "Set-Location -LiteralPath {}; claude --resume {}",
+            ps_single_quote(&cwd),
+            id
+        );
         vc_os_windows::WinLauncher::run_in_terminal(&command).map_err(|e| e.to_string())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -480,6 +488,13 @@ fn activate_session_terminal(session_ref: &str) -> std::result::Result<(), Strin
 #[cfg(target_os = "macos")]
 fn shell_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "'\\''"))
+}
+
+/// Single-quote a string for safe embedding in a PowerShell command (a literal
+/// single quote is escaped by doubling it).
+#[cfg(target_os = "windows")]
+fn ps_single_quote(s: &str) -> String {
+    format!("'{}'", s.replace('\'', "''"))
 }
 
 fn enumerate_running_apps_detailed() -> Vec<(String, Option<String>)> {
