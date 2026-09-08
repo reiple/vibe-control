@@ -13,7 +13,6 @@ import {
   getBundles,
   getSessionSnapshot,
   restoreBundle,
-  resumeCodingSession,
   activateCodingSession,
   listRunningApps,
   activateApp,
@@ -229,7 +228,6 @@ export default function App() {
   // Names of app groups the user has expanded to reveal their windows (FR-2.8).
   // Keyed by app name so the expansion survives the 1s poll replacing the list.
   const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
-  const [refreshing, setRefreshing] = useState(false);
 
   // Boot splash: `booting` keeps the overlay mounted (blocking input);
   // `splashOut` triggers its fade just before we unmount it.
@@ -328,7 +326,6 @@ export default function App() {
     // background poll yields to an active drag; a manual ↻ can't collide with
     // a drag (one pointer) so it isn't gated.
     if (silent && draggedApp.current) return;
-    if (!silent) setRefreshing(true);
     setSessionNonce((n) => n + 1); // also refresh inline coding-session statuses
     try {
       const apps = await listRunningApps();
@@ -338,8 +335,6 @@ export default function App() {
       // A background poll shouldn't flash the error banner every tick — only
       // surface failures from an explicit refresh.
       if (!silent) setError(String(e));
-    } finally {
-      if (!silent) setRefreshing(false);
     }
   };
 
@@ -460,13 +455,6 @@ export default function App() {
     );
   };
 
-  const handleResumeSession = (resource: Resource) => {
-    setError(null);
-    resumeCodingSession(resource.identity.descriptor).catch((e) =>
-      setError(String(e))
-    );
-  };
-
   // ── Claude console handlers ────────────────────────────────────────
   const openClaudeModal = () => {
     setKeyInput(""); // never prefill: the key is write-only, never read back
@@ -520,16 +508,10 @@ export default function App() {
     {booting && <Splash hiding={splashOut} />}
     <div className="app">
       <aside className="sidebar">
-        <header className="sidebar-header">
-          <h1>Running Apps</h1>
-          <button
-            className="ghost icon"
-            onClick={() => refreshRunning()}
-            disabled={refreshing}
-            title="Refresh"
-          >
-            ↻
-          </button>
+        {/* The macOS traffic lights float over this header (transparent Overlay
+            title bar); it doubles as the window drag region. */}
+        <header className="sidebar-header" data-tauri-drag-region>
+          <h1 data-tauri-drag-region>Running Apps</h1>
         </header>
         <input
           className="search"
@@ -582,7 +564,7 @@ export default function App() {
                   isExpanded &&
                   wins.map((w, i) => (
                     <li
-                      key={`${app.name} ${w.handle} ${i}`}
+                      key={`${app.name}-${w.handle}-${i}`}
                       className="running-window"
                       onClick={() => activateWin(w.handle)}
                       title="Click: bring this window to front"
@@ -604,14 +586,40 @@ export default function App() {
       </aside>
 
       <main className="main">
-        <header className="main-header">
-          <h2>vibe-control</h2>
+        <header className="main-header" data-tauri-drag-region>
+          <h2 data-tauri-drag-region>vibe-control</h2>
           <div className="header-actions">
             <button className="rec add-group" onClick={openGroupModal}>
               Add Group
             </button>
           </div>
         </header>
+
+        {/* KO II-style display: a wide black LCD recessed into the chassis,
+            with a dim phosphor readout and a glossy glare sweep. */}
+        <div className="ko-screen">
+          <div className="ko-screen-glass">
+            <div className="ko-readout">
+              <span className="ko-metric">
+                <b>{String(bundles.length).padStart(2, "0")}</b>
+                <i>Groups</i>
+              </span>
+              <span className="ko-sep">·</span>
+              <span className="ko-metric">
+                <b>{String(runningApps.length).padStart(2, "0")}</b>
+                <i>Apps</i>
+              </span>
+            </div>
+            <div className="ko-status">
+              <span
+                className={`ko-led ${claude?.configured ? "on" : "off"}`}
+                aria-hidden
+              />
+              <span>{claude?.configured ? "Claude Ready" : "Claude Offline"}</span>
+            </div>
+            <span className="ko-screen-glare" aria-hidden />
+          </div>
+        </div>
 
         {error && <div className="error">{error}</div>}
 
@@ -664,12 +672,22 @@ export default function App() {
                       </button>
                     </>
                   ) : (
-                    <button
-                      className="mini"
+                    <span
+                      className="close-group"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setConfirmDeleteId(b.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setConfirmDeleteId(b.id);
+                        }
+                      }}
+                      title="Close (delete) this group"
+                      aria-label="Close group"
                     >
-                      Delete
-                    </button>
+                      ×
+                    </span>
                   )}
                 </div>
               </header>
@@ -709,13 +727,6 @@ export default function App() {
                         >
                           View
                         </button>
-                        <button
-                          className="mini resume-button"
-                          onClick={() => handleResumeSession(r)}
-                          title="Resume this session in a new terminal"
-                        >
-                          Resume
-                        </button>
                         <SessionStatus
                           sessionRef={r.identity.descriptor}
                           nonce={sessionNonce}
@@ -747,8 +758,8 @@ export default function App() {
                   {report.skipped.length > 0 && (
                     <p className="skipped-note">
                       {report.skipped.length} coding session
-                      {report.skipped.length > 1 ? "s" : ""} — open each with its
-                      “Resume” button.
+                      {report.skipped.length > 1 ? "s" : ""} skipped — focus an
+                      open one with its “View” button.
                     </p>
                   )}
                 </div>
