@@ -4,6 +4,8 @@ import type {
   SessionSnapshot,
   RestoreReport,
   RunningApp,
+  ChatMsg,
+  ClaudeStatus,
 } from "./types";
 
 const inTauri = (): boolean =>
@@ -82,4 +84,33 @@ export async function addAppResource(
     name,
     target,
   });
+}
+
+// ── Claude prompt console ─────────────────────────────────────────────
+const NO_CLAUDE: ClaudeStatus = {
+  configured: false,
+  source: "none",
+  model: "",
+  region: "",
+};
+
+/** Whether Claude is connected (a key is present). Never returns the key. */
+export async function claudeStatus(): Promise<ClaudeStatus> {
+  if (!inTauri()) return NO_CLAUDE;
+  return await invoke<ClaudeStatus>("claude_status");
+}
+
+/** Save (or clear, when blank) the Bedrock API key locally. Write-only. */
+export async function setClaudeApiKey(key: string): Promise<ClaudeStatus> {
+  return await invoke<ClaudeStatus>("set_claude_api_key", { key });
+}
+
+/** Pick which Claude model the console uses. */
+export async function setClaudeModel(model: string): Promise<ClaudeStatus> {
+  return await invoke<ClaudeStatus>("set_claude_model", { model });
+}
+
+/** Send the console conversation to Claude; resolves to the reply text. */
+export async function sendClaudeMessage(messages: ChatMsg[]): Promise<string> {
+  return await invoke<string>("send_claude_message", { messages });
 }

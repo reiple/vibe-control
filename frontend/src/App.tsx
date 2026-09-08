@@ -6,6 +6,8 @@ import type {
   SessionCompletion,
   RestoreReport,
   RunningApp,
+  ChatMsg,
+  ClaudeStatus,
 } from "./types";
 import {
   getBundles,
@@ -19,7 +21,37 @@ import {
   createBundle,
   deleteBundle,
   addAppResource,
+  claudeStatus,
+  setClaudeApiKey,
+  setClaudeModel,
+  sendClaudeMessage,
 } from "./api";
+
+// Selectable models for the console. These are AWS Bedrock inference-profile
+// ids (the app talks to the Bedrock runtime, not api.anthropic.com), matching
+// how Claude Code itself reaches the model here.
+const CLAUDE_MODELS: { id: string; label: string }[] = [
+  { id: "global.anthropic.claude-opus-4-8", label: "Opus 4.8" },
+  { id: "global.anthropic.claude-haiku-4-5-20251001-v1:0", label: "Haiku 4.5" },
+];
+
+// Fallback shown when no model is saved yet — matches the backend default.
+const DEFAULT_MODEL = "global.anthropic.claude-opus-4-8";
+
+// Tauri command errors arrive as a serialized object ({ message }), so String(e)
+// would render "[object Object]". Pull out the human-readable message.
+function errText(e: unknown): string {
+  if (typeof e === "string") return e;
+  if (e && typeof e === "object" && "message" in e) {
+    const m = (e as { message: unknown }).message;
+    if (typeof m === "string") return m;
+  }
+  try {
+    return JSON.stringify(e);
+  } catch {
+    return String(e);
+  }
+}
 
 const kindLabel: Record<string, string> = {
   WindowRef: "Window",
@@ -177,10 +209,23 @@ export default function App() {
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  // ── Claude prompt console ──────────────────────────────────────────
+  const [claude, setClaude] = useState<ClaudeStatus | null>(null);
+  const [chat, setChat] = useState<ChatMsg[]>([]);
+  const [chatInput, setChatInput] = useState("");
+  const [chatSending, setChatSending] = useState(false);
+  const [chatError, setChatError] = useState<string | null>(null);
+  const [showClaudeModal, setShowClaudeModal] = useState(false);
+  const [keyInput, setKeyInput] = useState("");
+  const transcriptRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     getBundles()
       .then(setBundles)
       .catch((e) => setError(String(e)));
+    claudeStatus()
+      .then(setClaude)
+      .catch(() => setClaude(null));
     // Defer the running-apps scan (a comparatively slow OS call) to the next
     // frame so the app shell + saved groups paint immediately instead of the
     // window sitting blank until the scan returns on cold start.
@@ -218,6 +263,12 @@ export default function App() {
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Keep the console transcript pinned to the newest message.
+  useEffect(() => {
+    const el = transcriptRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [chat, chatSending]);
 
   const filteredApps = runningApps.filter((a) =>
     a.name.toLowerCase().includes(filter.trim().toLowerCase())
@@ -313,7 +364,56 @@ export default function App() {
     );
   };
 
+  // ── Claude console handlers ────────────────────────────────────────
+  const openClaudeModal = () => {
+    setKeyInput(""); // never prefill: the key is write-only, never read back
+    setShowClaudeModal(true);
+  };
+  const closeClaudeModal = () => setShowClaudeModal(false);
+
+  const handleSaveKey = async () => {
+    try {
+      setClaude(await setClaudeApiKey(keyInput.trim()));
+      setKeyInput("");
+      setShowClaudeModal(false);
+      setChatError(null);
+    } catch (e) {
+      setChatError(errText(e));
+    }
+  };
+
+  const handleSelectModel = async (model: string) => {
+    try {
+      setClaude(await setClaudeModel(model));
+    } catch (e) {
+      setChatError(errText(e));
+    }
+  };
+
+  const handleSendChat = async () => {
+    const text = chatInput.trim();
+    if (!text || chatSending) return;
+    if (!claude?.configured) {
+      openClaudeModal(); // no key yet → prompt for one instead of failing
+      return;
+    }
+    const next: ChatMsg[] = [...chat, { role: "user", content: text }];
+    setChat(next);
+    setChatInput("");
+    setChatError(null);
+    setChatSending(true);
+    try {
+      const reply = await sendClaudeMessage(next);
+      setChat((cur) => [...cur, { role: "assistant", content: reply }]);
+    } catch (e) {
+      setChatError(errText(e)); // keep the user's message so they can retry
+    } finally {
+      setChatSending(false);
+    }
+  };
+
   return (
+    <div className="app-shell">
     <div className="app">
       <aside className="sidebar">
         <header className="sidebar-header">
@@ -513,6 +613,115 @@ export default function App() {
           ))}
         </div>
       </main>
+      </div>
+
+      <footer className="console">
+        <div className="console-head">
+          <span className="console-title">Claude</span>
+          <span
+            className={`console-conn ${claude?.configured ? "on" : "off"}`}
+            title={
+              claude?.source === "env"
+                ? `Using AWS_BEARER_TOKEN_BEDROCK from the environment${
+                    claude?.region ? ` · ${claude.region}` : ""
+                  }`
+                : claude?.configured
+                  ? `Using the Bedrock key saved in this app${
+                      claude?.region ? ` · ${claude.region}` : ""
+                    }`
+                  : "No Bedrock key yet"
+            }
+          >
+            {claude?.configured
+              ? claude.source === "env"
+                ? "connected · env key"
+                : "connected · saved key"
+              : "not connected"}
+          </span>
+          <select
+            className="console-model"
+            value={claude?.model || DEFAULT_MODEL}
+            onChange={(e) => handleSelectModel(e.target.value)}
+            title="Model"
+          >
+            {CLAUDE_MODELS.map((m) => (
+              <option key={m.id} value={m.id}>
+                {m.label}
+              </option>
+            ))}
+          </select>
+          <div className="console-head-actions">
+            {chat.length > 0 && (
+              <button
+                className="mini"
+                onClick={() => {
+                  setChat([]);
+                  setChatError(null);
+                }}
+                title="Clear the conversation"
+              >
+                Clear
+              </button>
+            )}
+            <button className="mini" onClick={openClaudeModal}>
+              {claude?.configured ? "API Key" : "Connect"}
+            </button>
+          </div>
+        </div>
+
+        {(chat.length > 0 || chatSending || chatError) && (
+          <div className="console-transcript" ref={transcriptRef}>
+            {chat.map((m, i) => (
+              <div key={i} className={`bubble ${m.role}`}>
+                <span className="bubble-role">
+                  {m.role === "user" ? "You" : "Claude"}
+                </span>
+                <p className="bubble-text">{m.content}</p>
+              </div>
+            ))}
+            {chatSending && (
+              <div className="bubble assistant pending">
+                <span className="bubble-role">Claude</span>
+                <p className="bubble-text typing">thinking…</p>
+              </div>
+            )}
+            {chatError && <div className="console-error">{chatError}</div>}
+          </div>
+        )}
+
+        <form
+          className="console-bar"
+          onSubmit={(e) => {
+            e.preventDefault();
+            handleSendChat();
+          }}
+        >
+          <textarea
+            className="console-input"
+            placeholder={
+              claude?.configured
+                ? "Message Claude…  (Enter to send · Shift+Enter for newline)"
+                : "Connect your Claude API key to start a conversation…"
+            }
+            value={chatInput}
+            rows={1}
+            onChange={(e) => setChatInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                handleSendChat();
+              }
+            }}
+          />
+          <button
+            className="rec send"
+            type="submit"
+            disabled={chatSending || !chatInput.trim()}
+          >
+            {chatSending ? "…" : "Send"}
+          </button>
+        </form>
+      </footer>
 
       {showGroupModal && (
         <div className="modal-backdrop" onClick={closeGroupModal}>
@@ -540,6 +749,61 @@ export default function App() {
                 Cancel
               </button>
               <button onClick={handleCreateGroup}>Create</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showClaudeModal && (
+        <div className="modal-backdrop" onClick={closeClaudeModal}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Connect Claude"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="modal-title">Connect Claude</h3>
+            <p className="modal-note">
+              {claude?.source === "env"
+                ? `Using AWS_BEARER_TOKEN_BEDROCK from your environment${
+                    claude?.region ? ` (${claude.region})` : ""
+                  }. Enter a key below to save one in the app instead.`
+                : claude?.configured
+                  ? "A Bedrock key is saved on this machine. Enter a new key to replace it — or leave blank and save to remove it."
+                  : "Paste your AWS Bedrock API key (ABSK…). It's stored locally on this machine only — never in the repo, sent only to the AWS Bedrock runtime as a Bearer token."}
+            </p>
+            <input
+              autoFocus
+              type="password"
+              className="group-input modal-input"
+              placeholder="ABSK…"
+              value={keyInput}
+              onChange={(e) => setKeyInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleSaveKey();
+                else if (e.key === "Escape") closeClaudeModal();
+              }}
+            />
+            <label className="modal-field">
+              <span className="modal-field-label">Model</span>
+              <select
+                className="group-input modal-input"
+                value={claude?.model || DEFAULT_MODEL}
+                onChange={(e) => handleSelectModel(e.target.value)}
+              >
+                {CLAUDE_MODELS.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.label} — {m.id}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <div className="modal-actions">
+              <button className="ghost" onClick={closeClaudeModal}>
+                Cancel
+              </button>
+              <button onClick={handleSaveKey}>Save</button>
             </div>
           </div>
         </div>

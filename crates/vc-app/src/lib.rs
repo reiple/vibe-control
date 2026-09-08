@@ -1,13 +1,16 @@
 // Application services + Tauri bridge for vibe-control
 // Orchestrates domain + adapters, exposes Tauri commands.
 
+mod claude;
+
 use std::collections::HashMap;
 use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::{Manager, State};
 
-use vc_core::{Resource, ResourceIdentity, ResourceKind, Result, WorkBundle};
+use claude::{ChatMsg, DEFAULT_MODEL};
+use vc_core::{AppSettings, Resource, ResourceIdentity, ResourceKind, Result, WorkBundle};
 use vc_sessions::{
     ClaudeCodeSessionProvider, CodingSessionProvider, SessionInfo, SessionProviderRegistry,
     SessionSnapshot,
@@ -20,6 +23,9 @@ const MAX_CAPTURED_SESSIONS: usize = 8;
 pub struct AppState {
     store: Box<dyn BundleStore + Send>,
     bundles: Vec<WorkBundle>,
+    /// Persisted app settings (layout + Claude connection). The API key lives
+    /// here, in the OS config dir — never in the repo, never sent to the UI.
+    settings: AppSettings,
     /// bundle id (or app name) → app icon as a `data:image/png;base64,…` URI.
     /// `None` is cached too, so a failed/absent extraction isn't retried on
     /// every request (NFR §9). Process-lifetime only — a restart re-extracts,
@@ -31,10 +37,13 @@ impl AppState {
     pub fn new() -> Result<Self> {
         let store = Box::new(JsonBundleStore::new()?);
         let bundles = store.load()?;
+        // Corrupt settings must not brick the app — fall back to defaults.
+        let settings = store.load_settings().unwrap_or_default();
 
         Ok(Self {
             store,
             bundles,
+            settings,
             icon_cache: HashMap::new(),
         })
     }
@@ -46,6 +55,77 @@ impl AppState {
     pub fn set_bundles(&mut self, bundles: Vec<WorkBundle>) -> Result<()> {
         self.bundles = bundles;
         self.store.save(&self.bundles)
+    }
+
+    /// Resolve the Bedrock bearer token: an explicitly-saved key wins, else the
+    /// `AWS_BEARER_TOKEN_BEDROCK` env var (what Claude Code itself uses), else
+    /// `ANTHROPIC_API_KEY`. GUI launches via LaunchServices don't inherit the
+    /// shell env, so a saved key is the reliable path there. `None` if nothing
+    /// yields a non-blank value.
+    pub fn claude_key(&self) -> Option<String> {
+        self.settings
+            .claude_api_key
+            .clone()
+            .filter(|k| !k.trim().is_empty())
+            .or_else(|| Self::env_nonblank("AWS_BEARER_TOKEN_BEDROCK"))
+            .or_else(|| Self::env_nonblank("ANTHROPIC_API_KEY"))
+    }
+
+    /// The AWS region for the Bedrock endpoint: saved setting → `AWS_REGION`
+    /// env → the app default.
+    pub fn claude_region(&self) -> String {
+        self.settings
+            .claude_region
+            .clone()
+            .filter(|r| !r.trim().is_empty())
+            .or_else(|| Self::env_nonblank("AWS_REGION"))
+            .unwrap_or_else(|| claude::DEFAULT_REGION.to_string())
+    }
+
+    fn env_nonblank(name: &str) -> Option<String> {
+        std::env::var(name).ok().filter(|v| !v.trim().is_empty())
+    }
+
+    /// Where the key came from, for the UI: "settings" | "env" | "none".
+    pub fn key_source(&self) -> &'static str {
+        if self
+            .settings
+            .claude_api_key
+            .as_deref()
+            .is_some_and(|k| !k.trim().is_empty())
+        {
+            "settings"
+        } else if Self::env_nonblank("AWS_BEARER_TOKEN_BEDROCK").is_some()
+            || Self::env_nonblank("ANTHROPIC_API_KEY").is_some()
+        {
+            "env"
+        } else {
+            "none"
+        }
+    }
+
+    pub fn claude_model(&self) -> String {
+        self.settings
+            .claude_model
+            .clone()
+            .filter(|m| !m.trim().is_empty())
+            // Self-heal legacy Anthropic-public ids (e.g. "claude-opus-5")
+            // saved before the Bedrock pivot: they aren't valid Bedrock model
+            // paths. Every Bedrock Anthropic inference-profile id contains
+            // "anthropic.", so anything without it falls back to the default.
+            .filter(|m| m.contains("anthropic."))
+            .unwrap_or_else(|| DEFAULT_MODEL.to_string())
+    }
+
+    /// Save (or, with a blank value, clear) the Claude API key.
+    pub fn set_claude_key(&mut self, key: Option<String>) -> Result<()> {
+        self.settings.claude_api_key = key.filter(|k| !k.trim().is_empty());
+        self.store.save_settings(&self.settings)
+    }
+
+    pub fn set_claude_model(&mut self, model: String) -> Result<()> {
+        self.settings.claude_model = Some(model).filter(|m| !m.trim().is_empty());
+        self.store.save_settings(&self.settings)
     }
 }
 
@@ -357,6 +437,87 @@ fn add_app_resource(
     Ok(app.get_bundles().to_vec())
 }
 
+/// Connection status for the Claude prompt console. Deliberately never carries
+/// the key itself — only whether one is configured and where it came from.
+#[derive(Serialize)]
+pub struct ClaudeStatus {
+    configured: bool,
+    /// "settings" | "env" | "none"
+    source: String,
+    model: String,
+    /// AWS region backing the Bedrock endpoint.
+    region: String,
+}
+
+fn claude_status_of(app: &AppState) -> ClaudeStatus {
+    ClaudeStatus {
+        configured: app.claude_key().is_some(),
+        source: app.key_source().to_string(),
+        model: app.claude_model(),
+        region: app.claude_region(),
+    }
+}
+
+/// Report whether Claude is connected (key present) without revealing the key.
+#[tauri::command]
+fn claude_status(state: State<SharedState>) -> std::result::Result<ClaudeStatus, CommandError> {
+    let app = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    Ok(claude_status_of(&app))
+}
+
+/// Save (or clear, when blank) the Bedrock API key locally. Write-only from
+/// the UI: the value is never read back out.
+#[tauri::command]
+fn set_claude_api_key(
+    state: State<SharedState>,
+    key: String,
+) -> std::result::Result<ClaudeStatus, CommandError> {
+    let mut app = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    app.set_claude_key(Some(key))?;
+    Ok(claude_status_of(&app))
+}
+
+/// Choose which Claude model the console uses.
+#[tauri::command]
+fn set_claude_model(
+    state: State<SharedState>,
+    model: String,
+) -> std::result::Result<ClaudeStatus, CommandError> {
+    let mut app = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    app.set_claude_model(model)?;
+    Ok(claude_status_of(&app))
+}
+
+/// Send the console conversation to Claude and return the reply text. The key
+/// and model are resolved server-side; the lock is released before the network
+/// call so it never blocks other state commands (and can't be held across the
+/// await — a std Mutex guard isn't Send).
+#[tauri::command]
+async fn send_claude_message(
+    state: State<'_, SharedState>,
+    messages: Vec<ChatMsg>,
+) -> std::result::Result<String, CommandError> {
+    let (key, region, model) = {
+        let app = state.lock().map_err(|_| CommandError {
+            message: "state lock poisoned".into(),
+        })?;
+        (app.claude_key(), app.claude_region(), app.claude_model())
+    };
+    let key = key.ok_or_else(|| CommandError {
+        message:
+            "No Bedrock API key configured. Add one in settings or set AWS_BEARER_TOKEN_BEDROCK."
+                .into(),
+    })?;
+    let reply = claude::send_message(&key, &region, &model, &messages).await?;
+    Ok(reply)
+}
+
 fn reopen_resource(resource: &Resource) -> std::result::Result<(), String> {
     // Prefer an explicit reopen hint; fall back to the raw descriptor.
     let target = resource
@@ -532,7 +693,11 @@ pub fn run() {
             get_app_icon,
             create_bundle,
             delete_bundle,
-            add_app_resource
+            add_app_resource,
+            claude_status,
+            set_claude_api_key,
+            set_claude_model,
+            send_claude_message
         ])
         .run(tauri::generate_context!())
         .expect("error while running vibe-control");

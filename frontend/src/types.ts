@@ -57,3 +57,18 @@ export interface RunningApp {
   name: string;
   bundle_id: string | null;
 }
+
+/** One turn of the in-app Claude prompt console. */
+export interface ChatMsg {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Claude connection status — never includes the key itself. */
+export interface ClaudeStatus {
+  configured: boolean;
+  source: "settings" | "env" | "none";
+  model: string;
+  /** AWS region for the Bedrock endpoint (e.g. "ap-northeast-2"). */
+  region: string;
+}
