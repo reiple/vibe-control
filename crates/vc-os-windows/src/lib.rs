@@ -1,6 +1,7 @@
 // Windows adapters for vibe-control.
-// Enumerates running GUI apps (windowed processes via `tasklist /v`) and
-// launches apps / URLs / folders / coding-session terminals via PowerShell.
+// Enumerates user-launched GUI apps (processes owning a visible top-level
+// window, via `Get-Process`), extracts their icons, and launches apps / URLs /
+// folders / coding-session terminals via PowerShell.
 //
 // SECURITY: every untrusted value (app target, URL, folder path, the command a
 // session terminal runs, a focus hint) is passed to PowerShell through an
@@ -23,7 +24,7 @@ use std::process::Command;
 use vc_core::{CoreError, Result};
 
 /// `CREATE_NO_WINDOW` process-creation flag. Without it, every short-lived
-/// `tasklist.exe` / `powershell.exe` we spawn allocates and briefly shows a
+/// `powershell.exe` we spawn allocates and briefly shows a
 /// console window — and because app enumeration polls once a second, that
 /// console flashes on screen continuously. Applied to the OUTER helper process
 /// only; `run_in_terminal`'s inner `Start-Process powershell` still opens its
@@ -34,36 +35,51 @@ const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 #[cfg(target_os = "windows")]
 pub struct WinWindowEnumerator;
 
+/// PowerShell one-liner that lists only the apps the *user* launched: processes
+/// that currently own a VISIBLE top-level window. `MainWindowHandle != 0`
+/// (paired with a non-empty `MainWindowTitle`) is the signal that a real,
+/// on-screen window exists — which excludes background services and the
+/// invisible helper windows (message-only / notification sinks like
+/// `OleMainThreadWndName`, `ATKOSD2`, `AMD:DVR-CapturingWindow`, …) that made
+/// the old `tasklist /v` window-title heuristic leak dozens of background
+/// agents into the list. Each match is emitted as `ProcessName<TAB>FullPath`
+/// (the path is empty when it can't be read, e.g. an elevated process).
+#[cfg(target_os = "windows")]
+const LIST_APPS_SCRIPT: &str = "$ErrorActionPreference='SilentlyContinue'; \
+Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle } | \
+ForEach-Object { $p=''; try { $p=$_.Path } catch {}; ($_.ProcessName + [char]9 + $p) }";
+
 #[cfg(target_os = "windows")]
 impl WinWindowEnumerator {
-    /// Names (without the `.exe` suffix) of running apps that own a window.
+    /// Names of user-launched apps that currently own a visible window.
     pub fn list_running() -> Result<Vec<String>> {
-        Ok(Self::windowed_process_exes()
+        Ok(Self::visible_window_apps()
             .into_iter()
-            .map(|exe| display_name(&exe))
+            .map(|(name, _)| name)
             .collect())
     }
 
-    /// Running windowed apps as `(display name, launch target)`. On Windows the
-    /// launch target is the executable name (e.g. `chrome.exe`), which PowerShell
-    /// `Start-Process` resolves via the App Paths registry / PATH. There is no
-    /// stable "bundle identifier" equivalent, so the target doubles as the id.
+    /// User-launched windowed apps as `(display name, launch target)`. The
+    /// launch target is the full executable path when we can read it (which
+    /// makes both re-launch via `Start-Process` and icon extraction reliable),
+    /// falling back to the bare `name.exe` — which `Start-Process` resolves via
+    /// the App Paths registry / PATH — when the path is unavailable. There is no
+    /// stable "bundle identifier" on Windows, so the target doubles as the id.
     pub fn list_running_apps() -> Result<Vec<(String, Option<String>)>> {
-        Ok(Self::windowed_process_exes()
+        Ok(Self::visible_window_apps()
             .into_iter()
-            .map(|exe| (display_name(&exe), Some(exe)))
+            .map(|(name, target)| (name, Some(target)))
             .collect())
     }
 
-    /// Executable names of processes that currently own a top-level window.
-    ///
-    /// We use `tasklist /v` (verbose) and keep only rows whose Window Title is a
-    /// real title (not `N/A` / empty), which approximates macOS's "regular app"
-    /// filter and keeps background/service processes (svchost.exe, RuntimeBroker,
-    /// …) out of the list. Any failure yields an empty vec (never a hard error).
-    fn windowed_process_exes() -> Vec<String> {
-        let output = Command::new("tasklist.exe")
-            .args(["/v", "/fo", "csv", "/nh"])
+    /// Enumerate visible-window processes as `(display name, launch target)`,
+    /// de-duplicated by name (an app with several windowed processes — e.g.
+    /// Chrome — appears once) and sorted case-insensitively for a stable list.
+    /// Any failure (missing PowerShell, non-zero exit) yields an empty vec so
+    /// capture never fails hard.
+    fn visible_window_apps() -> Vec<(String, String)> {
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", LIST_APPS_SCRIPT])
             .creation_flags(CREATE_NO_WINDOW)
             .output();
         let output = match output {
@@ -71,59 +87,164 @@ impl WinWindowEnumerator {
             _ => return Vec::new(),
         };
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let mut names: Vec<String> = stdout.lines().filter_map(parse_windowed_row).collect();
-        names.sort();
-        names.dedup();
-        names
+        let mut seen = std::collections::HashSet::new();
+        let mut apps: Vec<(String, String)> = Vec::new();
+        for line in stdout.lines() {
+            let line = line.trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut parts = line.splitn(2, '\t');
+            let name = parts.next().unwrap_or("").trim();
+            let path = parts.next().unwrap_or("").trim();
+            // Skip blanks and collapse repeats (dedup on lowercased name).
+            if name.is_empty() || !seen.insert(name.to_ascii_lowercase()) {
+                continue;
+            }
+            let target = if path.is_empty() {
+                format!("{name}.exe")
+            } else {
+                path.to_string()
+            };
+            apps.push((name.to_string(), target));
+        }
+        apps.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+        apps
     }
 }
 
-/// Parse one `tasklist /v /fo csv /nh` row, returning the image name only for
-/// rows that own a real window. Columns (verbose): Image Name, PID, Session
-/// Name, Session#, Mem Usage, Status, User Name, CPU Time, Window Title.
 #[cfg(target_os = "windows")]
-fn parse_windowed_row(line: &str) -> Option<String> {
-    let fields = split_tasklist_csv(line);
-    if fields.len() < 9 {
-        return None;
-    }
-    let image = fields[0].trim();
-    let title = fields[8].trim();
-    if image.is_empty() || image.eq_ignore_ascii_case("Image Name") {
-        return None; // header or blank
-    }
-    // Background/service processes report "N/A" (or empty) as their window title.
-    if title.is_empty() || title.eq_ignore_ascii_case("N/A") {
-        return None;
-    }
-    Some(image.to_string())
-}
+pub struct WinIconReader;
 
-/// Split a `tasklist /fo csv` line whose every field is wrapped in double
-/// quotes. Splitting on the literal `","` delimiter (then stripping the leading
-/// and trailing quote) preserves commas *inside* a field — critical because the
-/// Mem Usage column is formatted like `"12,345 K"`, which a naive `split(',')`
-/// would shred, misaligning every later column.
+/// PowerShell + a small C# helper (compiled on demand via `Add-Type`) that
+/// extracts an executable's shell icon and returns it as base64 PNG. The
+/// untrusted target is read from `$env:VC_ICON_TARGET` — never the command line
+/// (see the module SECURITY note). It first resolves the target to a real file
+/// path (using it directly when it already is one, else looking up a running
+/// process of that name), then pulls the 256px "jumbo" shell icon, degrading to
+/// the 48px "extra-large" list icon and finally the 32px associated icon so
+/// every app yields *something*. Emits nothing (and exits non-zero) on failure.
 #[cfg(target_os = "windows")]
-fn split_tasklist_csv(line: &str) -> Vec<String> {
-    let trimmed = line.trim();
-    let inner = trimmed
-        .strip_prefix('"')
-        .unwrap_or(trimmed)
-        .strip_suffix('"')
-        .unwrap_or(trimmed);
-    inner.split("\",\"").map(|s| s.to_string()).collect()
+const ICON_SCRIPT: &str = r#"$ErrorActionPreference='SilentlyContinue'
+$t = $env:VC_ICON_TARGET
+if (-not (Test-Path -LiteralPath $t -PathType Leaf)) {
+  $base = [System.IO.Path]::GetFileNameWithoutExtension($t)
+  $proc = Get-Process -Name $base -ErrorAction SilentlyContinue | Where-Object { $_.Path } | Select-Object -First 1
+  if ($proc) { $t = $proc.Path }
 }
+if (-not (Test-Path -LiteralPath $t -PathType Leaf)) { exit 1 }
+Add-Type -ReferencedAssemblies System.Drawing @"
+using System;
+using System.Drawing;
+using System.Runtime.InteropServices;
+public static class IconX {
+  [StructLayout(LayoutKind.Sequential, CharSet=CharSet.Auto)]
+  struct SHFILEINFO { public IntPtr hIcon; public int iIcon; public uint dwAttributes;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=260)] public string szDisplayName;
+    [MarshalAs(UnmanagedType.ByValTStr, SizeConst=80)]  public string szTypeName; }
+  [DllImport("shell32.dll", CharSet=CharSet.Auto)]
+  static extern IntPtr SHGetFileInfo(string pszPath, uint attrs, ref SHFILEINFO psfi, uint cb, uint flags);
+  [DllImport("shell32.dll")]
+  static extern int SHGetImageList(int iImageList, ref Guid riid, out IImageList ppv);
+  [DllImport("user32.dll")]
+  static extern bool DestroyIcon(IntPtr hIcon);
+  [ComImport, Guid("46EB5926-582E-4017-9FDF-E8998DAA0950"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+  interface IImageList {
+    int Add(IntPtr i, IntPtr m, ref int pi);
+    int ReplaceIcon(int i, IntPtr icon, ref int pi);
+    int SetOverlayImage(int iImage, int iOverlay);
+    int Replace(int i, IntPtr image, IntPtr mask);
+    int AddMasked(IntPtr image, int mask, ref int pi);
+    int Draw(IntPtr pimldp);
+    int Remove(int i);
+    int GetIcon(int i, int flags, ref IntPtr picon);
+  }
+  const uint SHGFI_SYSICONINDEX = 0x4000;
+  const int ILD_TRANSPARENT = 0x1;
+  static Bitmap FromList(string path, int shil) {
+    var fi = new SHFILEINFO();
+    SHGetFileInfo(path, 0, ref fi, (uint)Marshal.SizeOf(fi), SHGFI_SYSICONINDEX);
+    var guid = new Guid("46EB5926-582E-4017-9FDF-E8998DAA0950");
+    IImageList list;
+    if (SHGetImageList(shil, ref guid, out list) != 0 || list == null) return null;
+    IntPtr hicon = IntPtr.Zero;
+    if (list.GetIcon(fi.iIcon, ILD_TRANSPARENT, ref hicon) != 0 || hicon == IntPtr.Zero) return null;
+    try { using (var ico = Icon.FromHandle(hicon)) { return ico.ToBitmap(); } }
+    finally { DestroyIcon(hicon); }
+  }
+  // Crop fully-transparent margins. The jumbo (256px) image list parks a small
+  // glyph in the TOP-LEFT of an otherwise-empty 256 canvas for apps that ship
+  // no 256px icon (many WinUI3 apps, e.g. PowerToys); trimming makes that glyph
+  // fill the UI box instead of hugging the corner. A real 256px icon has no
+  // transparent margin and is returned unchanged. Null if wholly transparent.
+  static Bitmap Trim(Bitmap b) {
+    int minX=b.Width, minY=b.Height, maxX=-1, maxY=-1;
+    for (int y=0; y<b.Height; y++)
+      for (int x=0; x<b.Width; x++)
+        if (b.GetPixel(x,y).A > 0) {
+          if (x<minX) minX=x; if (x>maxX) maxX=x;
+          if (y<minY) minY=y; if (y>maxY) maxY=y;
+        }
+    if (maxX < minX) return null;
+    var rect = new Rectangle(minX, minY, maxX-minX+1, maxY-minY+1);
+    if (rect.Width==b.Width && rect.Height==b.Height) return b;
+    var outb = b.Clone(rect, b.PixelFormat);
+    b.Dispose();
+    return outb;
+  }
+  public static string PngBase64(string path) {
+    Bitmap bmp = null;
+    try { bmp = FromList(path, 0x4); } catch {}          // SHIL_JUMBO (256px)
+    if (bmp == null) { try { bmp = FromList(path, 0x2); } catch {} } // SHIL_EXTRALARGE (48px)
+    if (bmp == null) {
+      var ico = Icon.ExtractAssociatedIcon(path);
+      if (ico == null) return null;
+      bmp = ico.ToBitmap();
+    }
+    bmp = Trim(bmp);
+    if (bmp == null) return null;
+    using (var ms = new System.IO.MemoryStream()) {
+      bmp.Save(ms, System.Drawing.Imaging.ImageFormat.Png);
+      bmp.Dispose();
+      return Convert.ToBase64String(ms.ToArray());
+    }
+  }
+}
+"@
+$b64 = [IconX]::PngBase64($t)
+if ([string]::IsNullOrEmpty($b64)) { exit 1 }
+Write-Output $b64"#;
 
-/// Drop a trailing `.exe` (case-insensitive) for a friendlier display name;
-/// the launch target keeps the full executable name.
 #[cfg(target_os = "windows")]
-fn display_name(exe: &str) -> String {
-    let lower = exe.to_ascii_lowercase();
-    if let Some(stripped) = lower.strip_suffix(".exe") {
-        exe[..stripped.len()].to_string()
-    } else {
-        exe.to_string()
+impl WinIconReader {
+    /// An app's icon as a ready-to-use `data:image/png;base64,…` URI, or `None`
+    /// when the executable / its icon can't be found. `target` is the value
+    /// `list_running_apps` produced: a full exe path (used directly) or a bare
+    /// `name.exe` (resolved to a running process's path).
+    pub fn icon_data_uri(target: &str) -> Option<String> {
+        let b64 = Self::icon_png_base64(target)?;
+        Some(format!("data:image/png;base64,{b64}"))
+    }
+
+    /// Run `ICON_SCRIPT` in Windows PowerShell (`powershell.exe` ships
+    /// System.Drawing via .NET Framework) and return the raw base64 PNG, or
+    /// `None` on any failure. The target is passed through an env var.
+    fn icon_png_base64(target: &str) -> Option<String> {
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", ICON_SCRIPT])
+            .env("VC_ICON_TARGET", target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .ok()?;
+        if !output.status.success() {
+            return None;
+        }
+        let b64 = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if b64.is_empty() {
+            None
+        } else {
+            Some(b64)
+        }
     }
 }
 

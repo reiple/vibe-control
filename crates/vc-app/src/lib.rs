@@ -360,13 +360,18 @@ fn get_app_icon(
     Ok(icon)
 }
 
-/// Extract a macOS app icon as a base64 PNG data URI; `None` elsewhere.
+/// Extract a native app icon as a base64 PNG data URI (macOS + Windows);
+/// `None` on other platforms or when no icon is available.
 fn extract_app_icon(target: &str) -> Option<String> {
     #[cfg(target_os = "macos")]
     {
         vc_os_macos::MacIconReader::icon_data_uri(target)
     }
-    #[cfg(not(target_os = "macos"))]
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinIconReader::icon_data_uri(target)
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = target;
         None
