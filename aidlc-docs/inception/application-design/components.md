@@ -6,6 +6,8 @@
 
 > 본 문서는 컴포넌트의 **책임과 인터페이스(포트)** 를 정의합니다. 메서드 시그니처는 `component-methods.md`, 오케스트레이션은 `services.md`, 의존 관계는 `component-dependency.md` 참조. 상세 비즈니스 규칙은 CONSTRUCTION의 Functional Design에서 정의합니다.
 
+> ⚠ **구현 현황(2026-09-08 정합화)** — 이 문서는 **원 설계 의도**다. 실제 코드는 여러 지점에서 다르다: 포트 P1–P8은 vc-core에 트레이트로 정의되지 않았고(P4는 vc-sessions, P5는 vc-store에만; OS 포트는 트레이트 없이 구체 struct), 서비스 S1–S7·`TauriCommandBridge`·`RefreshScheduler`는 별도 struct가 아니라 `AppState`+Tauri 커맨드로 평면화되어 있으며, 어댑터 이름(`*Launcher`/`*IconReader`)·플랫폼 열거 방식도 다르다. 확인된 차이 전량과 백로그는 **[`known-deviations.md`](../../known-deviations.md)** 참조.
+
 ---
 
 ## 계층 개요

@@ -6,6 +6,8 @@
 
 > 서비스는 어댑터 구체 타입에 의존하지 않고 **포트 트레이트**에 의존(DI). 테스트 시 모의 포트 주입(통합 테스트 계획과 정합).
 
+> ⚠ **구현 현황(2026-09-08 정합화)** — 아래 S1–S7 서비스·`TauriCommandBridge`·`RefreshScheduler`·이벤트(`status_delta`/`activation_report`)·SEQ 시퀀스는 **원 설계 의도**이며 **코드에는 struct로 존재하지 않는다**. 실제로는 `vc-app`의 `AppState` + 17개 `#[tauri::command]` 핸들러가 도메인/어댑터를 직접 호출하고, 상태 갱신은 이벤트 구독이 아니라 프론트의 1초 폴링으로 이뤄진다. 차이·백로그: **[`known-deviations.md#A-아키텍처-수준-이탈`](../../known-deviations.md)**.
+
 ---
 
 ## S1. RunningInventoryService
