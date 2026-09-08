@@ -1,7 +1,17 @@
 // Windows adapters for vibe-control.
-// Enumerates user-launched GUI apps (processes owning a visible top-level
+// Enumerates the user-launched GUI apps (processes owning a visible top-level
 // window, via `Get-Process`), extracts their icons, and launches apps / URLs /
-// folders / coding-session terminals via PowerShell.
+// folders / coding-session terminals via PowerShell. Launching an app first
+// tries to FOCUS an already-running instance's window (so double-click brings
+// the existing window to the front instead of opening a duplicate) and only
+// starts a new process when none is running — see `WinLauncher::open_app`.
+//
+// WHY NOT `tasklist /v`: verbose `tasklist` fetches each process's window title
+// by pumping messages to the window, so a single unresponsive app makes the
+// whole call hang for minutes. Because enumeration runs on the app's 1s poll
+// loop, that froze the UI ("not responding") and left the running-apps list
+// empty. `Get-Process` reads `MainWindowTitle` from the process table without
+// messaging any window, so it never hangs and returns in ~1s.
 //
 // SECURITY: every untrusted value (app target, URL, folder path, the command a
 // session terminal runs, a focus hint) is passed to PowerShell through an
@@ -24,9 +34,9 @@ use std::process::Command;
 use vc_core::{CoreError, Result};
 
 /// `CREATE_NO_WINDOW` process-creation flag. Without it, every short-lived
-/// `powershell.exe` we spawn allocates and briefly shows a
-/// console window — and because app enumeration polls once a second, that
-/// console flashes on screen continuously. Applied to the OUTER helper process
+/// `powershell.exe` we spawn allocates and briefly shows a console window — and
+/// because app enumeration polls once a second, that console would flash on
+/// screen continuously (stealing focus). Applied to the OUTER helper process
 /// only; `run_in_terminal`'s inner `Start-Process powershell` still opens its
 /// own intended visible window.
 #[cfg(target_os = "windows")]
@@ -108,7 +118,7 @@ impl WinWindowEnumerator {
             };
             apps.push((name.to_string(), target));
         }
-        apps.sort_by(|a, b| a.0.to_ascii_lowercase().cmp(&b.0.to_ascii_lowercase()));
+        apps.sort_by_key(|a| a.0.to_ascii_lowercase());
         apps
     }
 }
@@ -269,9 +279,64 @@ pub struct WinLauncher;
 
 #[cfg(target_os = "windows")]
 impl WinLauncher {
-    /// Launch (or focus) an application by executable name or path.
+    /// Launch an application, OR — if a windowed instance is already running —
+    /// bring that existing window to the front instead of starting a second
+    /// copy (FR-2.6 / §13.4: "bring to front, launching it if closed").
+    ///
+    /// WHY THIS EXISTS: `Start-Process` unconditionally spawns a NEW process, so
+    /// double-clicking a running app used to open a duplicate window. Unlike
+    /// macOS `open` (which naturally re-activates a running app), Windows has no
+    /// single call for "focus if running, else launch", so we do it in two
+    /// steps: try to focus an existing window first, and only launch when none
+    /// is found.
     pub fn open_app(target: &str) -> Result<()> {
+        if Self::focus_existing_window(target) {
+            return Ok(());
+        }
         Self::start_process(target)
+    }
+
+    /// Focus an already-running instance's main window. Returns `true` when a
+    /// matching windowed process was found (so the caller must NOT launch a
+    /// duplicate), `false` when none is running.
+    ///
+    /// A process matches by executable path (what enumeration hands back as the
+    /// launch target) or, as a fallback, by process name, and must own a real
+    /// main window (`MainWindowHandle != 0`). We restore (un-minimize) and
+    /// foreground it via Win32 `ShowWindowAsync` + `SetForegroundWindow` —
+    /// compiled inline with `Add-Type`, present on every Windows install, so no
+    /// native crate is needed — reinforced by `WScript.Shell.AppActivate`
+    /// (which Windows treats permissively for activation). The focus calls are
+    /// best-effort and wrapped in a `try`: once a windowed instance is found we
+    /// report `ACTIVATED` regardless, because "an instance exists" is what
+    /// decides not to launch a duplicate; a failed focus just leaves the
+    /// existing window where it was rather than spawning a new one. The target
+    /// is passed via an env var, never the command line (see module SECURITY).
+    fn focus_existing_window(target: &str) -> bool {
+        const SCRIPT: &str = "\
+$target = $env:VC_TARGET; \
+$base = [System.IO.Path]::GetFileNameWithoutExtension($target); \
+$proc = Get-Process | Where-Object { $_.MainWindowHandle -ne 0 -and ($_.ProcessName -eq $base -or ($(try { $_.Path } catch { $null }) -eq $target)) } | Select-Object -First 1; \
+if ($proc) { \
+    try { \
+        Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class VcWin { [DllImport(\"user32.dll\")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport(\"user32.dll\")] public static extern bool ShowWindowAsync(IntPtr h, int n); }'; \
+        [void][VcWin]::ShowWindowAsync($proc.MainWindowHandle, 9); \
+        $ws = New-Object -ComObject WScript.Shell; \
+        [void]$ws.AppActivate($proc.Id); \
+        [void][VcWin]::SetForegroundWindow($proc.MainWindowHandle); \
+    } catch {} \
+    'ACTIVATED'; \
+} else { 'NOTFOUND'; }";
+        let output = Command::new("powershell.exe")
+            .args(["-NoProfile", "-NonInteractive", "-Command", SCRIPT])
+            .env("VC_TARGET", target)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        match output {
+            Ok(o) => String::from_utf8_lossy(&o.stdout).contains("ACTIVATED"),
+            // Couldn't even run PowerShell — fall back to launching.
+            Err(_) => false,
+        }
     }
 
     /// Open a file or folder in Explorer / its default handler.
