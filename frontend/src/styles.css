@@ -200,18 +200,18 @@ body { margin: 0; background: var(--body); }
 
 /* Fallback "blank pad" when an app has no icon yet. */
 .app-dot {
-  width: 12px;
-  height: 12px;
-  border-radius: 3px;
+  width: 18px;
+  height: 18px;
+  border-radius: 4px;
   background: var(--pad);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.12);
   flex-shrink: 0;
 }
 
-/* High-res app icon (§13.5): fixed box so rows never reflow. */
+/* High-res app icon (§13.5): fixed box so rows never reflow. 1.5× sizing. */
 .app-icon {
-  width: 22px;
-  height: 22px;
+  width: 33px;
+  height: 33px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -224,7 +224,7 @@ body { margin: 0; background: var(--body); }
   border-radius: 4px;
   image-rendering: auto;
 }
-.app-icon--sm { width: 18px; height: 18px; }
+.app-icon--sm { width: 27px; height: 27px; }
 .running-name {
   font-family: var(--grotesk);
   font-size: 13px;

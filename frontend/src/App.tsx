@@ -127,7 +127,8 @@ function SessionStatus({
         if (!cancelled) setSnap(s);
       })
       .catch(() => {
-        if (!cancelled) setSnap(null);
+        // Transient read failure during a 1s poll — keep the last good
+        // snapshot instead of blanking the status every tick.
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -188,17 +189,28 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  const refreshRunning = async () => {
-    setRefreshing(true);
+  const refreshRunning = async (silent = false) => {
+    if (!silent) setRefreshing(true);
     setSessionNonce((n) => n + 1); // also refresh inline coding-session statuses
     try {
       setRunningApps(await listRunningApps());
     } catch (e) {
-      setError(String(e));
+      // A background poll shouldn't flash the error banner every tick — only
+      // surface failures from an explicit refresh.
+      if (!silent) setError(String(e));
     } finally {
-      setRefreshing(false);
+      if (!silent) setRefreshing(false);
     }
   };
+
+  // Live status: poll running apps + coding-session snapshots every second so
+  // the left panel and each group's session status stay current without the
+  // user pressing ↻. Silent (no spinner / no error banner) to avoid flicker.
+  useEffect(() => {
+    const id = setInterval(() => refreshRunning(true), 1000);
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const filteredApps = runningApps.filter((a) =>
     a.name.toLowerCase().includes(filter.trim().toLowerCase())
@@ -301,7 +313,7 @@ export default function App() {
           <h1>Running Apps</h1>
           <button
             className="ghost icon"
-            onClick={refreshRunning}
+            onClick={() => refreshRunning()}
             disabled={refreshing}
             title="Refresh"
           >
