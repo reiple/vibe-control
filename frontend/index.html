@@ -5,7 +5,13 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>vibe-control</title>
     <!-- Paint the EP-133 chassis colour instantly, before the JS bundle + CSS
-         load, so cold start shows the themed grey rather than a white flash. -->
+         load, so cold start shows the themed grey rather than a white flash.
+         The boot splash itself is rendered by React (see App.tsx): WebView2 on
+         Windows can rasterise the very first *static* paint at the monitor's
+         device scale before syncing to the window DPI, which zooms static
+         markup; React content paints after that correction, so the splash card
+         lands correctly centred. Nothing is interactive during this pre-mount
+         grey, so no input can leak through before React's overlay takes over. -->
     <style>
       html,
       body {
