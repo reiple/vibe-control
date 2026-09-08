@@ -16,9 +16,20 @@
 // activation is advisory and always returns Ok.
 
 #[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
+#[cfg(target_os = "windows")]
 use std::process::Command;
 #[cfg(target_os = "windows")]
 use vc_core::{CoreError, Result};
+
+/// `CREATE_NO_WINDOW` process-creation flag. Without it, every short-lived
+/// `tasklist.exe` / `powershell.exe` we spawn allocates and briefly shows a
+/// console window — and because app enumeration polls once a second, that
+/// console flashes on screen continuously. Applied to the OUTER helper process
+/// only; `run_in_terminal`'s inner `Start-Process powershell` still opens its
+/// own intended visible window.
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
 #[cfg(target_os = "windows")]
 pub struct WinWindowEnumerator;
@@ -53,6 +64,7 @@ impl WinWindowEnumerator {
     fn windowed_process_exes() -> Vec<String> {
         let output = Command::new("tasklist.exe")
             .args(["/v", "/fo", "csv", "/nh"])
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         let output = match output {
             Ok(o) if o.status.success() => o,
@@ -166,6 +178,7 @@ impl WinLauncher {
                 "Start-Process -FilePath $env:VC_TARGET -ErrorAction Stop",
             ])
             .env("VC_TARGET", target)
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| CoreError::Internal(format!("powershell Start-Process failed: {e}")))?;
         if !output.status.success() {
@@ -198,6 +211,7 @@ impl WinLauncher {
                  '-NoExit','-NoProfile','-Command','Invoke-Expression $env:VC_CMD'",
             ])
             .env("VC_CMD", command)
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .map_err(|e| CoreError::Internal(format!("failed to open terminal: {e}")))?;
         if !output.status.success() {
@@ -234,6 +248,7 @@ impl WinLauncher {
                  [void]$ws.AppActivate($env:VC_HINT)",
             ])
             .env("VC_HINT", hint)
+            .creation_flags(CREATE_NO_WINDOW)
             .output();
         Ok(())
     }
