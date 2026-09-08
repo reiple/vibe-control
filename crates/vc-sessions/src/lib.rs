@@ -194,7 +194,10 @@ pub fn parse_session_bytes(raw: &[u8]) -> SessionSnapshot {
 
     // Completion signal derived from the last meaningful event.
     let mut last_completion = SessionCompletion::Unknown;
-    let mut last_assistant_text: Option<String> = None;
+    // The user's most recent real prompt. This is what we surface as the
+    // session's "last question" line — what *you* last asked — independent of
+    // whether the agent is currently working or waiting.
+    let mut last_user_text: Option<String> = None;
 
     for line in text.lines() {
         let line = line.trim();
@@ -233,7 +236,7 @@ pub fn parse_session_bytes(raw: &[u8]) -> SessionSnapshot {
                 }
                 push_turn(&mut turns, "user", &text);
                 last_completion = SessionCompletion::NotWaiting;
-                last_assistant_text = None;
+                last_user_text = Some(text);
             }
             "assistant" => {
                 let text = extract_text(content);
@@ -244,7 +247,6 @@ pub fn parse_session_bytes(raw: &[u8]) -> SessionSnapshot {
                     push_turn(&mut turns, "assistant", &text);
                     // Assistant produced a reply → ball is in the user's court.
                     last_completion = SessionCompletion::Waiting;
-                    last_assistant_text = Some(text);
                 }
             }
             _ => {}
@@ -256,11 +258,10 @@ pub fn parse_session_bytes(raw: &[u8]) -> SessionSnapshot {
     }
 
     let available = !turns.is_empty();
-    let last_question = if matches!(last_completion, SessionCompletion::Waiting) {
-        last_assistant_text.as_deref().and_then(extract_question)
-    } else {
-        None
-    };
+    // Surface the user's most recent prompt (truncated for the one-line UI),
+    // shown whenever the session has one — NOT gated on completion state — so
+    // "your last question" stays visible even while the agent is still working.
+    let last_question = last_user_text.map(|t| truncate(t.trim(), 500));
 
     SessionSnapshot {
         conversation: turns,
@@ -299,23 +300,6 @@ fn extract_text(content: Option<&Value>) -> String {
 fn ends_with_tool_use(content: Option<&Value>) -> bool {
     matches!(content, Some(Value::Array(blocks))
         if blocks.last().and_then(|b| b.get("type")).and_then(Value::as_str) == Some("tool_use"))
-}
-
-/// Pull a question out of an assistant reply: the last line/sentence containing
-/// a question mark. Returns None if the reply isn't question-like.
-fn extract_question(text: &str) -> Option<String> {
-    let trimmed = text.trim();
-    if !trimmed.contains('?') && !trimmed.contains('？') {
-        return None;
-    }
-    // Prefer the last non-empty line that contains a question mark.
-    let candidate = trimmed
-        .lines()
-        .rev()
-        .map(str::trim)
-        .find(|l| l.contains('?') || l.contains('？'))
-        .unwrap_or(trimmed);
-    Some(truncate(candidate, 500))
 }
 
 fn push_turn(turns: &mut Vec<Turn>, role: &str, content: &str) {
@@ -388,7 +372,9 @@ mod tests {
         assert_eq!(snap.conversation[1].role, "assistant");
         // Ends on an assistant reply → waiting for the user.
         assert_eq!(snap.completion, SessionCompletion::Waiting);
-        assert!(snap.last_question.is_some());
+        // last_question surfaces the USER's most recent prompt (not the
+        // assistant's question).
+        assert_eq!(snap.last_question.as_deref(), Some("안녕 이거 고쳐줘"));
     }
 
     #[test]
@@ -407,6 +393,9 @@ mod tests {
         assert_eq!(snap.conversation[0].role, "user");
         // Last event is a tool_result feeding the assistant → still working.
         assert_eq!(snap.completion, SessionCompletion::NotWaiting);
+        // …yet your last prompt is still surfaced (the bug: it used to blank
+        // out whenever the session wasn't in the Waiting state).
+        assert_eq!(snap.last_question.as_deref(), Some("start"));
     }
 
     #[test]
