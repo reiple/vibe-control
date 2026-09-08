@@ -38,6 +38,43 @@ fn run_jxa(script: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Coarse, machine-level Claude Code liveness probe (U2 FR-2.5 / NFR-3.3).
+///
+/// Read-only: shells out to `ps -A -o comm=` and checks whether any running
+/// process's command basename is `claude`. Returns `Some(true)`/`Some(false)`
+/// on a successful query, and `None` when the probe itself fails (non-zero exit
+/// or unreadable output) so the caller can degrade that session to `Unknown`
+/// rather than falsely reporting `Inactive`. This is intentionally coarse (any
+/// `claude` process on the machine, not a per-session PID): a reliable
+/// session↔PID mapping isn't available cross-platform, and `Some(true)` merely
+/// preserves the running sub-states while `derive_run_state` splits
+/// Working/Idle by log recency (design decision FD-Q1=A / FD-Q2=A).
+#[cfg(target_os = "macos")]
+pub fn claude_process_running() -> Option<bool> {
+    let output = Command::new("ps")
+        .arg("-A")
+        .arg("-o")
+        .arg("comm=")
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Some(stdout.lines().any(|line| {
+        let cmd = line.trim();
+        if cmd.is_empty() {
+            return false;
+        }
+        // `comm=` yields the full command path; match on its basename.
+        let base = std::path::Path::new(cmd)
+            .file_name()
+            .and_then(|s| s.to_str())
+            .unwrap_or(cmd);
+        base == "claude"
+    }))
+}
+
 #[cfg(target_os = "macos")]
 pub struct MacWindowEnumerator;
 

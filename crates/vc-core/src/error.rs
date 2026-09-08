@@ -20,6 +20,16 @@ pub enum CoreError {
     #[error("Parse error: {0}")]
     ParseError(String),
 
+    /// Claude Code is not installed / not discoverable on this machine.
+    /// Status queries degrade gracefully; command delivery (U3) fails with this.
+    #[error("Claude Code is not installed")]
+    ClaudeNotInstalled,
+
+    /// The target session is currently busy doing other work — command
+    /// delivery must not interrupt/inject into a working session (§11.8).
+    #[error("Session is busy: {0}")]
+    Busy(String),
+
     #[error("Internal error: {0}")]
     Internal(String),
 }

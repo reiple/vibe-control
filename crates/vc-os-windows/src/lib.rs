@@ -42,6 +42,30 @@ use vc_core::{CoreError, Result};
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Coarse, machine-level Claude Code liveness probe (U2 FR-2.5 / NFR-3.3).
+///
+/// Read-only: shells out to `tasklist` (CSV, no header) and checks whether any
+/// running image name contains `claude`. Returns `Some(true)`/`Some(false)` on
+/// a successful query, and `None` when the probe itself fails so the caller can
+/// degrade that session to `Unknown` rather than falsely reporting `Inactive`.
+/// Uses `CREATE_NO_WINDOW` so the short-lived query never flashes a console
+/// window on the 1s status poll (same rationale as enumeration). Intentionally
+/// coarse (any `claude` process, not a per-session PID) — see the macOS
+/// counterpart for the design rationale (FD-Q1=A / FD-Q2=A).
+#[cfg(target_os = "windows")]
+pub fn claude_process_running() -> Option<bool> {
+    let output = Command::new("tasklist.exe")
+        .args(["/FO", "CSV", "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+    Some(stdout.lines().any(|line| line.contains("claude")))
+}
+
 #[cfg(target_os = "windows")]
 pub struct WinWindowEnumerator;
 
