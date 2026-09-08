@@ -150,3 +150,11 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - [x] **Verified**: `cargo build -p vc-app` + `cargo clippy --workspace` 0 warnings; harness (`list_running_windows`) → Chrome=2, msedge=2, KakaoTalk=2 (main+chat, focused dot correct), WindowsTerminal=2, mspaint/Code/Obsidian=1 (no regression), explorer Program Manager excluded as tool window; live app screenshot → KakaoTalk/msedge `▾ 2` expand to per-window sub-rows with dots, pad numbering counts app rows only.
 - [x] **Browser TABS remain OUT of scope** (`#B3`): windows now split; multiple tabs in one window still show as one (separate BrowserTabReader work).
 - [x] Updated `known-deviations.md#G1` (resolved), `aidlc-state.md`, `audit.md`; deleted `diag_windows.ps1`.
+
+### ✅ DONE (2026-09-08): 개발 실행 도구 이탈 수정 — `tauri dev`가 프론트+Rust 동시 실행
+**Outcome**: 문서의 개발 실행 절차(`cargo tauri dev`)가 그대로 실패하던 문제를 해결. 근본 원인은 `tauri.conf.json`의 `beforeDevCommand` 상대 경로(`../../frontend`)가 실제 실행 cwd(`crates/`)와 어긋나 vite 서버가 안 뜬 것. 상세·검증은 `known-deviations.md#H1`.
+- [x] `beforeDevCommand` `../../frontend` → `../frontend` 수정 (`frontendDist`/`devUrl` 무변경 → 프로덕션 임베드 빌드 무영향).
+- [x] Tauri 프리빌트 CLI(`@tauri-apps/cli`)를 `frontend` devDependency로 설치(문서의 `cargo install tauri-cli`는 미검증이라 프리빌트를 정본화).
+- [x] **검증**: 오버라이드 없이 `tauri dev` → vite `:1420` LISTENING + `vibe-control.exe` 동시 기동 실측(Windows). 핫리로드 정상.
+- [x] `build-instructions.md` 개발 실행 절차 갱신 + `known-deviations.md#H` 이탈 기록 + `audit.md` 로그.
+- [ ] (미검증) cargo 플러그인 `cargo tauri dev`는 cwd가 달라 `../frontend`와 어긋날 여지 — 도입 시 재확인.

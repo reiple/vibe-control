@@ -37,19 +37,25 @@ cargo build -p vc-app --release
 ## Tauri 앱 실행 (U7 프론트엔드 포함)
 
 ### 전제조건
-- Node.js + npm, `cargo install tauri-cli --version "^2.0"`
+- Node.js + npm
+- Tauri CLI. 아래 둘 중 하나:
+  - **(검증됨) npm 프리빌트 CLI** — `npm --prefix frontend install -D @tauri-apps/cli`
+  - (대안, 미검증) cargo 플러그인 — `cargo install tauri-cli --version "^2.0"` (소스 컴파일, 오래 걸림)
 
 ### 프론트엔드 의존성 설치
 ```bash
 npm --prefix frontend install
 ```
 
-### 개발 실행 (핫리로드)
+### 개발 실행 (핫리로드) — vite 개발 서버 + Rust 앱 동시 실행
 ```bash
 cd crates/vc-app
-cargo tauri dev
+../../frontend/node_modules/.bin/tauri dev   # npm 프리빌트 CLI (검증됨)
 ```
-- vite 개발 서버(:1420) 자동 기동 + 앱 창 실행
+- vite 개발 서버(:1420) 자동 기동 + 앱 창 실행. 프론트/Rust 모두 핫리로드.
+- **주의**: CLI는 `frontend/node_modules`에 설치되므로 `crates/vc-app`에서 `npx tauri`로는 찾지 못한다 — 위처럼 바이너리 경로를 직접 지정한다.
+- `tauri.conf.json`의 `beforeDevCommand`가 vite 서버를 띄운다. 이 경로 수정 내역은 `known-deviations.md#H1` 참조.
+- (대안) cargo 플러그인 설치 시: `cargo tauri dev` — 단, 이 워크스페이스에서는 미검증(아래 이탈 참조).
 
 ### 프로덕션 번들 빌드
 ```bash
