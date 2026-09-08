@@ -9,8 +9,6 @@ import type {
 } from "./types";
 import {
   getBundles,
-  saveBundles,
-  captureCurrent,
   getSessionSnapshot,
   restoreBundle,
   resumeCodingSession,
@@ -166,6 +164,7 @@ export default function App() {
   const [refreshing, setRefreshing] = useState(false);
 
   const [newGroupName, setNewGroupName] = useState("");
+  const [showGroupModal, setShowGroupModal] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedApp = useRef<RunningApp | null>(null);
@@ -210,12 +209,20 @@ export default function App() {
     activateApp(target).catch((e) => setError(String(e)));
   };
 
+  const openGroupModal = () => {
+    setError(null);
+    setNewGroupName("");
+    setShowGroupModal(true);
+  };
+  const closeGroupModal = () => setShowGroupModal(false);
+
   const handleCreateGroup = async () => {
     setError(null);
     const name = newGroupName.trim() || `Group ${bundles.length + 1}`;
     try {
       setBundles(await createBundle(name));
       setNewGroupName("");
+      setShowGroupModal(false);
     } catch (e) {
       setError(String(e));
     }
@@ -230,18 +237,6 @@ export default function App() {
         setReport(null);
         setReportBundleId(null);
       }
-    } catch (e) {
-      setError(String(e));
-    }
-  };
-
-  const handleCapture = async () => {
-    setError(null);
-    try {
-      const bundle = await captureCurrent(`Capture ${new Date().toLocaleString()}`);
-      const next = [...bundles, bundle];
-      setBundles(next);
-      await saveBundles(next);
     } catch (e) {
       setError(String(e));
     }
@@ -343,19 +338,7 @@ export default function App() {
         <header className="main-header">
           <h2>vibe-control</h2>
           <div className="header-actions">
-            <input
-              className="group-input"
-              placeholder="New group name"
-              value={newGroupName}
-              onChange={(e) => setNewGroupName(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") handleCreateGroup();
-              }}
-            />
-            <button onClick={handleCreateGroup}>Add Group</button>
-            <button className="rec" onClick={handleCapture}>
-              Capture State
-            </button>
+            <button onClick={openGroupModal}>Add Group</button>
           </div>
         </header>
 
@@ -503,6 +486,37 @@ export default function App() {
           ))}
         </div>
       </main>
+
+      {showGroupModal && (
+        <div className="modal-backdrop" onClick={closeGroupModal}>
+          <div
+            className="modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="New group"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h3 className="modal-title">New Group</h3>
+            <input
+              autoFocus
+              className="group-input modal-input"
+              placeholder="Group name"
+              value={newGroupName}
+              onChange={(e) => setNewGroupName(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") handleCreateGroup();
+                else if (e.key === "Escape") closeGroupModal();
+              }}
+            />
+            <div className="modal-actions">
+              <button className="ghost" onClick={closeGroupModal}>
+                Cancel
+              </button>
+              <button onClick={handleCreateGroup}>Create</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

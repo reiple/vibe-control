@@ -695,3 +695,62 @@ button.mini.danger {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ── New-group modal = a raised instrument card over a dim panel ── */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 50;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(20, 19, 17, 0.42);
+  backdrop-filter: blur(2px);
+  -webkit-backdrop-filter: blur(2px);
+  animation: modal-fade 120ms var(--key-ease);
+}
+.modal {
+  width: min(360px, 100%);
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+  border-radius: 8px;
+  padding: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  box-shadow: inset 0 1px 0 var(--edge-hi), 0 12px 34px -8px rgba(20, 19, 17, 0.5);
+  animation: modal-pop 140ms var(--key-ease);
+}
+.modal-title {
+  margin: 0;
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.modal-input {
+  width: 100%;
+  margin: 0;
+  padding: 10px 12px;
+  font-size: 13px;
+}
+.modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+@keyframes modal-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+@keyframes modal-pop {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-backdrop,
+  .modal { animation: none; }
+}
