@@ -853,23 +853,27 @@ async fn get_context_claude_status(
                 let outcome = summarizer.summarize(dispatch.request).await;
 
                 let shared = app_handle.state::<SharedState>();
-                if let Ok(mut app_state) = shared.lock() {
-                    if let SummarizationOutcome::Summarized(summary) = outcome {
-                        app_state.analysis_cache.upsert(CacheEntry {
-                            session_id: dispatch.session_id.clone(),
-                            context_ref: dispatch.context_ref.clone(),
-                            last_analyzed_offset: dispatch.new_offset,
-                            last_analyzed_mtime: dispatch.new_mtime,
-                            analyzed_at: unix_now(),
-                            cached_summary: Some(summary),
-                        });
-                        app_state.analysis_cache_dirty = true;
-                    }
-                    // Always release the in-flight slot (success, insufficient, or
-                    // failure) so the next poll can retry naturally (NFR-2).
-                    app_state.in_flight.remove(&dispatch.session_id);
-                    app_state.flush_analysis_cache();
+                // Bind the guard to a named local (not an `if let` temporary) so its
+                // borrow of `shared` ends before `shared` is dropped at task end.
+                let mut app_state = match shared.lock() {
+                    Ok(guard) => guard,
+                    Err(_) => return,
+                };
+                if let SummarizationOutcome::Summarized(summary) = outcome {
+                    app_state.analysis_cache.upsert(CacheEntry {
+                        session_id: dispatch.session_id.clone(),
+                        context_ref: dispatch.context_ref.clone(),
+                        last_analyzed_offset: dispatch.new_offset,
+                        last_analyzed_mtime: dispatch.new_mtime,
+                        analyzed_at: unix_now(),
+                        cached_summary: Some(summary),
+                    });
+                    app_state.analysis_cache_dirty = true;
                 }
+                // Always release the in-flight slot (success, insufficient, or
+                // failure) so the next poll can retry naturally (NFR-2).
+                app_state.in_flight.remove(&dispatch.session_id);
+                app_state.flush_analysis_cache();
             });
         }
     }
