@@ -219,51 +219,65 @@ const TOOL_GLYPHS: React.ReactElement[] = [
 // it blocks all input underneath until the app has finished its first load.
 // `hiding` fades it out just before it unmounts.
 //
-// The choreography tells the product's core story (intro-animation.md):
-// many independent apps, scattered and drifting, are pulled by a central
-// signal toward one point, organise into a network, and collapse into a single
-// glowing control core — then the title resolves. Chaos → signal → attraction
-// → organisation → unification → VIBE CONTROL. Dark, holographic, and calm,
-// with the TE hero-orange carried through as the "control core" so the intro
-// stays of a piece with the product. The whole sequence is driven by CSS
-// keyframes; per-icon scatter positions, curved mid-points, and staggered
-// (negative-delay) timing are generated once on mount so every launch differs.
+// The choreography tells the product's story (intro-animation.md) in the KO-II
+// hardware sampler's motion language — tactile pads, step-sequencer timing,
+// pulse feedback (NOT a music UI). The tool pads are laid out as a calm,
+// organised 5-row control grid centred on screen (NOT randomly scattered): a
+// central activation pulse ripples outward, lighting the pads row-by-ring in
+// rhythm, then the "vibe control" logo resolves in the exact centre as the
+// unifying core the pads are arranged around. The grid is held faded (low
+// opacity) so it reads as an atmospheric control surface and never competes
+// with the logo — the logo is always the clear focal point. Pad glyphs and the
+// shuffled tie-break are generated once on mount; the motion is CSS-keyframe
+// driven.
+const SWEEP_S = 2.6; // total time the activation ripple takes to cross the grid
+const GRID_ROWS = 5; // requirement: five centred rows
+const CELL_PX = 40; // pad size
+const GAP_PX = 16; // gap between pads
+// Harmonious accent hues for the pad-press flash (driven via --hue in the
+// activation keyframe). Anchored on the brand orange and spread across warm →
+// magenta → violet → blue → teal so the field lights up in varied but
+// coordinated colour rather than a single orange.
+const FLASH_HUES = [16, 34, 350, 320, 275, 210, 172, 150];
+
 function Splash({ hiding }: { hiding: boolean }) {
-  const icons = useMemo(() => {
-    const N = 15;
-    // A few tiles glow hero-orange among the neutral glass ones, so the field
-    // reads as varied applications rather than a uniform grid.
-    const accent = new Set([2, 7, 11]);
-    return Array.from({ length: N }, (_, i) => {
-      // Every tile carries a faint tool glyph, cycling through the set so the
-      // whole field reads as real applications being gathered.
-      const glyph = i % TOOL_GLYPHS.length;
-      // Sizes still vary widely so the field stays organic, not a uniform grid.
-      const size = 30 + Math.random() * 26;
-      // Scatter across the viewport as offsets from centre (chaos).
-      const x = (Math.random() * 2 - 1) * 42; // vw
-      const y = (Math.random() * 2 - 1) * 40; // vh
-      // A perpendicular kick on the mid-point bends each path into an arc, so
-      // icons sweep in on curved, coordinated trajectories rather than straight
-      // radial lines.
-      const swirl = Math.random() * 2 - 1;
-      const mx = x * 0.5 - y * 0.2 * swirl;
-      const my = y * 0.5 + x * 0.2 * swirl;
+  const pads = useMemo(() => {
+    const rows = GRID_ROWS;
+    const stride = CELL_PX + GAP_PX;
+    // Fill the viewport width: enough columns so the five rows span edge to
+    // edge (with a small side margin), then centre the whole grid on the
+    // anchor so it stays symmetric. Computed once on mount.
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
+    const cols = Math.max(7, Math.floor((vw - GAP_PX) / stride));
+    const N = cols * rows;
+    const originX = ((cols - 1) / 2) * stride;
+    const originY = ((rows - 1) / 2) * stride;
+    const cx = (cols - 1) / 2;
+    const cy = (rows - 1) / 2;
+
+    const cells = Array.from({ length: N }, (_, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      // Activation order ripples out from the centre (where the logo lights
+      // up), with a small random tie-break so same-distance pads feel tactile
+      // rather than mechanically simultaneous.
+      const dist = Math.hypot(col - cx, row - cy) + Math.random() * 0.35;
       return {
         id: i,
-        isAccent: accent.has(i),
-        glyph,
-        size: `${size.toFixed(0)}px`,
-        x: `${x.toFixed(1)}vw`,
-        y: `${y.toFixed(1)}vh`,
-        mx: `${mx.toFixed(1)}vw`,
-        my: `${my.toFixed(1)}vh`,
-        // Negative delay staggers when each icon reaches convergence while
-        // keeping them all visibly scattered from the first frame.
-        conv: -(Math.random() * 0.7),
-        drift: -(Math.random() * 3),
+        glyph: i % TOOL_GLYPHS.length,
+        x: `${(col * stride - originX).toFixed(1)}px`,
+        y: `${(row * stride - originY).toFixed(1)}px`,
+        hue: FLASH_HUES[Math.floor(Math.random() * FLASH_HUES.length)],
+        dist,
       };
     });
+    // Rank by ripple distance, then normalise so the sweep lasts SWEEP_S no
+    // matter how many columns the viewport fits.
+    const byDist = [...cells].sort((a, b) => a.dist - b.dist);
+    const delay = new Map(
+      byDist.map((c, rank) => [c.id, 0.6 + (rank / Math.max(1, N - 1)) * SWEEP_S]),
+    );
+    return cells.map((c) => ({ ...c, delay: delay.get(c.id) ?? 0.6 }));
   }, []);
 
   return (
@@ -274,41 +288,47 @@ function Splash({ hiding }: { hiding: boolean }) {
       aria-busy="true"
     >
       <div className="intro">
+        {/* Faded control grid: five centred rows of tool pads, held quietly
+            behind the logo (low opacity) so they never out-shout it. */}
         <div className="intro-field" aria-hidden>
-          {icons.map((ic) => (
+          {pads.map((p) => (
             <span
-              key={ic.id}
-              className={`intro-icon${ic.isAccent ? " is-accent" : ""}`}
+              key={p.id}
+              className="intro-pad"
               style={
                 {
-                  "--x": ic.x,
-                  "--y": ic.y,
-                  "--mx": ic.mx,
-                  "--my": ic.my,
-                  "--size": ic.size,
-                  animationDelay: `${ic.conv.toFixed(2)}s`,
+                  "--x": p.x,
+                  "--y": p.y,
+                  "--size": `${CELL_PX}px`,
                 } as React.CSSProperties
               }
             >
               <span
-                className="intro-icon-face"
-                style={{ animationDelay: `${ic.drift.toFixed(2)}s` }}
+                className="intro-pad-face"
+                // Each pad snaps "on" at its step in the outward ripple, in its
+                // own accent hue.
+                style={
+                  {
+                    animationDelay: `${p.delay.toFixed(2)}s`,
+                    "--hue": p.hue,
+                  } as React.CSSProperties
+                }
               >
-                {ic.glyph !== null && (
-                  <span className="intro-icon-glyph">{TOOL_GLYPHS[ic.glyph]}</span>
-                )}
+                <span className="intro-pad-glyph">{TOOL_GLYPHS[p.glyph]}</span>
               </span>
             </span>
           ))}
         </div>
-        <span className="intro-pulse" aria-hidden />
-        <span className="intro-pulse intro-pulse--2" aria-hidden />
-        <span className="intro-ring" aria-hidden />
-        <span className="intro-core" aria-hidden />
-        <div className="intro-title-wrap">
-          <div className="intro-title">VIBE CONTROL</div>
-          <div className="intro-sub">Unified Control System</div>
+
+        {/* The logo — the clear focal point. A soft spotlight lifts it off the
+            faded grid, then the record-dot mark + wordmark resolve. */}
+        <div className="intro-logo">
+          <span className="intro-logo-mark" aria-hidden />
+          <div className="intro-logo-word">vibe control</div>
         </div>
+
+        {/* Final confirmation pulse — "centralised control" locked in. */}
+        <span className="intro-confirm" aria-hidden />
       </div>
     </div>
   );
@@ -581,10 +601,11 @@ export default function App() {
     let finished = false;
     const startedAt = performance.now();
     // Floor the visible time to the length of the intro choreography so the
-    // full sequence (convergence → core → title hold) plays before the fade,
-    // rather than being cut short the instant the (usually faster) boot data
-    // lands. The hard cap still guarantees the splash lifts if boot stalls.
-    const MIN_SPLASH_MS = 6000;
+    // full sequence (activation ripple across the grid → logo mark → wordmark →
+    // confirmation) plays before the fade, rather than being cut short the instant the
+    // (usually faster) boot data lands. The hard cap still guarantees the
+    // splash lifts if boot stalls.
+    const MIN_SPLASH_MS = 5800;
     const MAX_SPLASH_MS = 9000;
     const FADE_MS = 500; // must match the .splash opacity transition
 
