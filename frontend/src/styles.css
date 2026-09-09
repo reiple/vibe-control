@@ -97,21 +97,14 @@
 body { margin: 0; background: var(--body); }
 
 /* ── Boot splash / intro animation ───────────────────────────────────────
-   Full-viewport overlay React renders on mount and holds until the app has
-   finished its first load. Opaque + pointer-catching, so it blocks every
-   click, drag, and key focus underneath until it fades out. Rendered by React
-   (not static HTML) so it paints at the correct DPI scale on Windows/WebView2.
-
-   Story (see intro-animation.md): a centred, organised 5-row grid of tool
-   "pads" (filling the viewport width) powers on — an activation ripples out
-   from the centre, lighting the pads step-by-step in varied but harmonious
-   accent hues. The pads start clearly visible, then dim to a faded backdrop as
-   the "vibe control" logo (record-dot mark + wordmark) resolves in the exact
-   centre as the clear focal point, ending with a confirmation pulse.
-   The motion language borrows the KO-II hardware sampler's tactile, grid/pad,
-   step-timed feel (NOT a music UI): many tools organised around one control
-   system. Dark, minimal, premium; the final fade to the light chassis is the
-   transition into the app.
+   The intro is the "vibe control" loading animation ported verbatim from the
+   `intro-animation` example: a fake-loading counter (000 → 100 %) morphs into
+   "DEV", then the hero grid scrambles and decodes into the VIBE-CONTROL
+   wordmark. The loader/hero visuals + fonts live in public/intro/loader.css
+   (see App.tsx `Splash` — injected as a <link> only while the splash is
+   mounted, along with the vendored GSAP that drives it). This wrapper just
+   provides the full-viewport overlay that blocks input underneath, plus the
+   fade-out into the app on boot completion.
    ------------------------------------------------------------------------- */
 .splash {
   /* Absolute (not fixed) inside the relatively-positioned .app-shell: WebView2
@@ -119,19 +112,10 @@ body { margin: 0; background: var(--body); }
      viewport on early frames, which zooms + offsets the overlay. An absolute
      box fills its correctly-sized flow ancestor instead, so it stays centred. */
   position: absolute;
-  top: 0;
-  left: 0;
-  right: 0;
-  bottom: 0;
+  inset: 0;
   z-index: 1000;
   overflow: hidden;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  /* Dark control-surface backdrop: a soft central glow lifting off deep,
-     near-black plastic — high-tech, calm, not cyberpunk. */
-  background:
-    radial-gradient(120% 100% at 50% 45%, #17171c 0%, #0d0d10 58%, #08080a 100%);
+  background: #f5f5f5; /* the example's light backdrop, shown until GSAP paints */
   transition: opacity 0.5s ease;
   opacity: 1;
   user-select: none;
@@ -140,224 +124,18 @@ body { margin: 0; background: var(--body); }
   opacity: 0;
   pointer-events: none;
 }
-
-.intro {
-  /* A zero-size anchor at the flex-centre of .splash. Every child is placed
-     relative to this exact centre (left/top: 0) rather than against a
-     percentage of the overlay box, which keeps centring correct regardless of
-     WebView2's early-frame viewport scaling. */
-  position: relative;
-  width: 0;
-  height: 0;
-}
-
-/* The centred control grid of tool pads (0-size, at the centre anchor). It
-   starts clearly visible while the activation ripple plays, then dims down to a
-   faded backdrop as the logo resolves — so the pads hand focus to the logo
-   (the requirement's "흐릿하게"), never competing with it. */
-.intro-field {
-  position: absolute;
-  left: 0;
-  top: 0;
-  opacity: 0.24; /* resting/end state (also used under reduced-motion) */
-  animation: intro-field-dim 4s ease both;
-}
-@keyframes intro-field-dim {
-  0% { opacity: 0; }
-  12% { opacity: 0.62; }  /* fade in bright — pads clear during activation */
-  52% { opacity: 0.62; }  /* hold through the ripple */
-  80% { opacity: 0.24; }  /* dim as the logo mark + wordmark resolve */
-  100% { opacity: 0.24; }
-}
-
-/* A charcoal "rubber pad" holding a tool glyph, placed at a fixed cell in the
-   5-row grid (offset from centre via --x/--y — no random scatter). The inner
-   face runs the tactile step-activation snap as the ripple reaches it. */
-.intro-pad {
-  --size: 40px;
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: var(--size);
-  height: var(--size);
-  /* Centre the pad on its grid cell. */
-  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
-  transform: translate(var(--x), var(--y));
-}
-.intro-pad-face {
-  position: relative;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 100%;
-  height: 100%;
-  border-radius: 26%;
-  background: linear-gradient(180deg, var(--pad-hi) 0%, var(--pad) 62%,
-    var(--pad-edge) 100%);
-  color: rgba(255, 255, 255, 0.28);
-  --hue: 16; /* per-pad accent hue for the flash, overridden inline */
-  will-change: transform, box-shadow, color;
-  /* Held at its "off" state until the pad's step arrives (per-pad delay set
-     inline), then snaps on. `both` keeps it dim before the delay. */
-  animation: intro-pad-activate 0.6s cubic-bezier(0.2, 0, 0.2, 1) both;
-}
-.intro-pad-glyph {
+/* Pin the example's loader to the splash box (it ships as position:fixed) so
+   it inherits the correctly-scaled overlay rather than WebView2's unscaled
+   early-frame viewport. */
+.splash .loader-loader {
   position: absolute;
   inset: 0;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  width: 100%;
+  height: 100%;
 }
-.intro-pad-glyph svg {
-  width: 50%;
-  height: 50%;
-}
-
-/* Tactile step activation: dim → a snappy over-scaled flash (pad press) in the
-   pad's own accent hue (--hue) → settles to a lit, "on" state. The varied hues
-   read as a coordinated, harmonious field rather than a single orange. */
-@keyframes intro-pad-activate {
-  0% {
-    color: rgba(255, 255, 255, 0.26);
-    transform: scale(0.92);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.06),
-      0 6px 16px rgba(0, 0, 0, 0.5);
-  }
-  12% {
-    color: hsl(var(--hue) 100% 88%);
-    transform: scale(1.16);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 0 20px 4px hsl(var(--hue) 90% 55% / 0.6),
-      0 6px 16px rgba(0, 0, 0, 0.5);
-  }
-  36% {
-    color: hsl(var(--hue) 85% 80% / 0.92);
-    transform: scale(1);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      0 0 10px 1px hsl(var(--hue) 85% 55% / 0.35),
-      0 6px 16px rgba(0, 0, 0, 0.5);
-  }
-  100% {
-    color: hsl(var(--hue) 78% 76% / 0.8);
-    transform: scale(1);
-    box-shadow:
-      inset 0 1px 0 rgba(255, 255, 255, 0.1),
-      0 0 7px hsl(var(--hue) 80% 55% / 0.25),
-      0 6px 16px rgba(0, 0, 0, 0.5);
-  }
-}
-
-/* The logo — the clear focal point, centred on the grid. A soft radial
-   spotlight darkens the faded pads right behind it so it reads sharp and
-   dominant; the record-dot mark and wordmark then resolve. */
-.intro-logo {
-  position: absolute;
-  left: 0;
-  top: 0;
-  transform: translate(-50%, -50%);
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 16px;
-  white-space: nowrap;
-  text-align: center;
-  pointer-events: none;
-}
-.intro-logo::before {
-  content: "";
-  position: absolute;
-  z-index: -1;
-  left: 50%;
-  top: 50%;
-  width: 340px;
-  height: 240px;
-  transform: translate(-50%, -50%);
-  border-radius: 50%;
-  background: radial-gradient(ellipse at center,
-    rgba(13, 13, 16, 0.96) 0%, rgba(13, 13, 16, 0.8) 40%,
-    rgba(13, 13, 16, 0) 72%);
-  opacity: 0;
-  animation: intro-spotlight 1.2s ease 0.3s both;
-}
-@keyframes intro-spotlight {
-  from { opacity: 0; }
-  to { opacity: 1; }
-}
-
-/* Orange record-dot mark — the same brand mark as the app header, snapping in
-   with a slight overshoot as the ripple settles. */
-.intro-logo-mark {
-  width: 46px;
-  height: 46px;
-  border-radius: 22%;
-  background: radial-gradient(circle at 38% 32%, #ff7a52, var(--accent) 62%,
-    var(--accent-deep));
-  box-shadow:
-    inset 0 1px 0 rgba(255, 255, 255, 0.28),
-    0 0 26px 4px rgba(240, 67, 30, 0.55),
-    0 8px 22px rgba(0, 0, 0, 0.5);
-  opacity: 0;
-  animation: intro-logo-mark 1s cubic-bezier(0.34, 1.4, 0.5, 1) 2.6s both;
-}
-@keyframes intro-logo-mark {
-  0% { opacity: 0; transform: scale(0.4); }
-  60% { opacity: 1; transform: scale(1.12); }
-  100% { opacity: 1; transform: scale(1); }
-}
-
-/* The wordmark resolves below the mark. */
-.intro-logo-word {
-  font-family: var(--display);
-  font-weight: 700;
-  font-size: 34px;
-  letter-spacing: 0.16em;
-  color: #f3f1ec;
-  text-shadow: 0 0 20px rgba(240, 67, 30, 0.35);
-  opacity: 0;
-  animation: intro-logo-word 1.4s cubic-bezier(0.2, 0, 0.2, 1) 3.2s both;
-}
-@keyframes intro-logo-word {
-  0% { opacity: 0; transform: translateY(10px); letter-spacing: 0.4em; }
-  100% { opacity: 1; transform: translateY(0); letter-spacing: 0.16em; }
-}
-
-/* Final confirmation pulse: a single rounded-square ring expanding from the
-   logo mark once the name has resolved — "centralised control" locked in. */
-.intro-confirm {
-  position: absolute;
-  left: 0;
-  top: 0;
-  width: 54px;
-  height: 54px;
-  margin: -50px 0 0 -27px; /* centred on the mark, which sits above centre */
-  border-radius: 22%;
-  border: 2px solid rgba(240, 67, 30, 0.55);
-  opacity: 0;
-  animation: intro-confirm 1.4s ease-out 4.4s 1;
-}
-@keyframes intro-confirm {
-  0% { opacity: 0.8; transform: scale(1); }
-  100% { opacity: 0; transform: scale(3.4); }
-}
-
-/* Respect reduced-motion: skip the choreography, show the resolved end state
-   (the faded control grid with the logo centred on it) and no movement. */
-@media (prefers-reduced-motion: reduce) {
-  .splash { transition: none; }
-  .intro-confirm { display: none; }
-  .intro-field { animation: none; opacity: 0.24; }
-  .intro-pad-face { animation: none; }
-  .intro-logo::before { animation: none; opacity: 1; }
-  .intro-logo-mark { animation: none; opacity: 1; transform: scale(1); }
-  .intro-logo-word {
-    animation: none;
-    opacity: 1;
-    transform: none;
-    letter-spacing: 0.16em;
-  }
+/* The example's "replay" control isn't part of the app's boot experience. */
+.splash .replay {
+  display: none !important;
 }
 
 /* Small technical-caption utility (uppercase mono, wide tracking). */
