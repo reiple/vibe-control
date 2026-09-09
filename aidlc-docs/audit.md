@@ -577,6 +577,13 @@ Important:
 
 ---
 
+## UI Enhancement Bolt — Running Apps panel sizing (count number + expanded sub-items)
+**Timestamp**: 2026-09-09T00:00:00Z
+**User Input**: "기존 좌측 Running Apps 패널의 표시 크기를 보완: chrome/code/kakaotalk 등 앱 이름 옆 숫자와 토글로 펼쳐지는 하위 항목 글자 크기가 너무 크다. Windows Terminal 아래 하위 항목 크기 수준에 맞춰 더 작고 정돈되게 조정. 숫자 크기 축소, 토글 하위 항목 글자 크기 축소, 정렬/간격 확인, 기능은 그대로 UI 스타일만 최소 범위 수정. 보완 Bolt로 AI-DLC 절차에 따라 진행."
+**AI Response**: "Confirmed style/component structure. Windows render path (App.tsx:1006) uses <span className='running-count'> for the app-name number, but styles.css had NO `.running-count` rule → it inherited browser-default 16px grotesk, far larger than the app name (13px) and the macOS `.running-expand` (10px). Root cause of the oversized number. Style-only fixes in frontend/src/styles.css: (1) added `.running-count` rule — margin-left:auto (trailing edge), var(--mono) tabular-nums, 11px, line-height:1, var(--ink-muted), nowrap, flex-shrink:0; (2) `.win-title` 12px→11px (expanded tab/window sub-items smaller); (3) `.running-window.muted` 12px→11px for placeholder-row consistency. No JSX/behavior changes. Alignment preserved (46px left indent, existing flex/gap untouched)."
+**Context**: Post-construction UI enhancement Bolt. Style-only, minimal scope; number + sub-item text reduced to a tidy ~11px matching the sub-items under any expanded app (incl. Windows Terminal).
+
+---
 ## Backlog Continuation — P1×3 + P4 (E1·E2·C1·C2·D6)
 **Timestamp**: 2026-09-09T12:00:00Z
 **User Input**: "AI-DLC 워크플로우를 계속 진행한다. 남은 미해결/백로그를 진행하라."

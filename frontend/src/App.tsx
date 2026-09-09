@@ -1559,13 +1559,19 @@ export default function App() {
                         : undefined
                     }
                   >
-                    {isActivatable(r.kind) && (
+                    {(isActivatable(r.kind) || isSavedTab(r.kind)) && (
                       <AppIcon
                         target={
                           r.kind === "WindowRef"
                             ? appNameOf(
                                 r.identity.reopen_info ?? r.identity.descriptor
                               )
+                            : // A saved live tab stores its browser in the hint
+                              // (`browser\u{1f}handle`); its leading segment is the
+                              // browser app-name, so it resolves the same icon as
+                              // the running list (FR-9.6).
+                            isSavedTab(r.kind)
+                            ? appNameOf(r.identity.hint ?? "")
                             : r.identity.reopen_info ?? r.identity.descriptor
                         }
                         className="app-icon app-icon--sm"
