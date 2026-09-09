@@ -226,3 +226,23 @@ export interface ClaudeUsage {
   /** Region the account totals were read from (empty when app-local). */
   region: string;
 }
+
+/** Today's LOCAL `claude` CLI usage (all sessions), summed from the on-disk
+ *  transcripts under `~/.claude/projects`. Unlike {@link ClaudeUsage} (this
+ *  app's Bedrock spend), this reflects the interactive group terminals, which
+ *  run on the user's own Claude auth. Cost is priced per model like Claude
+ *  Code / ccusage, so cache tokens count at their real (reduced) rate. */
+export interface LocalUsage {
+  /** True when a `~/.claude/projects` ledger exists (the CLI has been used). */
+  configured: boolean;
+  /** Total spend today across all sessions, USD. */
+  total_cost_usd: number;
+  input_tokens: number;
+  output_tokens: number;
+  cache_creation_tokens: number;
+  cache_read_tokens: number;
+  /** input + output + cache_creation + cache_read. */
+  total_tokens: number;
+  /** Assistant turns counted today. */
+  messages: number;
+}

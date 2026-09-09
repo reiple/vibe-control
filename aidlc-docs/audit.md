@@ -813,3 +813,19 @@ Important:
 **Context**: CONSTRUCTION — 승인 UI 3건. 위치 오조회 정정(vibe-control→vc-integration), 변경2는 이미 충족(무수정). App.tsx 단일 변경, 빌드·타입검사·앱 실행 PASS, 렌더 육안 UNVERIFIED. 잔존 중복 인스턴스 정리. 커밋 금지.
 
 ---
+
+## Bolt R1 후속 — CI 첫 실행 + Windows .ico 블로커 수정
+**Timestamp**: 2026-09-09T06:15:00Z
+**User Input**: "push 하고, 알아서 한국어로 PR 작성및 태그 등을 진행. 윈도우 버전 배포 가능한지 확인"
+**AI Response**: "브랜치 push → PR #22(한국어) 작성. origin/main이 전진(PR #21 등)해 CONFLICTING → 로컬에서 origin/main 병합, audit.md 충돌만 union 해소, push → MERGEABLE/CLEAN 확인 후 main 병합. v0.1.0 태그 push로 릴리스 워크플로우 첫 실행(run 34317217160). 결과: create-release ✅, build-macos ✅(유니버설 dmg 업로드), build-windows ❌, publish skip. Windows 실패 진단: 워크스페이스 컴파일은 성공(vibe-control.exe 생성)했으나 WiX/MSI 번들링에서 'Couldn't find a .ico icon'. 원인 = tauri.conf.json bundle.icon이 icons/icon.png만 참조, .ico 누락(icon.ico는 리포에 이미 존재). 수정: bundle.icon을 표준 목록(32/128/128@2x png + icon.icns + icon.ico)으로 확장. fix/windows-ico-icon 브랜치 → PR → main, v0.1.0 태그 재지정 후 재실행 예정. 결론: 윈도우 코드/컴파일 정상, 유일 블로커는 아이콘 config였고 수정 완료."
+**Context**: OPERATIONS — Bolt R1 CI 첫 실행 검증 + Windows 배포 블로커(.ico) 수정. macOS 배포 OK 확인.
+
+---
+
+## Bolt R1 후속 2 — 재실행 성공 + v0.1.0 발행 + Windows 배포 확정
+**Timestamp**: 2026-09-09T06:30:00Z
+**User Input**: "push 하고, 알아서 한국어로 PR 작성및 태그 등을 진행. 윈도우 버전 배포 가능한지 확인" (연속)
+**AI Response**: ".ico 수정(PR #23) main 병합 후 v0.1.0 태그 재지정 → 릴리스 워크플로우 재실행(run 34318680356). 4잡 전부 성공: create-release/build-macos/build-windows/publish. 릴리스 published(draft:false), 자산 5종: universal.dmg(~20MB), x64_en-US.msi(~8.1MB), x64-setup.exe(~5.4MB), install.sh, install.ps1. Windows 배포 가능=YES 확정(.msi+setup.exe 산출·업로드). install.ps1 자산 해석 Windows PowerShell dry-run 검증(설치 미실행): 최신 v0.1.0 → -setup.exe 선택 → URL 정상. AC-23: CI 그린+자산 존재+스크립트 해석 확인=충족. 잔여는 실제 설치 E2E 1회(머신 변경 수반, 사용자 권장)."
+**Context**: OPERATIONS — Bolt R1 릴리스 파이프라인 E2E 성공, v0.1.0 발행, Windows 배포 가능 확정.
+
+---

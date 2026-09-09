@@ -1,0 +1,55 @@
+name: Deploy landing to GitHub Pages
+
+# landing/ 폴더의 정적 사이트를 GitHub Pages로 배포합니다.
+# main 브랜치에 push 될 때 자동 실행되며, 수동 실행(workflow_dispatch)도 지원합니다.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "landing/**"
+      - ".github/workflows/deploy.yml"
+  workflow_dispatch:
+
+# GitHub Pages 배포에 필요한 권한
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 동시에 하나의 배포만 실행하고, 진행 중인 실행은 취소하지 않고 대기시킵니다.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # 정적 사이트이므로 별도 빌드 없이 landing/ 폴더를 그대로 업로드합니다.
+      # SPA 라우팅은 사용하지 않지만(해시 기반 앵커 이동), 안전장치로
+      # index.html 을 404.html 로 복사해 새로고침 시 404 를 방지합니다.
+      - name: Prepare 404 fallback
+        run: cp landing/index.html landing/404.html
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: landing
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
