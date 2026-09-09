@@ -23,6 +23,21 @@ pub struct AppSettings {
     /// `AWS_REGION` or the app default.
     #[serde(default)]
     pub claude_region: Option<String>,
+    /// Local calendar date (YYYY-MM-DD) the daily usage counters below belong
+    /// to. The frontend supplies it (it owns the local timezone); a new date
+    /// rolls the counters back to zero. Purely a UI readout — token counts only,
+    /// never any prompt/response content.
+    #[serde(default)]
+    pub usage_date: Option<String>,
+    /// Today's cumulative Bedrock input tokens.
+    #[serde(default)]
+    pub usage_input: u64,
+    /// Today's cumulative Bedrock output tokens.
+    #[serde(default)]
+    pub usage_output: u64,
+    /// Today's number of Bedrock calls.
+    #[serde(default)]
+    pub usage_requests: u64,
 }
 
 impl Default for AppSettings {
@@ -37,6 +52,10 @@ impl Default for AppSettings {
             claude_api_key: None,
             claude_model: None,
             claude_region: None,
+            usage_date: None,
+            usage_input: 0,
+            usage_output: 0,
+            usage_requests: 0,
         }
     }
 }
