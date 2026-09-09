@@ -598,3 +598,9 @@ Important:
 **Context**: CONSTRUCTION — Code Generation (U2 vc-store, U6 vc-app, U7 frontend, U1 vc-core dep cleanup) + Build and Test. Resolves known-deviations.md E1 (FR-12.3/AC-17), E2 (FR-8.10/AC-14), C1/C2 (FR-11.5/11.6, SECURITY-15), D6. AUTO MODE: implemented + built + tested + clippy-clean + live-verified backend + documented in one pass. Remaining backlog: P2 (D1, B3), P3 (B5, B6, A1–A4).
 
 ---
+
+## 문서 정합화 점검 — 구현 상태 vs AI-DLC artifact (읽기 전용 대조 + 최소 문서 수정)
+**Timestamp**: 2026-09-09T13:00:00Z
+**User Input**: "AI-DLC 문서 일관성 점검을 진행한다. 목적은 현재 구현 상태와 AI-DLC artifact 간의 불일치만 찾아 정리하는 것이다. [...] 먼저 불일치 목록만 간단히 제시하라. 그 후 문서 수정이 필요한 경우에만 기존 문서의 최소 범위만 수정하라. 새 문서를 만들거나 전체 문서를 재작성하지 말고, 코드 변경은 하지 마라."
+**AI Response**: "코드 무변경 읽기 전용 대조. 불일치 6건 발견: (1) 등록 커맨드 수 — 문서 최신 24개(§H4)이나 실측 generate_handler! 32개(main 병합으로 request_accessibility·claude_usage·list_app_children·activate_child·add_child_resource·get_layout·save_panel_layout·remove_resource 추가, 병합분 미반영). (2) 저장 라이브 탭(BrowserTabLive) — 문서는 '아이콘 없이'이나 커밋 382be34로 브라우저 아이콘 표시로 변경. (3) macOS 접근성 권한 — B6/FR-10.2/AC-13은 '부재/미구현'이나 accessibility_trusted+request_accessibility+부팅 프롬프트가 main 병합으로 부분 구현(안내 충족; PermissionChecker 상태 배선은 잔여). (4) requirements.md 정합화 노트 블록 verbatim 중복(병합 아티팩트). (5) FR-10.12 '스텁·탭 전혀 수집 안 됨'이 아래 정합화 노트+라이브 구현과 모순(스텁은 read_tabs만). (6) AC-7 동일 모순. 수정 문서: requirements.md(중복 노트 삭제·FR-10.2/FR-10.12/AC-7 정정), known-deviations.md(A2 커맨드 수 32·B6 부분 구현·§H2 저장 탭 아이콘), window-enumeration.md(§6.7 저장 탭 아이콘). 코드 무수정, 새 문서 무생성. 의도적 잔여 deviation: read_tabs URL 스텁(#B3/#D-40), PermissionChecker 상태 배선(#B6/#D-42), H-5 확장 규칙 8건 승인 면제, A1-A4 헥사고날 리팩터링, B5 트레이/단축키."
+**Context**: 문서 정합화 점검. 읽기 전용 코드 대조 후 문서 6개소 최소 수정. 코드 변경 없음.
