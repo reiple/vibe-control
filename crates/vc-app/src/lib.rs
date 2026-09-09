@@ -2429,8 +2429,11 @@ fn shell_quote(s: &str) -> String {
 }
 
 /// Single-quote a string for safe embedding in a PowerShell command (a literal
-/// single quote is escaped by doubling it).
-#[cfg(target_os = "windows")]
+/// single quote is escaped by doubling it). Available on all platforms: the
+/// session-terminal commands that call it (`open_session_terminal`,
+/// `open_new_session_terminal`) are registered cross-platform, so this must
+/// compile everywhere. On non-Windows `term::open` is a stub (Terminal.app is
+/// out of scope), so the PowerShell string is built but unused.
 fn ps_single_quote(s: &str) -> String {
     format!("'{}'", s.replace('\'', "''"))
 }
