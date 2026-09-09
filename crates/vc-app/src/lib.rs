@@ -706,11 +706,16 @@ async fn activate_child(
     handle: String,
 ) -> std::result::Result<(), CommandError> {
     match kind.as_str() {
-        // handle is `app\u{1f}url`; select the tab whose URL == target.
-        "tab" => {
-            let app = handle.split('\u{1f}').next().unwrap_or("Safari");
-            activate_browser_tab(app, &target)?;
-        }
+        // handle is `app\u{1f}url` → select the tab whose URL == target in that
+        // exact browser. LEGACY resources stored only the url (no separator); the
+        // old code then used the whole url AS the app name, so `open_app` tried to
+        // `open -b <url>`, failed, and the browser never even came forward. Match
+        // `reopen_resource`: with no separator, best-effort open the url in the
+        // default browser instead of misparsing it as an app.
+        "tab" => match handle.split_once('\u{1f}') {
+            Some((app, _url)) => activate_browser_tab(app, &target)?,
+            None => open_url(&target)?,
+        },
         // Folders open in Finder by path; a path-less window (Recents / saved
         // search) has no path, so raise it by its window name from the handle.
         "folder" => {
