@@ -8,7 +8,7 @@ import type {
   RunningApp,
   RunningWindow,
   ClaudeStatus,
-  ClaudeUsage,
+  LocalUsage,
   SessionSnapshot,
 } from "./types";
 import {
@@ -23,7 +23,7 @@ import {
   addAppResource,
   saveBundles,
   claudeStatus,
-  claudeUsage,
+  claudeLocalUsage,
   setClaudeApiKey,
   setClaudeModel,
   startInteractiveSession,
@@ -73,6 +73,13 @@ const fmtTokens = (n: number): string => {
 };
 // The big cumulative counter shows full digits with thousands separators.
 const fmtFull = (n: number): string => n.toLocaleString("en-US");
+// Today's local CLI spend as USD. Sub-dollar keeps cents visible ($0.42);
+// larger amounts round to whole dollars with separators ($1,234) so the LED
+// stays legible. Cache tokens are already priced in at their reduced rate.
+const fmtUSD = (n: number): string =>
+  n < 100
+    ? `$${n.toFixed(2)}`
+    : `$${Math.round(n).toLocaleString("en-US")}`;
 // Human label for the connected model id (falls back to the raw id's tail).
 const modelLabel = (id: string): string =>
   CLAUDE_MODELS.find((m) => m.id === id)?.label ??
@@ -531,16 +538,16 @@ export default function App() {
   // macOS-only: Accessibility not yet granted → per-instance window lists are empty.
   const [accessNeeded, setAccessNeeded] = useState(false);
 
-  // Live Bedrock token usage for the KO-II meter. This tallies the APP's OWN
-  // Bedrock calls (session summarization), or — when AWS credentials are present
-  // — the whole account's Bedrock usage in-region. It does NOT track the tokens
-  // the interactive `claude` terminals consume (those run on the user's own
-  // Claude auth, outside this app's accounting) — the meter label says so.
-  const [usage, setUsage] = useState<ClaudeUsage | null>(null);
+  // Today's LOCAL `claude` CLI usage for the KO-II meter, summed from the on-disk
+  // transcripts under ~/.claude/projects across every session. This tracks what
+  // the interactive group terminals actually spend (they run on the user's own
+  // Claude auth) and is priced per model, so the amber readout shows real USD.
+  // Polled every few seconds so the number climbs live as a terminal works.
+  const [usage, setUsage] = useState<LocalUsage | null>(null);
   // Distinguish the meter's four states so an un-fetched value is never shown as
   // "0": `usageLoading` = a fetch is in flight and we have no data yet;
   // `usageErr` = the last fetch failed (holds the reason). A successful fetch
-  // clears both; `usage.configured === false` is the "no key / connect" state.
+  // clears both; `usage.configured === false` is the "CLI not used yet" state.
   const [usageLoading, setUsageLoading] = useState(true);
   const [usageErr, setUsageErr] = useState<string | null>(null);
 
@@ -668,7 +675,7 @@ export default function App() {
           .catch(() => {
             /* no saved layout → CSS defaults */
           }),
-        claudeUsage()
+        claudeLocalUsage()
           .then((u) => {
             if (cancelled) return;
             setUsage(u);
@@ -766,18 +773,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the "today" usage meter fresh: account-wide CloudWatch totals move as
-  // the whole account keeps working, independent of this app's own calls. A
-  // light poll every few minutes (boot did the first fetch).
+  // Keep the "today" usage meter live: the CLI appends each turn's usage to its
+  // transcript as a terminal works, so a short poll makes the amber readout
+  // climb in near real time. The backend caches per-file parses, so this only
+  // re-reads the one transcript that changed (boot did the first fetch).
   useEffect(() => {
     const id = window.setInterval(() => {
-      claudeUsage()
+      claudeLocalUsage()
         .then((u) => {
           setUsage(u);
           setUsageErr(null);
         })
         .catch((e) => setUsageErr(errText(e)));
-    }, 180_000);
+    }, 3_000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -1520,18 +1528,14 @@ export default function App() {
                   : "loading";
           const ready = meterState === "ready" && usage != null;
           const ledOn = usage?.configured ?? claude?.configured ?? false;
-          const model = modelLabel(
-            usage?.model ?? claude?.model ?? DEFAULT_MODEL
-          );
-          // Mode-aware scope note (approved): app-local counts only this app's
-          // prompt-console calls; account-wide is the whole region's Bedrock
-          // usage and can include the group terminals' Claude Code sessions.
+          const model = modelLabel(claude?.model ?? DEFAULT_MODEL);
+          // Local-CLI scope note: today's spend across every `claude` session on
+          // this machine (all group terminals), priced per model. Cache tokens
+          // are billed at their real reduced rate, so the $ reflects true cost.
           const note = ready
-            ? usage!.account
-              ? `※ ${usage!.region || "계정"} 계정 전체 Bedrock 사용량(모든 모델). 그룹 터미널의 Claude Code 세션이 같은 Bedrock 계정을 사용하면 이 수치에 포함됩니다.`
-              : "※ vibe-control 프롬프트 콘솔 호출만 집계 — 그룹 터미널의 Claude Code 세션은 포함되지 않습니다."
+            ? "※ 오늘 로컬 Claude CLI 전체 세션 사용량 — 모델별 단가로 환산(캐시 토큰 포함). 그룹 터미널이 작업할수록 실시간으로 올라갑니다."
             : meterState === "unconfigured"
-              ? "※ Claude 미연결 — 설정에서 Bedrock 키를 추가하면 사용량이 집계됩니다."
+              ? "※ 아직 로컬 Claude CLI 기록이 없습니다 — 그룹 터미널에서 대화하면 집계됩니다."
               : meterState === "loading"
                 ? "※ 사용량을 불러오는 중입니다…"
                 : `※ 조회 실패: ${usageErr ?? "데이터 없음"}`;
@@ -1544,7 +1548,9 @@ export default function App() {
                       className={`ko-led ${ledOn ? "on" : "off"}`}
                       aria-hidden
                     />
-                    <b>{ready ? fmtFull(usage!.total_tokens) : "—"}</b>
+                    <b title={ready ? `$${usage!.total_cost_usd.toFixed(4)}` : undefined}>
+                      {ready ? fmtUSD(usage!.total_cost_usd) : "—"}
+                    </b>
                     <span className="ko-usage-model">{model}</span>
                   </div>
                   <div className="ko-legend">
@@ -1560,20 +1566,20 @@ export default function App() {
                         </span>
                         <span className="ko-chip req">
                           <em />
-                          {usage!.requests} CALLS
+                          CACHE{" "}
+                          {fmtTokens(
+                            usage!.cache_creation_tokens +
+                              usage!.cache_read_tokens
+                          )}
                         </span>
-                        <span className="ko-chip">
-                          {usage!.account
-                            ? `계정 전체 · ${usage!.region}`
-                            : "이 앱 콘솔 사용량"}
-                        </span>
+                        <span className="ko-chip">오늘 · 로컬 CLI</span>
                       </>
                     ) : (
                       <span className="ko-chip">
                         {meterState === "loading"
                           ? "조회 중…"
                           : meterState === "unconfigured"
-                            ? "연결 필요"
+                            ? "기록 없음"
                             : "조회 실패"}
                       </span>
                     )}
@@ -1584,12 +1590,12 @@ export default function App() {
                     className="ko-last"
                     title={
                       ready
-                        ? `직전 호출 ${fmtFull(usage!.last_total)} 토큰`
+                        ? `오늘 누적 ${fmtFull(usage!.total_tokens)} 토큰 · ${usage!.messages} 턴`
                         : undefined
                     }
                   >
-                    <b>{ready ? fmtTokens(usage!.last_total) : "—"}</b>
-                    <i>last call</i>
+                    <b>{ready ? fmtTokens(usage!.total_tokens) : "—"}</b>
+                    <i>tokens today</i>
                   </div>
                   <div className="ko-mini">
                     <span>
