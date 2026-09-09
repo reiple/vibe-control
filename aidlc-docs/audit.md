@@ -531,3 +531,10 @@ Important:
 **Context**: Reconciliation run #2 CLOSED. Waiver approved and recorded with re-review triggers; the single non-waived code item implemented and type-checked; real-OS E2E deferred to the Windows/macOS checklist.
 
 ---
+## P1 백로그 착수 — C1/C2 원자적 쓰기 + FR-1.2 상태 정정
+**Timestamp**: 2026-09-09T00:40:00Z
+**User Input**: "AI-DLC 워크플로우를 확인하고 계속 진행"
+**AI Response**: "Reviewed aidlc-state.md + known-deviations.md: INCEPTION/CONSTRUCTION complete, G1/G2/G3 per-window feature done and verified. Toolchain confirmed working on this checkout (cargo 1.98, node 24, frontend node_modules present, prebuilt vibe-control.exe). Audited the P1 backlog against actual code and found the docs were STALE: FR-1.2 (묶음에서 리소스 제거) is already fully wired — remove_resource Tauri command (vc-app/src/lib.rs:562) + removeResource api wrapper (api.ts:115) + App.tsx:644 call — plus undocumented commands list_app_children/activate_child/add_child_resource/claude_usage exist. Genuinely-remaining P1 items confirmed still open by grep: C1 (.tmp leak on save failure), C2 (settings.json non-atomic fs::write), A4/FR-7 (evaluate not wired — 0 refs in vc-app), B3 (WinBrowserTabReader still a stub). Chose C1+C2 as the self-contained, fully-unit-testable AUTO-MODE iteration. IMPLEMENTED in crates/vc-store/src/lib.rs: extracted a shared atomic_write(path, bytes) helper (temp write -> atomic rename; on ANY write/rename failure fs::remove_file the .tmp before returning Err — no orphaned temp). save() and save_settings() both now call it, so settings.json is atomic too. Added 3 unit tests (test_save_leaves_no_temp_file, test_save_cleans_temp_on_failure, test_settings_atomic_roundtrip). VERIFIED: cargo test -p vc-store 5/5 pass, cargo clippy -p vc-store --all-targets 0 warnings, cargo build --workspace clean. Updated known-deviations.md (C1/C2 marked resolved, FR-1.2 backlog row corrected to done, C1/C2 backlog row flipped to done) and aidlc-state.md."
+**Context**: OPERATIONS-adjacent post-construction backlog work. Doc-vs-code drift found (FR-1.2 already done); C1/C2 implemented + unit-tested on real toolchain.
+
+---
