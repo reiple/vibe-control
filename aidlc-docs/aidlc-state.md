@@ -339,4 +339,14 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **결과**: `create-release` ✅(draft + 설치 스크립트 첨부) · `build-macos` ✅(유니버설 .dmg 업로드) · **`build-windows` ❌** · `publish` ⏭(windows 실패로 skip).
 - **Windows 실패 원인(진단 완료)**: 워크스페이스는 **컴파일 성공**(10분, `vibe-control.exe` 생성, dead_code 경고 1건뿐)했으나 **WiX/MSI 번들링에서 `failed to bundle project: Couldn't find a .ico icon`**. 근본 원인 = `crates/vc-app/tauri.conf.json`의 `bundle.icon`이 `["icons/icon.png"]` 하나만 참조 → Windows 번들러가 `.ico`를 못 찾음. **`icons/icon.ico`(유효한 6크기 MS 아이콘)는 리포에 이미 존재·추적**되는데 config 목록에 누락돼 있었을 뿐.
 - **수정**: `bundle.icon`을 표준 Tauri 목록으로 확장 — `32x32.png`/`128x128.png`/`128x128@2x.png`/`icon.icns`/`icon.ico`(전부 존재). macOS(.icns)·Windows(.ico) 모두 커버. (브랜치 `fix/windows-ico-icon` → PR → main, `v0.1.0` 태그 재지정 후 재실행.)
-- **결론(윈도우 배포 가능 여부)**: 코드/컴파일은 Windows에서 정상 — 유일한 블로커는 아이콘 config 누락이었고 수정됨. 재실행으로 `.msi`+`-setup.exe` 산출 확인 예정.
+- **결론(윈도우 배포 가능 여부)**: 코드/컴파일은 Windows에서 정상 — 유일한 블로커는 아이콘 config 누락이었고 수정됨.
+
+#### ✅ 재실행 성공 + 릴리스 발행 (run 34318680356, PR #23 병합 후 v0.1.0 재지정)
+아이콘 수정 후 `v0.1.0` 태그 재지정 → 릴리스 워크플로우 재실행. **4잡 전부 성공**: `create-release` ✅ · `build-macos` ✅ · **`build-windows` ✅**(.ico 수정으로 WiX/NSIS 번들링 통과) · `publish` ✅(draft→published/latest 전환).
+- **발행된 릴리스** `https://github.com/reiple/vibe-control/releases/tag/v0.1.0` (draft:false), 자산 5종:
+  - `vibe-control_0.1.0_universal.dmg` (~20 MB, macOS Intel+Apple Silicon)
+  - **`vibe-control_0.1.0_x64_en-US.msi` (~8.1 MB, Windows WiX)**
+  - **`vibe-control_0.1.0_x64-setup.exe` (~5.4 MB, Windows NSIS)**
+  - `install.sh` / `install.ps1` (설치 스크립트)
+- **Windows 배포 가능 = YES(확정)**. `install.ps1` 자산 해석을 Windows PowerShell로 dry-run 검증(설치는 미실행): 최신 태그 `v0.1.0` → `-setup.exe` 선택 → 다운로드 URL 정상 해석.
+- **AC-23 상태**: CI 그린(양 OS) + 릴리스 자산 존재 + Windows 설치 스크립트 자산 해석 확인 = **충족**. 잔여는 두 OS에서 실제 한 줄 설치 후 앱 기동 육안 확인 1회(머신 변경 수반이라 사용자 실행 권장).

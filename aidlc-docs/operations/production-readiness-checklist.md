@@ -54,10 +54,18 @@ Legend: ✅ done · ⚠️ done-with-caveat · ⛔ blocker for public release ·
   uploads to a GitHub Release, publishes when all assets are up.
 - ✅ **One-line install authored** — `install.sh` (macOS, curl-pipe, clears quarantine) + `install.ps1`
   (Windows, `irm|iex`, silent install). Assets discovered via the Releases API (version-agnostic).
-- ⏳ **Pipeline not yet exercised** — no `v*` tag pushed, so the workflow has not run and no release
-  asset exists yet. **AC-23 verification pending**: push a tag → confirm CI green on both runners →
-  confirm assets on the Releases page → run each install one-liner once on a real macOS + Windows
-  machine. (Left to the maintainer — pushing a tag / publishing a release is an outward-facing action.)
+- ✅ **Pipeline exercised — v0.1.0 published (2026-09-09).** Tag `v0.1.0` triggered the workflow;
+  **all four jobs green** (create-release / build-macos / build-windows / publish). The first run
+  surfaced a real Windows blocker — WiX bundling failed with `Couldn't find a .ico icon` because
+  `tauri.conf.json` `bundle.icon` listed only the png; fixed by adding `icon.ico`/`icon.icns` to the
+  list (the `.ico` was already in the repo). Re-run published the release with 5 assets:
+  `vibe-control_0.1.0_universal.dmg`, `..._x64_en-US.msi`, `..._x64-setup.exe`, `install.sh`,
+  `install.ps1`. **Windows is distributable (confirmed)** — both `.msi` (WiX) and `-setup.exe` (NSIS)
+  build and upload. `install.ps1` asset resolution dry-run-verified on Windows PowerShell (picks the
+  `-setup.exe`, URL resolves).
+- ⏳ **Full install E2E** — the one-line install has been verified to *resolve* the correct asset, but
+  running it to completion (which modifies the machine) on a clean macOS + Windows box is left as a
+  final manual check.
 - ⚠️ Installers inherit the **unsigned/ad-hoc** posture (§4): macOS install clears Gatekeeper
   quarantine; Windows shows SmartScreen "Unknown publisher". Fine for internal/demo; a public release
   still needs the certs in §2/§4.
