@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type {
   WorkBundle,
   Resource,
@@ -33,6 +33,8 @@ import {
   removeResource,
   addAppResource,
   addChildResource,
+  getLayout,
+  savePanelLayout,
   claudeStatus,
   claudeUsage,
   setClaudeApiKey,
@@ -195,12 +197,75 @@ function AppIcon({
   );
 }
 
-// Full-viewport boot splash. Rendered by React (not static index.html markup)
-// so it paints at the correct DPI on Windows/WebView2, and it blocks all input
-// underneath until the app has finished its first load. `hiding` fades it out
-// just before it unmounts. The EP-133 device motif — charcoal pad, orange
-// record dot, an LCD segment chase — reads as the hardware "powering on".
+// Faint tool glyphs tucked into a few of the larger scattered tiles, so the
+// field reads as real applications being gathered — terminal, browser, folder,
+// code, settings — rather than abstract squares. Kept low-contrast and softly
+// blurred (see .intro-icon-glyph) so they stay atmospheric, not literal.
+const TOOL_GLYPHS: React.ReactElement[] = [
+  // terminal prompt
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 7l4 4-4 4" /><path d="M12 16h7" /></svg>,
+  // browser / globe
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8" /><path d="M4 12h16" /><path d="M12 4c2.6 2.6 2.6 13.4 0 16" /><path d="M12 4c-2.6 2.6-2.6 13.4 0 16" /></svg>,
+  // folder
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h5l2 2h9v9H4z" /></svg>,
+  // code brackets
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 8l-4 4 4 4" /><path d="M15 8l4 4-4 4" /></svg>,
+  // settings gear
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /></svg>,
+];
+
+// Full-viewport boot splash / intro animation. Rendered by React (not static
+// index.html markup) so it paints at the correct DPI on Windows/WebView2, and
+// it blocks all input underneath until the app has finished its first load.
+// `hiding` fades it out just before it unmounts.
+//
+// The choreography tells the product's core story (intro-animation.md):
+// many independent apps, scattered and drifting, are pulled by a central
+// signal toward one point, organise into a network, and collapse into a single
+// glowing control core — then the title resolves. Chaos → signal → attraction
+// → organisation → unification → VIBE CONTROL. Dark, holographic, and calm,
+// with the TE hero-orange carried through as the "control core" so the intro
+// stays of a piece with the product. The whole sequence is driven by CSS
+// keyframes; per-icon scatter positions, curved mid-points, and staggered
+// (negative-delay) timing are generated once on mount so every launch differs.
 function Splash({ hiding }: { hiding: boolean }) {
+  const icons = useMemo(() => {
+    const N = 15;
+    // A few tiles glow hero-orange among the neutral glass ones, so the field
+    // reads as varied applications rather than a uniform grid.
+    const accent = new Set([2, 7, 11]);
+    return Array.from({ length: N }, (_, i) => {
+      // Every tile carries a faint tool glyph, cycling through the set so the
+      // whole field reads as real applications being gathered.
+      const glyph = i % TOOL_GLYPHS.length;
+      // Sizes still vary widely so the field stays organic, not a uniform grid.
+      const size = 30 + Math.random() * 26;
+      // Scatter across the viewport as offsets from centre (chaos).
+      const x = (Math.random() * 2 - 1) * 42; // vw
+      const y = (Math.random() * 2 - 1) * 40; // vh
+      // A perpendicular kick on the mid-point bends each path into an arc, so
+      // icons sweep in on curved, coordinated trajectories rather than straight
+      // radial lines.
+      const swirl = Math.random() * 2 - 1;
+      const mx = x * 0.5 - y * 0.2 * swirl;
+      const my = y * 0.5 + x * 0.2 * swirl;
+      return {
+        id: i,
+        isAccent: accent.has(i),
+        glyph,
+        size: `${size.toFixed(0)}px`,
+        x: `${x.toFixed(1)}vw`,
+        y: `${y.toFixed(1)}vh`,
+        mx: `${mx.toFixed(1)}vw`,
+        my: `${my.toFixed(1)}vh`,
+        // Negative delay staggers when each icon reaches convergence while
+        // keeping them all visibly scattered from the first frame.
+        conv: -(Math.random() * 0.7),
+        drift: -(Math.random() * 3),
+      };
+    });
+  }, []);
+
   return (
     <div
       className={`splash ${hiding ? "splash--hidden" : ""}`}
@@ -208,19 +273,42 @@ function Splash({ hiding }: { hiding: boolean }) {
       aria-label="Loading vibe-control"
       aria-busy="true"
     >
-      <div className="splash-card">
-        <div className="splash-badge">
-          <span className="splash-rec" />
+      <div className="intro">
+        <div className="intro-field" aria-hidden>
+          {icons.map((ic) => (
+            <span
+              key={ic.id}
+              className={`intro-icon${ic.isAccent ? " is-accent" : ""}`}
+              style={
+                {
+                  "--x": ic.x,
+                  "--y": ic.y,
+                  "--mx": ic.mx,
+                  "--my": ic.my,
+                  "--size": ic.size,
+                  animationDelay: `${ic.conv.toFixed(2)}s`,
+                } as React.CSSProperties
+              }
+            >
+              <span
+                className="intro-icon-face"
+                style={{ animationDelay: `${ic.drift.toFixed(2)}s` }}
+              >
+                {ic.glyph !== null && (
+                  <span className="intro-icon-glyph">{TOOL_GLYPHS[ic.glyph]}</span>
+                )}
+              </span>
+            </span>
+          ))}
         </div>
-        <div className="splash-word">vibe-control</div>
-        <div className="splash-leds" aria-hidden>
-          <span />
-          <span />
-          <span />
-          <span />
-          <span />
+        <span className="intro-pulse" aria-hidden />
+        <span className="intro-pulse intro-pulse--2" aria-hidden />
+        <span className="intro-ring" aria-hidden />
+        <span className="intro-core" aria-hidden />
+        <div className="intro-title-wrap">
+          <div className="intro-title">VIBE CONTROL</div>
+          <div className="intro-sub">Unified Control System</div>
         </div>
-        <div className="splash-cap">Initializing</div>
       </div>
     </div>
   );
@@ -283,6 +371,89 @@ function SessionStatus({
           {snap.last_question}
         </p>
       )}
+    </div>
+  );
+}
+
+// Full-conversation viewer (FR-12.3 / AC-17). Restores in-app scrollback of a
+// coding session's transcript — the backend already returns up to 60 recent
+// turns in `SessionSnapshot.conversation`; this renders them in a modal. Read
+// -only, no logging: it only displays what the snapshot already exposes.
+function ConversationModal({
+  sessionRef,
+  title,
+  onClose,
+}: {
+  sessionRef: string;
+  title: string;
+  onClose: () => void;
+}) {
+  const [snap, setSnap] = useState<SessionSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getSessionSnapshot("claude-code", sessionRef)
+      .then((s) => {
+        if (!cancelled) setSnap(s);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(errText(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionRef]);
+
+  // Start pinned to the latest turn (that's the interesting end of a session).
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView();
+  }, [snap]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal conversation-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Session conversation"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="conversation-head">
+          <h3 className="modal-title" title={title}>
+            {title}
+          </h3>
+          <button className="ghost icon" onClick={onClose} title="Close">
+            ✕
+          </button>
+        </div>
+        <div className="conversation-body">
+          {loading && <div className="conversation-empty">Loading…</div>}
+          {err && <div className="console-error">{err}</div>}
+          {!loading &&
+            !err &&
+            (!snap || !snap.available || snap.conversation.length === 0) && (
+              <div className="conversation-empty">
+                No conversation available for this session.
+              </div>
+            )}
+          {snap?.conversation.map((t, i) => (
+            <div key={i} className={`conv-turn ${t.role}`}>
+              <span className="conv-role">
+                {t.role === "user" ? "You" : "Claude"}
+              </span>
+              <p className="conv-text">{t.content}</p>
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+      </div>
     </div>
   );
 }
@@ -360,6 +531,19 @@ export default function App() {
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedApp = useRef<RunningApp | null>(null);
 
+  // Persisted sidebar width (E2). Applied imperatively to the aside via a ref so
+  // React never re-renders it and fights the CSS `resize` drag; the ResizeObserver
+  // persists changes (debounced). cardHeight is carried through unchanged for now.
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const [savedPanelWidth, setSavedPanelWidth] = useState<number | null>(null);
+  const cardHeightRef = useRef<number>(150);
+
+  // Full-conversation viewer (FR-12.3 / AC-17): the session whose transcript is open.
+  const [convSession, setConvSession] = useState<{
+    ref: string;
+    title: string;
+  } | null>(null);
+
   // Polling economy (FR-7.5 / FR-7.6 / NFR-Pf3). `pollInFlight` keeps a slow
   // refresh from overlapping the next tick; `resizingUntil` suppresses polls
   // for a short window after each window resize, so dragging the app's edges
@@ -396,9 +580,13 @@ export default function App() {
     let cancelled = false;
     let finished = false;
     const startedAt = performance.now();
-    const MIN_SPLASH_MS = 650;
-    const MAX_SPLASH_MS = 8000;
-    const FADE_MS = 400; // must match the .splash opacity transition
+    // Floor the visible time to the length of the intro choreography so the
+    // full sequence (convergence → core → title hold) plays before the fade,
+    // rather than being cut short the instant the (usually faster) boot data
+    // lands. The hard cap still guarantees the splash lifts if boot stalls.
+    const MIN_SPLASH_MS = 6000;
+    const MAX_SPLASH_MS = 9000;
+    const FADE_MS = 500; // must match the .splash opacity transition
 
     // Fade the splash out, then unmount it. Idempotent: whichever of the boot
     // completion or the hard-cap fires first wins; the other is a no-op.
@@ -429,6 +617,15 @@ export default function App() {
           })
           .catch(() => {
             if (!cancelled) setClaude(null);
+          }),
+        getLayout()
+          .then((l) => {
+            if (cancelled || !l) return;
+            if (l.card_height > 0) cardHeightRef.current = l.card_height;
+            if (l.panel_width > 0) setSavedPanelWidth(l.panel_width);
+          })
+          .catch(() => {
+            /* no saved layout → CSS defaults */
           }),
         claudeUsage()
           .then((u) => {
@@ -558,6 +755,38 @@ export default function App() {
       document.removeEventListener("visibilitychange", onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Apply the saved sidebar width once, imperatively (see savedPanelWidth note).
+  // Runs after the value loads and the aside is mounted; CSS `resize` owns it
+  // afterwards, so we never re-apply and cancel an in-progress drag.
+  useEffect(() => {
+    if (sidebarRef.current && savedPanelWidth != null) {
+      sidebarRef.current.style.width = `${savedPanelWidth}px`;
+    }
+  }, [savedPanelWidth]);
+
+  // Persist the sidebar width when the user drag-resizes it (debounced). The
+  // observer only writes — it never sets React state, so it can't fight the drag.
+  useEffect(() => {
+    const el = sidebarRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let timer: number | undefined;
+    let last = 0;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (!w || Math.abs(w - last) < 1) return;
+      last = w;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        savePanelLayout(w, cardHeightRef.current).catch(() => {});
+      }, 500);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(timer);
+    };
   }, []);
 
   // Keep the console transcript pinned to the newest message.
@@ -933,7 +1162,7 @@ export default function App() {
     <div className="app-shell">
     {booting && <Splash hiding={splashOut} />}
     <div className="app">
-      <aside className="sidebar">
+      <aside className="sidebar" ref={sidebarRef}>
         {/* The macOS traffic lights float over this header (transparent Overlay
             title bar); it doubles as the window drag region. */}
         <header className="sidebar-header" data-tauri-drag-region>
@@ -1354,6 +1583,18 @@ export default function App() {
                       <>
                         <button
                           className="mini"
+                          onClick={() =>
+                            setConvSession({
+                              ref: r.identity.descriptor,
+                              title: r.display_name,
+                            })
+                          }
+                          title="Read the full conversation in-app"
+                        >
+                          Log
+                        </button>
+                        <button
+                          className="mini"
                           onClick={() => handleActivateSession(r)}
                           title="Bring the open Claude Code terminal to front"
                         >
@@ -1521,6 +1762,14 @@ export default function App() {
           </button>
         </form>
       </footer>
+
+      {convSession && (
+        <ConversationModal
+          sessionRef={convSession.ref}
+          title={convSession.title}
+          onClose={() => setConvSession(null)}
+        />
+      )}
 
       {showGroupModal && (
         <div className="modal-backdrop" onClick={closeGroupModal}>

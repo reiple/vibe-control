@@ -96,11 +96,18 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--body); }
 
-/* ── Boot splash ─────────────────────────────────────────────────────────
+/* ── Boot splash / intro animation ───────────────────────────────────────
    Full-viewport overlay React renders on mount and holds until the app has
    finished its first load. Opaque + pointer-catching, so it blocks every
    click, drag, and key focus underneath until it fades out. Rendered by React
    (not static HTML) so it paints at the correct DPI scale on Windows/WebView2.
+
+   Story (see intro-animation.md): scattered, drifting application tiles are
+   pulled by a central signal toward one point, sweep in on curved paths, and
+   collapse into a single glowing control core — then VIBE CONTROL resolves.
+   Dark and holographic, carrying the TE hero-orange as the unified core so the
+   intro reads as of a piece with the product. The final fade to the light
+   chassis is itself the transition into the app.
    ------------------------------------------------------------------------- */
 .splash {
   /* Absolute (not fixed) inside the relatively-positioned .app-shell: WebView2
@@ -113,15 +120,15 @@ body { margin: 0; background: var(--body); }
   right: 0;
   bottom: 0;
   z-index: 1000;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Faint engineered grain: a soft top highlight fading to a shaded base,
-     like the EP-133 chassis catching light. */
+  /* Dark command-centre backdrop: a soft central glow lifting off deep,
+     near-black plastic — high-tech, calm, not cyberpunk. */
   background:
-    radial-gradient(130% 100% at 50% 0%, var(--edge-hi) 0%, var(--body) 45%,
-      var(--sunk) 100%);
-  transition: opacity 0.4s ease;
+    radial-gradient(120% 100% at 50% 45%, #17171c 0%, #0d0d10 58%, #08080a 100%);
+  transition: opacity 0.5s ease;
   opacity: 1;
   user-select: none;
 }
@@ -130,107 +137,240 @@ body { margin: 0; background: var(--body); }
   pointer-events: none;
 }
 
-.splash-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 22px;
+.intro {
+  position: absolute;
+  inset: 0;
 }
 
-/* Charcoal "rubber pad" tile cradling a glowing orange record dot — the
-   product's hero accent, reading as "powering on". */
-.splash-badge {
-  width: 76px;
-  height: 76px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, var(--pad-hi) 0%, var(--pad) 60%,
-    var(--pad-edge) 100%);
+/* The scattered field of application tiles. */
+.intro-field {
+  position: absolute;
+  inset: 0;
+}
+
+/* Each tile lives at the centre and is pushed out to its scatter point by the
+   converge keyframe (via --x/--y), then swept back through a curved mid-point
+   (--mx/--my) into the core. The inner face carries only the idle float, so the
+   two motions compose cleanly. */
+.intro-icon {
+  --size: 34px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--size);
+  height: var(--size);
+  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
+  will-change: transform, opacity;
+  animation: intro-converge 5.6s cubic-bezier(0.5, 0, 0.2, 1) both;
+}
+.intro-icon-face {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 22%;
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.15),
+    rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow:
-    0 1px 0 #4a4a4d inset,
-    0 -2px 4px rgba(0, 0, 0, 0.4) inset,
-    0 10px 22px var(--shadow);
+    0 6px 18px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  animation: intro-float 3.4s ease-in-out infinite;
+}
+/* Faint, softly-blurred tool glyph on the larger tiles — atmospheric, not a
+   literal icon set. Sits behind the tile's own light with low contrast. */
+.intro-icon-glyph {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: rgba(255, 255, 255, 0.62);
+  opacity: 0.3;
+  filter: blur(0.6px);
 }
-.splash-rec {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, var(--accent-hi),
-    var(--accent) 60%, var(--accent-deep));
-  box-shadow: 0 0 0 2px rgba(240, 67, 30, 0.25);
-  animation: splash-pulse 1.15s ease-in-out infinite;
+.intro-icon.is-accent .intro-icon-glyph {
+  color: rgba(255, 210, 195, 0.8);
+  opacity: 0.38;
 }
-@keyframes splash-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 2px rgba(240, 67, 30, 0.15);
-    transform: scale(0.94);
+.intro-icon-glyph svg {
+  width: 56%;
+  height: 56%;
+}
+.intro-icon.is-accent .intro-icon-face {
+  background: linear-gradient(150deg, rgba(255, 90, 50, 0.55),
+    rgba(240, 67, 30, 0.16));
+  border-color: rgba(255, 120, 80, 0.55);
+  box-shadow:
+    0 6px 22px rgba(240, 67, 30, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+@keyframes intro-converge {
+  /* Scattered and holding (chaos). */
+  0%,
+  20% {
+    transform: translate(var(--x), var(--y)) scale(1);
+    opacity: 1;
   }
-  50% {
-    box-shadow: 0 0 0 7px rgba(240, 67, 30, 0);
-    transform: scale(1);
+  /* Sweep through the curved mid-point (attraction). */
+  55% {
+    transform: translate(var(--mx), var(--my)) scale(0.62);
+    opacity: 1;
+  }
+  /* Gathered tight at the core (organisation). */
+  82% {
+    transform: translate(0, 0) scale(0.16);
+    opacity: 0.85;
+  }
+  /* Absorbed into the unified core. */
+  100% {
+    transform: translate(0, 0) scale(0.04);
+    opacity: 0;
   }
 }
 
-.splash-word {
+/* Gentle idle drift while scattered; imperceptible once collapsed to the core. */
+@keyframes intro-float {
+  0%,
+  100% { transform: translate(0, 0); }
+  50% { transform: translate(3px, -4px); }
+}
+
+/* Central signal: a ring pulsing out from the core, cueing the attraction. */
+.intro-pulse {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 90, 50, 0.6);
+  opacity: 0;
+  animation: intro-pulse 2.2s ease-out 1s 2;
+}
+.intro-pulse--2 { animation-delay: 1.9s; }
+@keyframes intro-pulse {
+  0% { transform: scale(0.4); opacity: 0; }
+  12% { opacity: 0.75; }
+  100% { transform: scale(26); opacity: 0; }
+}
+
+/* Faint orbiting network ring that forms as the tiles gather, then fades. */
+.intro-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 150px;
+  height: 150px;
+  margin: -75px 0 0 -75px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  opacity: 0;
+  animation: intro-ring 3s ease-out 2.6s both;
+}
+@keyframes intro-ring {
+  0% { transform: rotate(0deg) scale(0.3); opacity: 0; }
+  30% { opacity: 0.55; }
+  70% { opacity: 0.45; }
+  100% { transform: rotate(210deg) scale(1); opacity: 0; }
+}
+
+/* The unified control core: grows, flares, and settles into a steady glow. */
+.intro-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #ff7a52,
+    var(--accent) 55%, var(--accent-deep));
+  opacity: 0;
+  animation: intro-core 3.4s cubic-bezier(0.3, 0, 0.2, 1) 2.8s both;
+}
+@keyframes intro-core {
+  0% { opacity: 0; transform: scale(0); box-shadow: 0 0 0 0 rgba(240, 67, 30, 0); }
+  35% {
+    opacity: 1;
+    transform: scale(1.7);
+    box-shadow: 0 0 36px 9px rgba(240, 67, 30, 0.55);
+  }
+  60% {
+    transform: scale(2.3);
+    box-shadow: 0 0 52px 15px rgba(240, 67, 30, 0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(2.05);
+    box-shadow: 0 0 44px 11px rgba(240, 67, 30, 0.45);
+  }
+}
+
+/* Title resolves below the settled core (unification → VIBE CONTROL). */
+.intro-title-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 46px);
+  text-align: center;
+  pointer-events: none;
+}
+.intro-title {
   font-family: var(--display);
   font-weight: 700;
-  font-size: 26px;
-  letter-spacing: 0.06em;
-  color: var(--ink);
+  font-size: 34px;
+  letter-spacing: 0.22em;
+  color: #f3f1ec;
+  text-shadow: 0 0 20px rgba(240, 67, 30, 0.35);
+  opacity: 0;
+  animation: intro-title 1.6s cubic-bezier(0.2, 0, 0.2, 1) 4.1s both;
 }
-
-/* Row of LCD-green segment blocks doing a left-to-right chase, echoing a
-   hardware boot sequence on the device's readout. */
-.splash-leds {
-  display: flex;
-  gap: 8px;
+@keyframes intro-title {
+  0% { opacity: 0; transform: translateY(14px); letter-spacing: 0.42em; }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: translateY(0); letter-spacing: 0.22em; }
 }
-.splash-leds span {
-  width: 16px;
-  height: 7px;
-  border-radius: 2px;
-  background: var(--lcd-seg-off);
-  animation: splash-chase 1.2s ease-in-out infinite;
-}
-.splash-leds span:nth-child(2) { animation-delay: 0.12s; }
-.splash-leds span:nth-child(3) { animation-delay: 0.24s; }
-.splash-leds span:nth-child(4) { animation-delay: 0.36s; }
-.splash-leds span:nth-child(5) { animation-delay: 0.48s; }
-@keyframes splash-chase {
-  0%, 70%, 100% {
-    background: var(--lcd-seg-off);
-    box-shadow: none;
-  }
-  35% {
-    background: var(--lcd-seg);
-    box-shadow: 0 0 6px rgba(28, 34, 26, 0.6);
-  }
-}
-
-.splash-cap {
+.intro-sub {
+  margin-top: 11px;
   font-family: var(--mono);
   text-transform: uppercase;
-  letter-spacing: 0.24em;
-  font-size: 10px;
-  color: var(--ink-muted);
-  animation: splash-blink 1.6s steps(1, end) infinite;
+  letter-spacing: 0.34em;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  opacity: 0;
+  animation: intro-sub 1.2s ease 4.8s both;
 }
-@keyframes splash-blink {
-  0%, 60% { opacity: 1; }
-  80%, 100% { opacity: 0.35; }
+@keyframes intro-sub {
+  0% { opacity: 0; }
+  100% { opacity: 0.85; }
 }
 
-/* Respect reduced-motion: keep the splash, drop the animation. */
+/* Respect reduced-motion: skip the choreography, show the resolved end state
+   (a steady core with the title) and no movement. */
 @media (prefers-reduced-motion: reduce) {
-  .splash,
-  .splash-rec,
-  .splash-leds span,
-  .splash-cap {
+  .splash { transition: none; }
+  .intro-field,
+  .intro-pulse,
+  .intro-ring { display: none; }
+  .intro-icon,
+  .intro-icon-face { animation: none; }
+  .intro-core {
     animation: none;
-    transition: none;
+    opacity: 1;
+    transform: scale(2.05);
+    box-shadow: 0 0 44px 11px rgba(240, 67, 30, 0.45);
   }
+  .intro-title,
+  .intro-sub {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    letter-spacing: 0.22em;
+  }
+  .intro-sub { opacity: 0.85; }
 }
 
 /* Small technical-caption utility (uppercase mono, wide tracking). */
@@ -1298,6 +1438,72 @@ button.mini.danger {
 @media (prefers-reduced-motion: reduce) {
   .modal-backdrop,
   .modal { animation: none; }
+}
+
+/* ── Full-conversation viewer (FR-12.3 / AC-17) ── */
+.conversation-modal {
+  width: min(720px, 100%);
+  max-height: min(80vh, 720px);
+  padding: 16px 16px 12px;
+  gap: 10px;
+}
+.conversation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.conversation-head .modal-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 6px 4px 2px;
+}
+.conversation-empty {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  padding: 24px 0;
+  text-align: center;
+}
+.conv-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--sunk);
+  box-shadow: inset 0 1px 0 var(--edge-hi);
+}
+.conv-turn.user {
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+}
+.conv-role {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+.conv-text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ── Bottom: the Claude prompt console = a docked control strip ── */
