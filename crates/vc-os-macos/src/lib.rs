@@ -588,13 +588,14 @@ function run() {
     /// (FR-2.4). (It is keyed on the process's own z-order, NOT on whether the app
     /// is system-frontmost — vibe-control itself is frontmost while the user reads
     /// this list, so a system-frontmost gate would never light up.)
-    fn app_windows(app_name: &str) -> Vec<AppChild> {
-        let esc = app_name.replace('\\', "\\\\").replace('"', "\\\"");
-        // Delimiter computed outside the tell block (see `browser_tabs`) so no
-        // System Events terminology can shadow it. Each row is
-        // `foc <fs> idx <fs> title`; the 1-based window index disambiguates two
-        // windows that share a title (common for Terminal/VS Code) so each is
-        // independently registerable and focusable.
+    /// Current `(1-based window index, title)` of every window of `app`, via
+    /// System Events. Shared by `app_windows` (listing an app's children) and
+    /// `focus_window` (re-matching a saved handle against the LIVE windows so a
+    /// stale saved index is never trusted). The `fs` delimiter is computed
+    /// outside the tell block (see `browser_tabs`) so no System Events
+    /// terminology can shadow it; a `with timeout` bounds one unresponsive app.
+    fn window_titles(app: &str) -> Vec<(u32, String)> {
+        let esc = app.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
             "set fs to (character id 31)\n\
              set out to \"\"\n\
@@ -609,9 +610,7 @@ function run() {
              try\n\
              set wt to name of w\n\
              end try\n\
-             set foc to \"0\"\n\
-             if (idx is 1) then set foc to \"1\"\n\
-             set out to out & foc & fs & idx & fs & wt & linefeed\n\
+             set out to out & idx & fs & wt & linefeed\n\
              end repeat\n\
              end timeout\n\
              end try\n\
@@ -623,23 +622,28 @@ function run() {
         };
         out.lines()
             .filter_map(|line| {
-                let mut parts = line.splitn(3, '\u{1f}');
-                let foc = parts.next().unwrap_or("0").trim() == "1";
-                let idx = parts.next().unwrap_or("").trim();
-                let title = parts.next().unwrap_or("").trim();
+                let (idx, title) = line.split_once('\u{1f}')?;
+                let idx: u32 = idx.trim().parse().ok()?;
+                let title = title.trim();
                 if title.is_empty() {
                     return None;
                 }
-                // handle = `app\u{1f}title\u{1f}idx`; `focus_window` raises the
-                // window at this exact position, falling back to a title match.
+                Some((idx, title.to_string()))
+            })
+            .collect()
+    }
+
+    fn app_windows(app_name: &str) -> Vec<AppChild> {
+        // The 1-based window index disambiguates two windows that share a title
+        // (common for Terminal/VS Code) so each is independently registerable;
+        // the first window is flagged focused.
+        Self::window_titles(app_name)
+            .into_iter()
+            .map(|(idx, title)| {
+                // handle = `app\u{1f}title\u{1f}idx`; `focus_window` re-matches
+                // this against the live windows (title first, index as a hint).
                 let handle = format!("{app_name}\u{1f}{title}\u{1f}{idx}");
-                Some((
-                    "window".to_string(),
-                    handle.clone(),
-                    title.to_string(),
-                    handle,
-                    foc,
-                ))
+                ("window".to_string(), handle.clone(), title, handle, idx == 1)
             })
             .collect()
     }
@@ -734,78 +738,49 @@ impl MacLauncher {
     /// Activates the app first (works without Accessibility), then best-effort
     /// raises the exact window via `System Events` `AXRaise`.
     ///
-    /// The window TITLE is the source of truth, NOT the index: a process's window
-    /// z-order shifts constantly (and the `open_app` above just brought a window
-    /// forward), so the saved index frequently points at a DIFFERENT window than it
-    /// did at enumeration time — trusting a stale-but-in-range index raised the
-    /// wrong window (e.g. the wrong VS Code project came forward). So we: (1) fast
-    /// path — raise the window at the saved index ONLY when its title still matches
-    /// (unambiguous even when two windows share a title); (2) otherwise raise the
-    /// first window whose title matches (index went stale); (3) title-less legacy
-    /// handle — fall back to a bare index raise. Raising needs Accessibility
-    /// permission; failure is non-fatal because the app is already frontmost. When
-    /// the handle carries neither title nor index, this degrades to plain app
-    /// activation (single-window consistency). Also used to restore a WindowRef
-    /// resource, so a closed app is relaunched by the leading `open_app`.
+    /// The window TITLE is the source of truth, NOT the saved index: a process's
+    /// window z-order shifts constantly (and the `open_app` above just brought a
+    /// window forward), and after the app is quit and reopened the saved index
+    /// points at a DIFFERENT window entirely — trusting it raised the wrong window
+    /// (e.g. the wrong VS Code project came forward). So instead of raising the
+    /// saved index blind, we RE-ENUMERATE the app's live windows and match in Rust
+    /// via `best_window_index`: exact title first, then the window sharing the
+    /// longest trailing title-segment suffix (project + app name — this survives
+    /// the active-file part of a VS Code title drifting across a restart), then —
+    /// only for a title-less legacy handle — the bare saved index. When the title
+    /// is present but nothing matches, we deliberately raise NOTHING (the app is
+    /// already frontmost) rather than guess an index and surface the wrong window.
+    /// Raising needs Accessibility permission; failure is non-fatal. Also used to
+    /// restore a WindowRef resource, so a closed app is relaunched by `open_app`.
     pub fn focus_window(handle: &str) -> Result<()> {
         let mut parts = handle.splitn(3, '\u{1f}');
         let app = parts.next().unwrap_or(handle);
         let title = parts.next().unwrap_or("");
-        let idx: Option<u32> = parts.next().and_then(|s| s.trim().parse().ok());
+        let idx_hint: Option<u32> = parts.next().and_then(|s| s.trim().parse().ok());
         // Always bring the app forward first (relaunches it if it was closed).
         Self::open_app(app)?;
-        if title.is_empty() && idx.is_none() {
+        if title.is_empty() && idx_hint.is_none() {
             return Ok(());
         }
-        let esc_app = app.replace('\\', "\\\\").replace('"', "\\\"");
-        let esc_title = title.replace('\\', "\\\\").replace('"', "\\\"");
-        // Fast path: raise the window at the saved index, but ONLY if its title
-        // still matches — the index alone is not trustworthy (z-order shifts), so
-        // this guard is what stops a stale index from raising the wrong window.
-        let index_when_title_matches = match (idx, title.is_empty()) {
-            (Some(i), false) => format!(
-                "try\n\
-                 if (name of (window {i} of p)) is \"{esc_title}\" then\n\
-                 perform action \"AXRaise\" of (window {i} of p)\n\
-                 set frontmost of p to true\n\
-                 return\n\
-                 end if\n\
-                 end try\n"
-            ),
-            _ => String::new(),
-        };
-        // Primary path: match by title (handles the saved index having gone stale
-        // since the window was enumerated).
-        let title_raise = if title.is_empty() {
-            String::new()
+        // Match against the CURRENT windows so the index we raise is fresh, never
+        // the stale saved one. With a title, `best_window_index` decides (and
+        // returns None when nothing matches → raise nothing); without one, honour
+        // the bare index from a legacy handle.
+        let target_idx = if title.is_empty() {
+            idx_hint
         } else {
-            format!(
-                "repeat with w in windows of p\n\
-                 if (name of w) is \"{esc_title}\" then\n\
-                 perform action \"AXRaise\" of w\n\
-                 set frontmost of p to true\n\
-                 return\n\
-                 end if\n\
-                 end repeat\n"
-            )
+            best_window_index(title, &MacWindowEnumerator::window_titles(app))
         };
-        // Last resort for title-less legacy handles: honour the bare index.
-        let index_only = match (idx, title.is_empty()) {
-            (Some(i), true) => format!(
-                "try\n\
-                 perform action \"AXRaise\" of (window {i} of p)\n\
-                 set frontmost of p to true\n\
-                 end try\n"
-            ),
-            _ => String::new(),
+        let Some(i) = target_idx else {
+            return Ok(()); // app already frontmost; no confident window to raise
         };
+        let esc_app = app.replace('\\', "\\\\").replace('"', "\\\"");
         let script = format!(
             "tell application \"System Events\"\n\
              try\n\
              set p to first process whose name is \"{esc_app}\"\n\
-             {index_when_title_matches}\
-             {title_raise}\
-             {index_only}\
+             perform action \"AXRaise\" of (window {i} of p)\n\
+             set frontmost of p to true\n\
              end try\n\
              end tell"
         );
@@ -964,6 +939,64 @@ fn is_bundle_id(s: &str) -> bool {
     s.contains('.') && !s.contains(' ') && s.split('.').filter(|p| !p.is_empty()).count() >= 2
 }
 
+/// Split a window title into its logical segments on the SPACE-surrounded dash
+/// separators apps use between title parts (` — `, ` – `, ` - `). A hyphen with
+/// no surrounding spaces (as in a folder name like `vibe-control`) is left
+/// intact, so it stays one segment. VS Code titles are
+/// `<active file> — <project/folder> — Visual Studio Code`, so the trailing
+/// segments (project + app name) are the stable identity of a specific instance.
+#[cfg(target_os = "macos")]
+fn title_segments(title: &str) -> Vec<String> {
+    let norm = title.replace(" – ", " — ").replace(" - ", " — ");
+    norm.split(" — ")
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(str::to_string)
+        .collect()
+}
+
+/// Count how many trailing segments two segment-lists share (comparing from the
+/// end). Used to score how well a live window title matches a saved one.
+#[cfg(target_os = "macos")]
+fn common_suffix_len(a: &[String], b: &[String]) -> usize {
+    a.iter()
+        .rev()
+        .zip(b.iter().rev())
+        .take_while(|(x, y)| x == y)
+        .count()
+}
+
+/// Pick the live window whose title best matches the saved `want_title`, among
+/// `windows` (each `(1-based index, current title)`, in index order). An exact
+/// title match wins outright; otherwise the window sharing the LONGEST trailing
+/// title-segment suffix with `want_title` (the project + app name, which survive
+/// the active-file part of the title changing) — requiring at least one shared
+/// trailing segment so an unrelated window is never chosen. Ties keep the
+/// lowest index. Returns `None` when nothing shares a trailing segment, so the
+/// caller degrades to plain app activation rather than raising a wrong window.
+#[cfg(target_os = "macos")]
+fn best_window_index(want_title: &str, windows: &[(u32, String)]) -> Option<u32> {
+    if let Some((i, _)) = windows.iter().find(|(_, t)| t == want_title) {
+        return Some(*i);
+    }
+    let want = title_segments(want_title);
+    if want.is_empty() {
+        return None;
+    }
+    let mut best: Option<(u32, usize)> = None;
+    for (i, t) in windows {
+        let n = common_suffix_len(&want, &title_segments(t));
+        if n == 0 {
+            continue;
+        }
+        match best {
+            Some((_, bn)) if bn >= n => {}
+            _ => best = Some((*i, n)),
+        }
+    }
+    best.map(|(i, _)| i)
+}
+
 /// Resolve an application name to its bundle identifier via `id of app`.
 /// This uses a fuzzier lookup than `open -a`, so it resolves process names
 /// like `Code` that `open -a` rejects.
@@ -1073,5 +1106,65 @@ mod tests {
         assert!(!is_bundle_id("Visual Studio Code")); // name with spaces
         assert!(!is_bundle_id("")); // empty
         assert!(!is_bundle_id("foo.")); // trailing dot, one real segment
+    }
+
+    #[test]
+    fn title_segments_splits_on_spaced_dashes_only() {
+        assert_eq!(
+            title_segments("App.tsx — vibe-control — Visual Studio Code"),
+            vec!["App.tsx", "vibe-control", "Visual Studio Code"]
+        );
+        // A hyphen with no surrounding spaces (a folder name) stays one segment.
+        assert_eq!(title_segments("vibe-control"), vec!["vibe-control"]);
+        // En dash and spaced hyphen normalise to the same split.
+        assert_eq!(title_segments("a – b - c"), vec!["a", "b", "c"]);
+    }
+
+    #[test]
+    fn best_window_prefers_matching_project_across_file_switch() {
+        // The saved tab's active file changed since it was registered, but the
+        // project segment still uniquely identifies the right instance.
+        let windows = vec![
+            (1u32, "main.rs — other-proj — Visual Studio Code".to_string()),
+            (2u32, "README.md — vibe-control — Visual Studio Code".to_string()),
+        ];
+        let got = best_window_index("App.tsx — vibe-control — Visual Studio Code", &windows);
+        assert_eq!(got, Some(2));
+    }
+
+    #[test]
+    fn best_window_exact_match_wins() {
+        let windows = vec![
+            (1u32, "a — proj — Visual Studio Code".to_string()),
+            (2u32, "b — proj — Visual Studio Code".to_string()),
+        ];
+        assert_eq!(
+            best_window_index("b — proj — Visual Studio Code", &windows),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn best_window_no_shared_suffix_is_none() {
+        // Nothing shares a trailing segment → raise nothing (don't guess).
+        let windows = vec![(1u32, "Downloads".to_string())];
+        assert_eq!(
+            best_window_index("App.tsx — vibe-control — Visual Studio Code", &windows),
+            None
+        );
+    }
+
+    #[test]
+    fn best_window_tie_keeps_lowest_index() {
+        // Same project, saved file gone from both → tie on suffix len 2; the
+        // lowest (first-enumerated) index wins.
+        let windows = vec![
+            (3u32, "a.rs — proj — Visual Studio Code".to_string()),
+            (4u32, "b.rs — proj — Visual Studio Code".to_string()),
+        ];
+        assert_eq!(
+            best_window_index("c.rs — proj — Visual Studio Code", &windows),
+            Some(3)
+        );
     }
 }
