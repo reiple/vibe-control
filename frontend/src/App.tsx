@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type {
   WorkBundle,
   Resource,
@@ -168,12 +168,75 @@ function AppIcon({
   );
 }
 
-// Full-viewport boot splash. Rendered by React (not static index.html markup)
-// so it paints at the correct DPI on Windows/WebView2, and it blocks all input
-// underneath until the app has finished its first load. `hiding` fades it out
-// just before it unmounts. The EP-133 device motif — charcoal pad, orange
-// record dot, an LCD segment chase — reads as the hardware "powering on".
+// Faint tool glyphs tucked into a few of the larger scattered tiles, so the
+// field reads as real applications being gathered — terminal, browser, folder,
+// code, settings — rather than abstract squares. Kept low-contrast and softly
+// blurred (see .intro-icon-glyph) so they stay atmospheric, not literal.
+const TOOL_GLYPHS: React.ReactElement[] = [
+  // terminal prompt
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 7l4 4-4 4" /><path d="M12 16h7" /></svg>,
+  // browser / globe
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8" /><path d="M4 12h16" /><path d="M12 4c2.6 2.6 2.6 13.4 0 16" /><path d="M12 4c-2.6 2.6-2.6 13.4 0 16" /></svg>,
+  // folder
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h5l2 2h9v9H4z" /></svg>,
+  // code brackets
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 8l-4 4 4 4" /><path d="M15 8l4 4-4 4" /></svg>,
+  // settings gear
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /></svg>,
+];
+
+// Full-viewport boot splash / intro animation. Rendered by React (not static
+// index.html markup) so it paints at the correct DPI on Windows/WebView2, and
+// it blocks all input underneath until the app has finished its first load.
+// `hiding` fades it out just before it unmounts.
+//
+// The choreography tells the product's core story (intro-animation.md):
+// many independent apps, scattered and drifting, are pulled by a central
+// signal toward one point, organise into a network, and collapse into a single
+// glowing control core — then the title resolves. Chaos → signal → attraction
+// → organisation → unification → VIBE CONTROL. Dark, holographic, and calm,
+// with the TE hero-orange carried through as the "control core" so the intro
+// stays of a piece with the product. The whole sequence is driven by CSS
+// keyframes; per-icon scatter positions, curved mid-points, and staggered
+// (negative-delay) timing are generated once on mount so every launch differs.
 function Splash({ hiding }: { hiding: boolean }) {
+  const icons = useMemo(() => {
+    const N = 15;
+    // A few tiles glow hero-orange among the neutral glass ones, so the field
+    // reads as varied applications rather than a uniform grid.
+    const accent = new Set([2, 7, 11]);
+    return Array.from({ length: N }, (_, i) => {
+      // Every tile carries a faint tool glyph, cycling through the set so the
+      // whole field reads as real applications being gathered.
+      const glyph = i % TOOL_GLYPHS.length;
+      // Sizes still vary widely so the field stays organic, not a uniform grid.
+      const size = 30 + Math.random() * 26;
+      // Scatter across the viewport as offsets from centre (chaos).
+      const x = (Math.random() * 2 - 1) * 42; // vw
+      const y = (Math.random() * 2 - 1) * 40; // vh
+      // A perpendicular kick on the mid-point bends each path into an arc, so
+      // icons sweep in on curved, coordinated trajectories rather than straight
+      // radial lines.
+      const swirl = Math.random() * 2 - 1;
+      const mx = x * 0.5 - y * 0.2 * swirl;
+      const my = y * 0.5 + x * 0.2 * swirl;
+      return {
+        id: i,
+        isAccent: accent.has(i),
+        glyph,
+        size: `${size.toFixed(0)}px`,
+        x: `${x.toFixed(1)}vw`,
+        y: `${y.toFixed(1)}vh`,
+        mx: `${mx.toFixed(1)}vw`,
+        my: `${my.toFixed(1)}vh`,
+        // Negative delay staggers when each icon reaches convergence while
+        // keeping them all visibly scattered from the first frame.
+        conv: -(Math.random() * 0.7),
+        drift: -(Math.random() * 3),
+      };
+    });
+  }, []);
+
   return (
     <div
       className={`splash ${hiding ? "splash--hidden" : ""}`}
@@ -181,19 +244,42 @@ function Splash({ hiding }: { hiding: boolean }) {
       aria-label="Loading vibe-control"
       aria-busy="true"
     >
-      <div className="splash-card">
-        <div className="splash-badge">
-          <span className="splash-rec" />
+      <div className="intro">
+        <div className="intro-field" aria-hidden>
+          {icons.map((ic) => (
+            <span
+              key={ic.id}
+              className={`intro-icon${ic.isAccent ? " is-accent" : ""}`}
+              style={
+                {
+                  "--x": ic.x,
+                  "--y": ic.y,
+                  "--mx": ic.mx,
+                  "--my": ic.my,
+                  "--size": ic.size,
+                  animationDelay: `${ic.conv.toFixed(2)}s`,
+                } as React.CSSProperties
+              }
+            >
+              <span
+                className="intro-icon-face"
+                style={{ animationDelay: `${ic.drift.toFixed(2)}s` }}
+              >
+                {ic.glyph !== null && (
+                  <span className="intro-icon-glyph">{TOOL_GLYPHS[ic.glyph]}</span>
+                )}
+              </span>
+            </span>
+          ))}
         </div>
-        <div className="splash-word">vibe-control</div>
-        <div className="splash-leds" aria-hidden>
-          <span />
-          <span />
-          <span />
-          <span />
-          <span />
+        <span className="intro-pulse" aria-hidden />
+        <span className="intro-pulse intro-pulse--2" aria-hidden />
+        <span className="intro-ring" aria-hidden />
+        <span className="intro-core" aria-hidden />
+        <div className="intro-title-wrap">
+          <div className="intro-title">VIBE CONTROL</div>
+          <div className="intro-sub">Unified Control System</div>
         </div>
-        <div className="splash-cap">Initializing</div>
       </div>
     </div>
   );
@@ -348,9 +434,13 @@ export default function App() {
     let cancelled = false;
     let finished = false;
     const startedAt = performance.now();
-    const MIN_SPLASH_MS = 650;
-    const MAX_SPLASH_MS = 8000;
-    const FADE_MS = 400; // must match the .splash opacity transition
+    // Floor the visible time to the length of the intro choreography so the
+    // full sequence (convergence → core → title hold) plays before the fade,
+    // rather than being cut short the instant the (usually faster) boot data
+    // lands. The hard cap still guarantees the splash lifts if boot stalls.
+    const MIN_SPLASH_MS = 6000;
+    const MAX_SPLASH_MS = 9000;
+    const FADE_MS = 500; // must match the .splash opacity transition
 
     // Fade the splash out, then unmount it. Idempotent: whichever of the boot
     // completion or the hard-cap fires first wins; the other is a no-op.
