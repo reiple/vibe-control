@@ -60,7 +60,7 @@
 | D3 | 시그니처: `matches -> bool`(component-methods), `evaluate(saved,running,perm,sessions) -> Vec<(ResourceId,ResourceStatus)>`, `load_and_migrate -> StoreState`, `reorder(order: Vec<ResourceId>) -> Result<()>` | `matches -> MatchResult`, `evaluate(&[Resource],&[String],bool) -> Vec<StatusSnapshot>`, `load_and_migrate -> Vec<WorkBundle>`, `reorder(&mut self)`(인자 없이 순번 재부여). `RunningItem`/`PermissionState`/`SessionSnapshot`은 vc-core에 없거나 축소 | [문서반영] | `matching/window.rs:14`, `evaluate/mod.rs:38`, `migrate/mod.rs:14`, `bundle.rs:88` |
 | D4 | 파일 레이아웃: `normalize/{url,path,app_id}.rs`, `matching/{signature,distinct}.rs`, `restore/plan.rs`, `evaluate/{status,session}.rs`, `migrate/{rules,transforms}.rs`, `tests/*.rs`, `benches/*.rs` | 각 영역이 단일 `mod.rs`(+`matching/window.rs`)로 통합. `tests/`·`benches/` 디렉터리 없음 | [문서반영] | `vc-core/src/` 트리 |
 | D5 | PBT-02(라운드트립)·PBT-03(파서 견고성)이 vc-core `tests/pbt_*.rs` | 둘 다 **인라인 `#[cfg(test)] mod pbt`**. PBT-02(`prop_roundtrip_stable`)와 PBT-03(`prop_parser_robust`)은 **`vc-core/migrate/mod.rs`에 함께** 있고, `vc-sessions/lib.rs`에도 별도의 PBT-03 계열 2건(`prop_parser_robust`, `prop_lines_robust`)이 있다. ⚠ **2026-09-08 정정**: 종전 기술 "PBT-03는 vc-core 아님"은 **부정확**했다(`migrate/mod.rs:143`에 존재) | [문서반영] | `migrate/mod.rs:131-146`, `vc-sessions/src/lib.rs:456-474` |
-| D6 | — | 미사용 `sha2` 의존성(매칭은 `std::DefaultHasher` 사용) | [코드백로그] | `vc-core/Cargo.toml`, `matching/mod.rs:27` |
+| D6 | — | ✅ **해결(2026-09-09)** — 미사용 `sha2` 의존성 제거(매칭은 `std::DefaultHasher` 사용, 소스 실사용 0건 확인 후 `vc-core/Cargo.toml`에서 삭제) | [문서반영] | `vc-core/Cargo.toml` |
 
 **일치 확인(이탈 아님)**: `ResourceStatus`(4개), `SessionCompletion`(Waiting/NotWaiting/Unknown) enum은 설계와 **정확히 일치**. `ResourceKind`는 원 설계 6종에서 **7종으로 가법 확장**(2026-09-09 `BrowserTabLive` 추가 — 라이브 탭의 포커스 전용 등록, §H2). 기존 6종은 무변경이므로 이탈이 아니라 **후속 요구사항 대응 확장**.
 
@@ -70,8 +70,8 @@
 
 | # | 원 설계 | 실제 코드 | 유형 | 근거 |
 |---|---|---|---|---|
-| E1 | 세션 카드에서 **전체 대화 스크롤 열람**(FR-12.3, AC-17) | 인라인 대화 패널 제거됨. "View"는 터미널 포커스로 대체, 카드엔 완료 칩+마지막 질문 1줄만. `SessionSnapshot.conversation`은 fetch되나 미렌더 | [코드백로그] | `App.tsx:144-191,353`, `audit.md`(대화 패널 제거 기록) |
-| E2 | 레이아웃 설정 재실행 후 유지(FR-8.3/8.5/8.10, AC-14) | 저장 스키마·CSS 리사이즈는 있으나 어떤 커맨드도 레이아웃 설정을 **읽거나 쓰지 않음**(SettingsService 미배선). 실제로 읽고/쓰는 설정은 Claude 3필드뿐 | [코드백로그] | `vc-app/src/lib.rs`(get/update_settings 커맨드 없음) |
+| E1 | 세션 카드에서 **전체 대화 스크롤 열람**(FR-12.3, AC-17) | ✅ **해결(2026-09-09)** — 세션 카드에 "Log" 버튼 추가 → `ConversationModal`이 `get_session_snapshot`으로 `conversation`(최대 60턴)을 fetch해 스크롤 가능한 모달로 렌더(역할별 말풍선, 최신 턴으로 스크롤). 읽기 전용, 스냅샷이 이미 노출하는 내용만 표시 | [문서반영] | `App.tsx` `ConversationModal` |
+| E2 | 레이아웃 설정 재실행 후 유지(FR-8.3/8.5/8.10, AC-14) | ✅ **해결(2026-09-09)** — `get_layout`/`save_panel_layout` 커맨드 배선 + 백엔드 `on_window_event`(Moved/Resized→메모리 stash, CloseRequested/Destroyed→디스크 flush) + 부팅 시 `restore_window_rect`로 창 위치/크기 복원. 프론트: 부팅 시 사이드바 폭 적용 + `ResizeObserver` 디바운스 저장. 창 위치/크기 저장·복원 실측 검증 | [문서반영] | `vc-app/src/lib.rs`(`get_layout`/`save_panel_layout`/`restore_window_rect`/`on_window_event`), `App.tsx` |
 | E3 | "캡처" 모델(capture_current) | 프론트는 그룹 생성 + 드래그 모델 사용. `capture_current`/`save_bundles`는 백엔드·`api.ts`에 존재하나 `App.tsx`가 호출 안 함(고아) | [문서반영] | `api.ts:19,24`, `App.tsx`(미호출) |
 
 **일치 확인**: 프론트↔백엔드 커맨드 정합성은 깨끗(프론트가 호출하는 모든 커맨드가 백엔드에 존재; 없는 커맨드 호출 없음).
@@ -294,23 +294,25 @@ vc-os-windows `list_tabs`에서 UIA `Name`이 빈 문자열인 탭을 `(제목 �
 | 우선 | 항목 | 관련 이탈 | 관련 FR/AC |
 |---|---|---|---|
 | ✅완료 | 창 단위 모델 재정렬 **완료**(G1·G2·G3). 열거를 `EnumWindows` 네이티브 FFI로 교체 — Edge/Chrome/카톡 다중 창이 각각 표시됨(실측 검증, 2026-09-09) | **G1✔, G2✔, G3✔** | **FR-2.2/2.4/2.6/2.8, FR-4.1/4.2, AC-20** |
-| ✅완료 | **묶음에서 리소스 제거** 배선 완료 — 코드 감사(2026-09-09)에서 이미 구현되어 있음 확인: `remove_resource` Tauri 커맨드(`vc-app/src/lib.rs:562`) + `removeResource` api 래퍼(`frontend/src/api.ts:115`) + `App.tsx:644` 호출. 종전 백로그 표기가 stale이었음 | ~~신규 `#D-33`~~ | FR-1.2 |
-| P1 | 레이아웃 설정 영속화(get/update_settings 배선) | E2 | FR-8.10, AC-14 |
+| ✅완료 | **묶음에서 리소스 제거** 배선 완료 — 코드 감사(2026-09-09)에서 이미 구현되어 있음 확인: `remove_resource` Tauri 커맨드 + `removeResource` api 래퍼 + `App.tsx` 호출. 종전 백로그 표기가 stale이었음 | ~~신규 `#D-33`~~ | FR-1.2 |
+| ✅완료 | 레이아웃 설정 영속화 — `get_layout`/`save_panel_layout` 커맨드 + 백엔드 창 이벤트(이동/리사이즈 시 메모리 갱신, 종료 시 flush) + 부팅 시 창 위치/크기 복원 + 사이드바 폭 저장(2026-09-09) | **E2 해결** | FR-8.10, AC-14 |
 | P1 | 저장 리소스 상태 표시 배선(`evaluate` 호출 + 프론트 `status` 필드) | A4, 신규 `#D-30` | FR-7.1~7.3 |
 | ✅완료 | **폴링 절약 구현 완료 (2026-09-08)** — 창이 숨겨짐/최소화 시 폴링 중단, 리사이즈 후 400ms 유예, 복귀 시 즉시 갱신, 진행 중 폴링과 중첩 방지. `frontend/src/App.tsx` | ~~`#D-37`~~ | FR-7.5, **FR-7.6**, NFR-Pf3 |
 | P2 | 항목 편집(표시명·재실행 주소) | 신규 `#D-31` | FR-6.1/6.2(연기) |
 | P2 | 묶음 이름 변경 | 신규 `#D-32` | FR-1.1(연기) |
 | P2 | 사용자 문서(저장 위치·권한·사용법 + Claude 콘솔 외부 전송 고지) | 신규 `#D-36` | NFR-U1, DoD |
-| P3 | ~~세션 전체 대화 뷰어 복원~~ → **요구사항 v1.1에서 축소**(터미널 포커스로 대체). 되돌릴 경우에만 착수 | E1 | FR-12.3(개정), AC-17(개정) |
+| ✅완료 | 세션 전체 대화 뷰어 복원 — 요구사항 v1.1에서 터미널 포커스로 축소됐던 인앱 뷰어를 재도입: 세션 카드 "Log" 버튼 + `ConversationModal`이 fetch된 `SessionSnapshot.conversation`(최대 60턴) 렌더(2026-09-09). 기존 "View"(터미널 포커스)/"Resume"과 병행 | **E1 해결** | FR-12.3, AC-17 |
 | P3 | 스플래시 고DPI 렌더 보정(Tauri 창 nudge) | **H2** | FR-13(알려진 제약) |
 | P4 | 죽은 API `WinWindowEnumerator::list_running` 정리 / `reqwest` 주석 정정 | **H3, H4** | — |
-| ✅완료 | 저장 실패 시 `.tmp` 정리 + `settings.json` 원자적 쓰기 **완료(2026-09-09)** — 공유 `atomic_write` 헬퍼(temp→rename, 실패 시 `.tmp` 정리). `cargo test -p vc-store` 5/5 통과·clippy 0 경고 | C1✔, C2✔ | FR-11.5/11.6, SECURITY-15 |
+| ✅완료 | 저장 실패 시 `.tmp` 정리 + `settings.json` 원자적 쓰기 **완료(2026-09-09)** — 공유 `atomic_write` 헬퍼(temp→rename, 실패 시 `.tmp` 정리). `cargo test -p vc-store` 통과·clippy 0 경고 | C1✔, C2✔ | FR-11.5/11.6, SECURITY-15 |
 | P2 | 중복 식별 금지 불변식 도메인화(`add_resource`/`is_duplicate`) | D1 | FR-3.4, AC-3 |
 | 부분완료 | Windows 브라우저 탭 — 라이브 표시·활성화(§H) + **작업 묶음 개별 등록·정확 활성화·중복 방지 완료**(§H2, 제목 기반 포커스 전용). 잔여: capture용 URL 수집(DevTools 필요) | B3 | FR-9.6/10.12, FR-3.4/3.5/4.1/4.2, AC-20 완료 / FR-9.1·9.3, AC-9 잔여 |
 | P3 | Windows 트레이/전역 단축키 | B5 | FR-10.13 |
 | P3 | macOS 권한 체커/안내 상태 재확인 | B6 | FR-10.2, AC-13 |
 | P3 | 포트 트레이트화 + 서비스/이벤트 리팩터링(헥사고날 복원) | A1–A4 | 아키텍처 |
-| P4 | 미사용 `sha2` 의존성 제거 | D6 | — |
+| ✅완료 | 미사용 `sha2` 의존성 제거 — `vc-core/Cargo.toml`에서 삭제(매칭은 `std::DefaultHasher` 사용, 실사용 0건)(2026-09-09) | **D6 해결** | — |
+
+> **환경 주의(2026-09-09)**: 로컬 `cargo build` 산출 exe(debug·release 모두)는 포트 1420에 dev 서버가 떠 있으면 그 dev 서버를 로드한다(WebView2가 `devUrl`로 연결). 이 머신에는 **별개 저장소 `D:\workspace\nott\vibe-control`의 vite dev 서버가 :1420에서 실행 중**이라, 로컬 exe가 그쪽 프론트엔드(사용량 배너 등)를 표시했다. 이 저장소의 프론트엔드 변경은 tsc·vite 빌드 통과 + 방출 번들에 신규 기능 문자열 포함으로 검증(라이브 창 스크린샷은 :1420 점유로 미실시 — 사용자 dev 서버 미종료). 정식 배포(`tauri build`)는 임베드 자산을 쓰므로 무관.
 
 ---
 

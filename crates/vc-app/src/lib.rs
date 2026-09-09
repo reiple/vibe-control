@@ -175,6 +175,61 @@ impl AppState {
         self.settings.claude_model = Some(model).filter(|m| !m.trim().is_empty());
         self.store.save_settings(&self.settings)
     }
+
+    /// The persisted UI layout (sidebar width, card height, saved window rect),
+    /// with the Claude fields deliberately excluded — this is safe to hand to
+    /// the frontend (E2 / FR-8.10 / AC-14).
+    pub fn layout(&self) -> LayoutSettings {
+        LayoutSettings {
+            panel_width: self.settings.panel_width,
+            card_height: self.settings.card_height,
+            window_x: self.settings.window_x,
+            window_y: self.settings.window_y,
+            window_width: self.settings.window_width,
+            window_height: self.settings.window_height,
+        }
+    }
+
+    /// Persist the panel/card layout the frontend owns (sidebar drag-resize).
+    /// The window rect is written by the backend's window-event path, so it is
+    /// left untouched here.
+    pub fn set_panel_layout(&mut self, panel_width: f32, card_height: f32) -> Result<()> {
+        // Guard against a degenerate 0/NaN width bricking the sidebar on reload.
+        if panel_width.is_finite() && panel_width > 0.0 {
+            self.settings.panel_width = panel_width;
+        }
+        if card_height.is_finite() && card_height > 0.0 {
+            self.settings.card_height = card_height;
+        }
+        self.store.save_settings(&self.settings)
+    }
+
+    /// Record the current window position/size in memory only (no disk write) —
+    /// called on every move/resize event, which fire rapidly during a drag.
+    /// The values are flushed to disk once by `persist_settings` on window close.
+    pub fn stash_window_rect(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        self.settings.window_x = Some(x);
+        self.settings.window_y = Some(y);
+        self.settings.window_width = Some(width);
+        self.settings.window_height = Some(height);
+    }
+
+    /// Flush the in-memory settings (including the stashed window rect) to disk.
+    pub fn persist_settings(&self) -> Result<()> {
+        self.store.save_settings(&self.settings)
+    }
+}
+
+/// UI layout the frontend reads on boot and writes back on change (E2). Excludes
+/// the Claude connection fields of `AppSettings`, which the UI must never see.
+#[derive(Serialize, serde::Deserialize, Clone)]
+pub struct LayoutSettings {
+    pub panel_width: f32,
+    pub card_height: f32,
+    pub window_x: Option<i32>,
+    pub window_y: Option<i32>,
+    pub window_width: Option<u32>,
+    pub window_height: Option<u32>,
 }
 
 type SharedState = Mutex<AppState>;
@@ -769,6 +824,30 @@ fn resolve_terminal_session(handle: &str, title: &str) -> Option<(String, String
         }
     }
     None
+}
+
+/// Return the persisted UI layout so the frontend can restore the sidebar width
+/// on boot (E2 / FR-8.10 / AC-14). Never includes Claude credentials.
+#[tauri::command]
+fn get_layout(state: State<SharedState>) -> std::result::Result<LayoutSettings, CommandError> {
+    let app = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    Ok(app.layout())
+}
+
+/// Persist the sidebar/card layout the user adjusted (debounced by the UI).
+#[tauri::command]
+fn save_panel_layout(
+    state: State<SharedState>,
+    panel_width: f32,
+    card_height: f32,
+) -> std::result::Result<(), CommandError> {
+    let mut app = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    app.set_panel_layout(panel_width, card_height)?;
+    Ok(())
 }
 
 /// Add ONE live browser tab (dragged from the left panel) to a context group as
@@ -1499,6 +1578,23 @@ fn enumerate_running_windows() -> Vec<AppWindows> {
     }
 }
 
+/// Restore the saved window position/size (E2 / FR-8.10 / AC-14) before the
+/// window is shown, so it reopens where the user left it. Physical pixels are
+/// stored and restored as-is (consistent round-trip on the same display).
+/// Best-effort: any missing value or failed call leaves the configured default.
+fn restore_window_rect(app: &tauri::AppHandle, layout: &LayoutSettings) {
+    use tauri::{LogicalPosition, LogicalSize, Manager};
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    if let (Some(w), Some(h)) = (layout.window_width, layout.window_height) {
+        let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
+    }
+    if let (Some(x), Some(y)) = (layout.window_x, layout.window_y) {
+        let _ = win.set_position(LogicalPosition::new(x as f64, y as f64));
+    }
+}
+
 /// One expandable child of an app: `(kind, handle, title, target, is_focused)`.
 type AppChild = (String, String, String, String, bool);
 
@@ -1547,12 +1643,49 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let state = AppState::new().map_err(|e| e.to_string())?;
+            let layout = state.layout();
             app.manage(Mutex::new(state));
+            restore_window_rect(app.handle(), &layout);
             // Surface the Accessibility prompt at launch so per-instance window
             // listing works without the user having to hunt through Settings.
             // Unscriptable to grant; only prompts when not already trusted.
             let _ = vc_os_macos::accessibility_trusted(true);
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            use tauri::{Manager, WindowEvent};
+            // Track the window rect in memory as it moves/resizes (cheap, no
+            // disk I/O — these fire many times per drag), then flush once when
+            // the window is closing so the next launch reopens in place.
+            let stash = |window: &tauri::Window| {
+                if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
+                    let scale = window.scale_factor().unwrap_or(1.0);
+                    let logical_pos = pos.to_logical::<f64>(scale);
+                    let logical_size = size.to_logical::<f64>(scale);
+                    if let Some(state) = window.try_state::<SharedState>() {
+                        if let Ok(mut app) = state.lock() {
+                            app.stash_window_rect(
+                                logical_pos.x as i32,
+                                logical_pos.y as i32,
+                                logical_size.width as u32,
+                                logical_size.height as u32,
+                            );
+                        }
+                    }
+                }
+            };
+            match event {
+                WindowEvent::Moved(_) | WindowEvent::Resized(_) => stash(window),
+                WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+                    stash(window);
+                    if let Some(state) = window.try_state::<SharedState>() {
+                        if let Ok(app) = state.lock() {
+                            let _ = app.persist_settings();
+                        }
+                    }
+                }
+                _ => {}
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_bundles,
@@ -1579,6 +1712,8 @@ pub fn run() {
             add_tab_resource,
             add_window_resource,
             add_child_resource,
+            get_layout,
+            save_panel_layout,
             claude_status,
             claude_usage,
             set_claude_api_key,

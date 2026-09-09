@@ -229,6 +229,17 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 
 ### ✅ 정합화 재실행 #2 — **완료 (2026-09-08)**
 
+---
+
+### ✅ DONE (2026-09-09): 백로그 소진 (E1·E2·D6 — feature/backlog-layout-conversation-store)
+창 단위 재정렬(G) 이후 남은 백로그 상위 항목을 구현·검증하고 main에 병합했다. **C1·C2(vc-store 원자적 쓰기)는 병합 시점에 main이 이미 반영(PR #7)**되어 있어 중복분은 폐기하고 main 버전을 채택 — 이 브랜치의 실기여는 E2·E1·D6.
+- [x] **E2 — 레이아웃 영속화**: `LayoutSettings` DTO(패널폭/카드높이/창 rect, Claude 자격증명 제외) + `get_layout`/`save_panel_layout` 커맨드(`generate_handler!` 등록). 창 위치/크기는 백엔드 `on_window_event`가 Moved/Resized 시 메모리에 stash, CloseRequested/Destroyed 시 1회 디스크 flush(폴링 디스크쓰기 회피). 부팅 시 `restore_window_rect`가 저장 rect를 창에 적용. 프론트: 부팅 시 사이드바 폭 적용(ref 명령형, CSS `resize`와 충돌 방지) + `ResizeObserver` 디바운스(500ms) 저장. **실측 검증(병합 전 브랜치)**: 창을 (150,120)/920×640으로 이동 후 종료 → settings.json에 rect 기록; 재기동 → outer rect 정확히 복원.
+- [x] **E1 — 세션 전체 대화 뷰어**: 요구사항 v1.1에서 터미널 포커스로 축소됐던 인앱 뷰어를 재도입. 세션 카드 "Log" 버튼 → `ConversationModal`이 `get_session_snapshot`으로 `SessionSnapshot.conversation`(백엔드가 이미 최대 60턴/턴당 4000자 반환)을 스크롤 모달로 렌더(역할별 말풍선, 최신 턴 스크롤). 기존 "View"(터미널 포커스)/"Resume"과 병행. 읽기 전용.
+- [x] **D6 — 미사용 `sha2` 제거**: 소스 실사용 0건 확인 후 `vc-core/Cargo.toml`에서 삭제(매칭은 `std::DefaultHasher`).
+- [x] **main 병합**: `origin/main`(랜딩 페이지·인트로 애니메이션·usage-meter/context-activation·vc-store C1/C2 선반영)을 브랜치로 병합, vc-app/lib.rs·frontend(App.tsx/api.ts) 충돌을 양 기능 보존으로 해소(레이아웃 커맨드 + `add_child_resource`/accessibility 공존), vc-store는 main 버전 채택, Cargo.lock 재생성.
+- **환경 주의**: 이 머신에 별개 저장소 `D:\workspace\nott\vibe-control`의 vite dev 서버가 :1420에서 실행 중이라, 로컬 `cargo build` exe(WebView2)가 `devUrl`(:1420)로 연결해 그쪽 프론트엔드를 표시한다. 프론트 검증은 빌드 통과 + 방출 번들 문자열 확인으로 수행(사용자 dev 서버 미종료). 정식 `tauri build`는 임베드 자산 사용 → 무관.
+- **남은 백로그**: P1(저장 리소스 상태 표시), P2(D1 중복식별 불변식, 항목 편집, 묶음 이름 변경, 사용자 문서), P3(B5, B6, A1–A4, 스플래시 고DPI). (B3 브라우저 탭은 main에서 라이브 뷰·개별 등록까지 대부분 해소됨.)
+
 ### ✅ DONE (2026-09-09): Supplement Bolt — Windows browser TABS (live view + exact-tab activation)
 **Trigger**: user request — detect a supported browser's currently-open tabs as individual selectable sessions and activate exactly the chosen tab (requirements #2/#3), while preserving multi-window enumeration (#1, already done via `EnumWindows`), bundle/status/restore compat (#4), no system/aux resources leaking (#5), and analyzing impact before working around conflicts (#6). Continuation of the per-window Bolt (U4→U6→U7), `#B3` live portion.
 - **Impact analysis first (#6)**: verified #1 (multi-window) was ALREADY fixed by `EnumWindows` (commit `5d931ad`) — no rework of enumeration (which would be the arbitrary change the user warned against). The genuinely-open work was the `WinBrowserTabReader` tab stub (`#B3`). Empirically validated the platform limit (Chromium lazy-a11y → only foreground window's tabs readable; no per-tab URL) BEFORE coding; scope confirmed via the user's approved choice ("UIA, active-window tabs").
