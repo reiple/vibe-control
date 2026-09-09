@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   WorkBundle,
   Resource,
+  ResourceStatus,
   RestoreReport,
   RunningApp,
   ClaudeStatus,
@@ -65,6 +66,27 @@ const kindLabel: Record<string, string> = {
 
 const isActivatable = (kind: string) =>
   kind === "AppLaunch" || kind === "WindowRef";
+
+/** A saved resource's live status indicator (FR-7.1/7.2): a green dot when the
+ *  resource is currently running, a hollow grey dot when it's not, and an amber
+ *  dot when the OS won't let us tell. `Unknown`/absent renders nothing so
+ *  resources whose status can't meaningfully be evaluated stay unadorned. */
+function StatusDot({ status }: { status?: ResourceStatus }) {
+  if (!status || status === "Unknown") return null;
+  const label =
+    status === "Active"
+      ? "실행 중"
+      : status === "Inactive"
+        ? "실행 중 아님"
+        : "권한 필요";
+  return (
+    <span
+      className={`res-status res-status--${status.toLowerCase()}`}
+      title={label}
+      aria-label={label}
+    />
+  );
+}
 
 /** A group's live-terminal target: the descriptor of its (first) Claude Code
  *  session, or null when the group has no session to drive. */
@@ -942,7 +964,9 @@ export default function App() {
                 {appResources.map((r) => (
                   <li
                     key={r.id}
-                    className={`resource ${isActivatable(r.kind) ? "activatable" : ""}`}
+                    className={`resource ${isActivatable(r.kind) ? "activatable" : ""}${
+                      r.status === "Inactive" ? " res-inactive" : ""
+                    }`}
                     onDoubleClick={() =>
                       isActivatable(r.kind) &&
                       activate(r.identity.reopen_info ?? r.identity.descriptor)
@@ -953,6 +977,7 @@ export default function App() {
                         : undefined
                     }
                   >
+                    <StatusDot status={r.status} />
                     {isActivatable(r.kind) && (
                       <AppIcon
                         target={r.identity.reopen_info ?? r.identity.descriptor}

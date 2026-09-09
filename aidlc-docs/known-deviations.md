@@ -19,7 +19,7 @@
 | A1 | vc-core가 포트 트레이트 **P1–P8**를 모두 정의(도메인이 능력을 선언, 어댑터가 구현) | vc-core에 `trait` 정의 **0개**. P4는 `vc-sessions`, P5는 `vc-store`에 트레이트로 존재. P1/P3는 트레이트 없이 OS별 구체 struct만. P2/P6/P7/P8은 트레이트로 존재하지 않음 | [문서반영]+[코드백로그] | `vc-core/src/*`(trait 없음), `vc-sessions/src/lib.rs:17`, `vc-store/src/lib.rs:5` |
 | A2 | 애플리케이션 서비스 **S1–S7** + `TauriCommandBridge` + `RefreshScheduler`로 유스케이스 오케스트레이션(포트 DI) | 서비스/브리지/스케줄러 struct 부재. 기능이 `AppState` + **32개**(2026-09-09 실측 `generate_handler!` — main 병합으로 `request_accessibility`·`claude_usage`·`list_app_children`·`activate_child`·`add_child_resource`·`get_layout`·`save_panel_layout`·`remove_resource` 추가됨. 종전 표기 18/22/24는 각 시점 기준이며 병합분 미반영이었음) `#[tauri::command]` 핸들러 + 자유 함수로 평면화, 어댑터는 `#[cfg(target_os=…)]` 블록에서 **구체 타입 직접 호출** | [문서반영]+[코드백로그] | `vc-app/src/lib.rs:23`(AppState), `:683-701`(invoke_handler), `:542-668`(cfg dispatch) |
 | A3 | 프론트엔드는 코어 이벤트를 **구독하는 얇은 뷰**(`status_delta`/`activation_report` emit) | 백엔드 `emit` 없음, 프론트 `listen()` 없음. 프론트가 1초 `setInterval`로 **폴링** | [문서반영]+[코드백로그] | `frontend/src/App.tsx:262` |
-| A4 | 도메인 코어(`IdentityMatcher`/`RestorePlanner`/`StatusEvaluator`)를 서비스가 조합 | vc-app이 이들을 **import조차 하지 않음**; 매칭/복원계획/노이즈판정이 오케스트레이션에 연결되지 않음 | [코드백로그] | `vc-app/src/lib.rs:13`(import 목록) |
+| A4 | 도메인 코어(`IdentityMatcher`/`RestorePlanner`/`StatusEvaluator`)를 서비스가 조합 | **부분 해소(2026-09-09)** — `vc-app get_bundles`가 이제 `vc_core::evaluate`를 호출해 저장 리소스 상태(활성/비활성)를 채운다(FR-7.1~7.3 배선, 실 Windows 검증). 잔여: `IdentityMatcher`/`RestorePlanner`는 여전히 vc-app에서 미사용(매칭/복원계획은 인라인) | [문서반영]+[코드백로그(잔여)] | `vc-app/src/lib.rs` `get_bundles`(evaluate 호출), `running_titles_snapshot` |
 
 **해석**: 코드는 헥사고날의 "포트/어댑터"를 트레이트-DI가 아닌 **컴파일타임 `cfg` 분기 + 구체 타입**으로 실현했다. MVP로서는 동작하지만, 도구/OS 확장성·테스트 모킹·이벤트 기반 UI라는 원 설계의 이점은 아직 미실현. 설계 문서에는 "구현 현황" 배너로 현재 구조를 명시하고, 원 설계는 향후 리팩터링 목표로 남긴다.
 
@@ -321,7 +321,7 @@ vc-os-windows `list_tabs`에서 UIA `Name`이 빈 문자열인 탭을 `(제목 �
 | ✅완료 | 창 단위 모델 재정렬 **완료**(G1·G2·G3). 열거를 `EnumWindows` 네이티브 FFI로 교체 — Edge/Chrome/카톡 다중 창이 각각 표시됨(실측 검증, 2026-09-09) | **G1✔, G2✔, G3✔** | **FR-2.2/2.4/2.6/2.8, FR-4.1/4.2, AC-20** |
 | ✅완료 | **묶음에서 리소스 제거** 배선 완료 — 코드 감사(2026-09-09)에서 이미 구현되어 있음 확인: `remove_resource` Tauri 커맨드 + `removeResource` api 래퍼 + `App.tsx` 호출. 종전 백로그 표기가 stale이었음 | ~~신규 `#D-33`~~ | FR-1.2 |
 | ✅완료 | 레이아웃 설정 영속화 — `get_layout`/`save_panel_layout` 커맨드 + 백엔드 창 이벤트(이동/리사이즈 시 메모리 갱신, 종료 시 flush) + 부팅 시 창 위치/크기 복원 + 사이드바 폭 저장(2026-09-09) | **E2 해결** | FR-8.10, AC-14 |
-| P1 | 저장 리소스 상태 표시 배선(`evaluate` 호출 + 프론트 `status` 필드) | A4, 신규 `#D-30` | FR-7.1~7.3 |
+| ✅완료 | **저장 리소스 상태 표시 배선 완료(2026-09-09)** — `get_bundles`가 `vc_core::evaluate`로 각 리소스 실행 여부를 매 조회 판정해 `Resource.status`(비영속) 채움 + 프론트 `Resource.status` + `StatusDot`(녹색=실행/빈점=아님) + 비활성 행 흐림. 실행 앱 이름·런치 id(exe 경로)·창/탭 제목으로 매칭. 실 Windows 검증(Code/WindowsTerminal Active 녹색점) | **A4 부분해소**, `#D-30` | FR-7.1~7.3 |
 | ✅완료 | **폴링 절약 구현 완료 (2026-09-08)** — 창이 숨겨짐/최소화 시 폴링 중단, 리사이즈 후 400ms 유예, 복귀 시 즉시 갱신, 진행 중 폴링과 중첩 방지. `frontend/src/App.tsx` | ~~`#D-37`~~ | FR-7.5, **FR-7.6**, NFR-Pf3 |
 | P2 | 항목 편집(표시명·재실행 주소) | 신규 `#D-31` | FR-6.1/6.2(연기) |
 | P2 | 묶음 이름 변경 | 신규 `#D-32` | FR-1.1(연기) |

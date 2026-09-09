@@ -305,3 +305,16 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **✅ 런타임 검증 완료(2026-09-09, 사용자 수동 검증)**: Edge 포그라운드 탭 목록·백그라운드 폴백 + "⟳ 앞으로 가져와 다시 읽기"(reveal)·다중 Edge 창 구분·빈 제목/중첩 Tab 재발 없음·탭 순서 변경 후 저장 탭 활성화·Chrome 회귀 없음·카카오톡 개별 창 등록·복귀 모두 PASS. 정확 활성화(KakaoTalk 창/Chrome 탭/일반 앱)·AC-21 splash(노출·입력 차단·8초 내 해제)도 PASS. 자동 UI 클릭은 신뢰성 문제로 제외, 사용자 수동 검증으로 확정.
 - **문서**: `known-deviations.md` §H4 + B3 백로그 갱신, `window-enumeration.md` §6.9 추가, `aidlc-state.md`, `audit.md` 추가.
 - [x] 진단(확정/미확정 구분) → [x] 설계·수용 기준 제시 → [x] Construction Code Generation(U4·U6·U7) → [x] clippy/test/tsc/vite 정적 검증 통과 → [x] 런타임 검증(Edge 백/포그라운드·다중 창·순서 변경·Chrome 회귀·카카오톡 등록 — 2026-09-09 사용자 수동 검증 PASS)
+
+### ✅ DONE (2026-09-09): P1 백로그 — 저장 리소스 상태 표시 배선 (FR-7.1~7.3, A4 부분해소)
+**트리거**: 사용자 요청 — "최신 코드 반영 후 남은 백로그 진행". main(PR #17 병합 포함)을 최신 반영한 뒤, 대조 에이전트로 백로그를 현재 코드와 재확인 → 최우선 P1(저장 리소스 상태 표시)이 진짜 미구현임을 확정(`evaluate`/`evaluate_status`가 vc-app에서 미호출, `Resource.status`는 `Unknown` 하드코딩, 프론트 `Resource`에 `status` 없음).
+- **배경**: FR-7.1/7.2/7.3은 요구사항 v1.1에서 연기(`#D-30`)됐으나 "도메인은 완성, 배선만 남음"으로 명시 → 이번에 배선하여 **재활성화**.
+- **U1 vc-core**: `Resource.status` 직렬화 정책 변경 `#[serde(skip)]` → `#[serde(skip_deserializing)]` — 프론트로는 직렬화(get_bundles가 채움)하되 디스크에서는 읽지 않아 항상 평가 시점 재계산(구파일 호환, roundtrip 안정: 저장값은 항상 Unknown). 신규 단위 테스트 2종(`test_evaluate_active_when_running`, `test_evaluate_noise_title_does_not_match`).
+- **U6 vc-app**: `get_bundles`를 async화 → 상태 잠금 밖에서 `running_titles_snapshot()`(실행 앱 이름 + 런치 id(exe 경로) + 각 창/탭 제목·핸들)을 모아 `vc_core::evaluate::evaluate(resources, running_titles, has_permission=true)`로 판정, 결과를 id 매칭으로 `Resource.status`에 채움. app-level 열거는 권한 불필요라 `has_permission=true`(PermissionRequired 미노출 — FR-12.7/B6 후속). 새 헬퍼 `running_titles_snapshot`.
+- **U7 프론트**: `types.ts` `Resource.status?: ResourceStatus`; `App.tsx` `StatusDot`(Active=녹색·Inactive=빈 회색점·PermissionRequired=amber, Unknown/부재=미표시) + 저장 리소스 행에 렌더 + `res-inactive` 흐림; `styles.css` `.res-status*`/`.resource.res-inactive`.
+- **매칭 버그 수정(검증 중 발견)**: 초기엔 `running_titles`에 앱 `name`만 넣어 Code/WindowsTerminal이 Inactive로 오표시(실 descriptor는 exe 경로=`bundle_id`). `bundle_id`와 창 `handle`도 토큰에 포함해 해결 → 실행 앱이 Active로 정확 표시.
+- **검증**: `cargo build --workspace`·`clippy`(제 변경분 신규 경고 0 — 기존 vc-core `claude_status.rs`/`summarize.rs`·vc-app `term.rs:95` 경고는 main 선반영분) 통과; `cargo test --workspace` 전 통과(vc-core **77**(+2)·vc-app 18·vc-os-windows 5·vc-sessions 12·vc-store 8 = 120); `tsc`·`vite build` clean. **실 Windows 실행 검증(embedded dist 빌드)**: 저장 묶음의 Code·WindowsTerminal(둘 다 실행 중) → 녹색 Active 점, 미실행 시 빈 점+흐림(수정 전 캡처로 Inactive 렌더 확인). 검증용 스크린샷 3종 삭제(레포 무오염).
+- **문서**: `requirements.md`(FR-7.1~7.3 재활성화/구현 노트), `known-deviations.md`(A4 부분해소·P1 백로그 완료 처리), `aidlc-state.md`, `audit.md`.
+- **브랜치**: `feature/backlog-resource-status`(main 직접 커밋 회피).
+- [x] 최신 반영 → [x] 백로그 대조(에이전트) → [x] Inception 정합화(requirements) → [x] Construction Code Generation(U1·U6·U7) → [x] 테스트 추가 → [x] build/clippy/test/tsc/vite + 실 Windows 실행 검증 → [x] 문서 갱신.
+- **남은 백로그**: P2(항목 편집 FR-6, 묶음 이름 변경 FR-1.1, 중복 식별 불변식 도메인화 D1, 사용자 문서), P3(트레이/전역 단축키 B5, macOS PermissionChecker B6, 헥사고날 리팩터 A1–A4 잔여, 스플래시 고DPI). 모두 v1.1에서 연기됐거나 하드닝/리팩터 성격.
