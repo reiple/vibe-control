@@ -71,6 +71,17 @@ export interface RunningApp {
   windows: RunningWindow[];
 }
 
+/** Persisted UI layout (sidebar width + saved window rect). Mirrors the backend
+ *  `LayoutSettings` — never carries Claude credentials. */
+export interface LayoutSettings {
+  panel_width: number;
+  card_height: number;
+  window_x: number | null;
+  window_y: number | null;
+  window_width: number | null;
+  window_height: number | null;
+}
+
 /** One turn of the in-app Claude prompt console. */
 export interface ChatMsg {
   role: "user" | "assistant";

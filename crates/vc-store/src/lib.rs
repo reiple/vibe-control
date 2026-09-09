@@ -1,6 +1,27 @@
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use vc_core::{WorkBundle, AppSettings, Result, CoreError};
+
+/// Write `bytes` to `path` atomically: serialize to a sibling `.tmp`, then
+/// rename it over the target (rename is atomic within a volume, so a reader
+/// never sees a half-written file). On ANY failure the temp file is removed so
+/// a partial/orphan `.tmp` never leaks (C1). Used for both `bundles.json` and
+/// `settings.json` (C2 — settings now get the same atomic treatment as bundles).
+fn atomic_write(path: &Path, bytes: &[u8]) -> Result<()> {
+    let temp_path = PathBuf::from(format!("{}.tmp", path.display()));
+
+    if let Err(e) = fs::write(&temp_path, bytes) {
+        let _ = fs::remove_file(&temp_path); // best-effort cleanup of the partial temp
+        return Err(CoreError::Corrupt(format!("Cannot write temp file: {}", e)));
+    }
+
+    if let Err(e) = fs::rename(&temp_path, path) {
+        let _ = fs::remove_file(&temp_path); // rename failed → don't leave the temp behind
+        return Err(CoreError::Corrupt(format!("Cannot rename file: {}", e)));
+    }
+
+    Ok(())
+}
 
 pub trait BundleStore {
     fn load(&self) -> Result<Vec<WorkBundle>>;
@@ -72,19 +93,8 @@ impl BundleStore for JsonBundleStore {
     }
 
     fn save(&self, bundles: &[WorkBundle]) -> Result<()> {
-        let path = self.bundles_path();
-        let temp_path = PathBuf::from(format!("{}.tmp", path.display()));
-
-        // Serialize to temp file
         let bytes = vc_core::migrate::serialize(bundles)?;
-        fs::write(&temp_path, bytes)
-            .map_err(|e| CoreError::Corrupt(format!("Cannot write temp file: {}", e)))?;
-
-        // Atomic rename
-        fs::rename(&temp_path, &path)
-            .map_err(|e| CoreError::Corrupt(format!("Cannot rename file: {}", e)))?;
-
-        Ok(())
+        atomic_write(&self.bundles_path(), &bytes)
     }
 
     fn load_settings(&self) -> Result<AppSettings> {
@@ -101,14 +111,9 @@ impl BundleStore for JsonBundleStore {
     }
 
     fn save_settings(&self, settings: &AppSettings) -> Result<()> {
-        let path = self.settings_path();
         let bytes = serde_json::to_vec(settings)
             .map_err(|e| CoreError::Corrupt(format!("Cannot serialize settings: {}", e)))?;
-
-        fs::write(&path, bytes)
-            .map_err(|e| CoreError::Corrupt(format!("Cannot write settings: {}", e)))?;
-
-        Ok(())
+        atomic_write(&self.settings_path(), &bytes)
     }
 }
 
@@ -144,6 +149,40 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].name, "A");
         assert_eq!(loaded[1].name, "B");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// C1: a successful save must not leave a `.tmp` sibling behind.
+    #[test]
+    fn test_save_leaves_no_temp_file() {
+        let (store, dir) = temp_store("no-temp");
+        store.save(&[WorkBundle::new("A")]).unwrap();
+
+        let temp = dir.join("bundles.json.tmp");
+        assert!(!temp.exists(), "temp file leaked after save: {temp:?}");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// C2: settings persist atomically and round-trip, leaving no `.tmp`.
+    #[test]
+    fn test_settings_roundtrip_atomic() {
+        let (store, dir) = temp_store("settings");
+        // Default when absent.
+        assert_eq!(store.load_settings().unwrap().panel_width, AppSettings::default().panel_width);
+
+        let settings = AppSettings {
+            panel_width: 321.0,
+            window_width: Some(1234),
+            ..AppSettings::default()
+        };
+        store.save_settings(&settings).unwrap();
+
+        let loaded = store.load_settings().unwrap();
+        assert_eq!(loaded.panel_width, 321.0);
+        assert_eq!(loaded.window_width, Some(1234));
+
+        let temp = dir.join("settings.json.tmp");
+        assert!(!temp.exists(), "settings temp file leaked: {temp:?}");
         let _ = fs::remove_dir_all(&dir);
     }
 }

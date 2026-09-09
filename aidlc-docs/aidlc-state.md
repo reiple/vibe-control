@@ -158,3 +158,13 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - [x] **검증**: 오버라이드 없이 `tauri dev` → vite `:1420` LISTENING + `vibe-control.exe` 동시 기동 실측(Windows). 핫리로드 정상.
 - [x] `build-instructions.md` 개발 실행 절차 갱신 + `known-deviations.md#H` 이탈 기록 + `audit.md` 로그.
 - [ ] (미검증) cargo 플러그인 `cargo tauri dev`는 cwd가 달라 `../frontend`와 어긋날 여지 — 도입 시 재확인.
+
+### ✅ DONE (2026-09-09): 백로그 P1×3 + P4 소진 (E1·E2·C1·C2·D6)
+CONSTRUCTION 이후 `known-deviations.md` 백로그의 P1 3건 + P4 1건을 구현·검증했다. 창 단위 재정렬(G) 이후 남은 최상위 항목들.
+- [x] **C1·C2 — vc-store 원자적 쓰기 + `.tmp` 정리**: 공용 `atomic_write(path, bytes)` 헬퍼 신설(temp→rename, 쓰기/rename 실패 시 `.tmp` `remove_file`로 정리 → 누수 없음). `save`와 `save_settings` 모두 이 헬퍼로 통일(이전엔 `settings.json`이 비원자적 `fs::write`였음). 신규 테스트 2건(`test_save_leaves_no_temp_file`, `test_settings_roundtrip_atomic`) → vc-store 4 tests 전부 통과.
+- [x] **E2 — 레이아웃 영속화**: `LayoutSettings` DTO(패널폭/카드높이/창 rect, Claude 자격증명 제외) + `get_layout`/`save_panel_layout` 커맨드(`generate_handler!` 등록). 창 위치/크기는 백엔드 `on_window_event`가 Moved/Resized 시 메모리에 stash, CloseRequested/Destroyed 시 1회 디스크 flush(폴링 디스크쓰기 회피). 부팅 시 `restore_window_rect`가 저장 rect를 창에 적용. 프론트: 부팅 시 사이드바 폭 적용(ref 명령형, CSS `resize`와 충돌 방지) + `ResizeObserver` 디바운스(500ms) 저장. **실측 검증**: 창을 (150,120)/920×640으로 이동 후 종료 → settings.json `window_x:150,window_y:120,window_width:904,window_height:601`(inner) 기록; 재기동 → outer rect 정확히 (150,120)/920×640 복원.
+- [x] **E1 — 세션 전체 대화 뷰어**: 세션 카드 "Log" 버튼 → `ConversationModal`이 `get_session_snapshot`으로 `SessionSnapshot.conversation`(백엔드가 이미 최대 60턴/턴당 4000자 반환)을 스크롤 모달로 렌더(역할별 말풍선, 최신 턴 스크롤). 기존 "View"(터미널 포커스)/"Resume"은 유지. 읽기 전용.
+- [x] **D6 — 미사용 `sha2` 제거**: 소스 실사용 0건 확인 후 `vc-core/Cargo.toml`에서 삭제(매칭은 `std::DefaultHasher`).
+- [x] **검증**: `cargo build -p vc-app`(debug+release) 성공, `cargo test -p vc-store -p vc-core` 전부 통과(vc-core 22 / vc-store 4), `cargo clippy` 0 경고, 프론트 `tsc && vite build` 클린. 프론트 신규 기능은 방출 번들에 문자열 확인(`get_layout`/`save_panel_layout`/`conversation-modal`/`conv-turn`/`ResizeObserver`).
+- **환경 주의**: 이 머신에 별개 저장소 `D:\workspace\nott\vibe-control`의 vite dev 서버가 :1420에서 실행 중이라, 로컬 `cargo build` exe(WebView2)가 `devUrl`(:1420)로 연결해 그쪽 프론트엔드를 표시했다(사용량 배너 등은 이 저장소 소스에 없음). 사용자 dev 서버는 미종료. 백엔드는 내 exe(PID 확인)로 실측 검증됨. 상세는 `known-deviations.md` 백로그 하단 환경 주의.
+- **남은 백로그**: P2(D1 중복식별 불변식, B3 브라우저 탭), P3(B5 트레이/핫키, B6 macOS 권한체커, A1–A4 헥사고날 리팩터).

@@ -22,6 +22,8 @@ import {
   createBundle,
   deleteBundle,
   addAppResource,
+  getLayout,
+  savePanelLayout,
   claudeStatus,
   setClaudeApiKey,
   setClaudeModel,
@@ -222,6 +224,89 @@ function SessionStatus({
   );
 }
 
+// Full-conversation viewer (FR-12.3 / AC-17). Restores in-app scrollback of a
+// coding session's transcript — the backend already returns up to 60 recent
+// turns in `SessionSnapshot.conversation`; this renders them in a modal. Read
+// -only, no logging: it only displays what the snapshot already exposes.
+function ConversationModal({
+  sessionRef,
+  title,
+  onClose,
+}: {
+  sessionRef: string;
+  title: string;
+  onClose: () => void;
+}) {
+  const [snap, setSnap] = useState<SessionSnapshot | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [err, setErr] = useState<string | null>(null);
+  const bottomRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    getSessionSnapshot("claude-code", sessionRef)
+      .then((s) => {
+        if (!cancelled) setSnap(s);
+      })
+      .catch((e) => {
+        if (!cancelled) setErr(errText(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [sessionRef]);
+
+  // Start pinned to the latest turn (that's the interesting end of a session).
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView();
+  }, [snap]);
+
+  return (
+    <div className="modal-backdrop" onClick={onClose}>
+      <div
+        className="modal conversation-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-label="Session conversation"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="conversation-head">
+          <h3 className="modal-title" title={title}>
+            {title}
+          </h3>
+          <button className="ghost icon" onClick={onClose} title="Close">
+            ✕
+          </button>
+        </div>
+        <div className="conversation-body">
+          {loading && <div className="conversation-empty">Loading…</div>}
+          {err && <div className="console-error">{err}</div>}
+          {!loading &&
+            !err &&
+            (!snap || !snap.available || snap.conversation.length === 0) && (
+              <div className="conversation-empty">
+                No conversation available for this session.
+              </div>
+            )}
+          {snap?.conversation.map((t, i) => (
+            <div key={i} className={`conv-turn ${t.role}`}>
+              <span className="conv-role">
+                {t.role === "user" ? "You" : "Claude"}
+              </span>
+              <p className="conv-text">{t.content}</p>
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function App() {
   const [bundles, setBundles] = useState<WorkBundle[]>([]);
   const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
@@ -241,6 +326,19 @@ export default function App() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedApp = useRef<RunningApp | null>(null);
+
+  // Persisted sidebar width (E2). Applied imperatively to the aside via a ref so
+  // React never re-renders it and fights the CSS `resize` drag; the ResizeObserver
+  // persists changes (debounced). cardHeight is carried through unchanged for now.
+  const sidebarRef = useRef<HTMLElement | null>(null);
+  const [savedPanelWidth, setSavedPanelWidth] = useState<number | null>(null);
+  const cardHeightRef = useRef<number>(150);
+
+  // Full-conversation viewer (FR-12.3 / AC-17): the session whose transcript is open.
+  const [convSession, setConvSession] = useState<{
+    ref: string;
+    title: string;
+  } | null>(null);
 
   // Bumped by ↻ to force every visible SessionStatus to re-fetch its snapshot.
   const [sessionNonce, setSessionNonce] = useState(0);
@@ -303,6 +401,15 @@ export default function App() {
           .catch(() => {
             if (!cancelled) setClaude(null);
           }),
+        getLayout()
+          .then((l) => {
+            if (cancelled || !l) return;
+            if (l.card_height > 0) cardHeightRef.current = l.card_height;
+            if (l.panel_width > 0) setSavedPanelWidth(l.panel_width);
+          })
+          .catch(() => {
+            /* no saved layout → CSS defaults */
+          }),
         refreshRunning(), // first running-apps scan
       ]);
 
@@ -350,6 +457,38 @@ export default function App() {
     const id = setInterval(() => refreshRunning(true), 1000);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Apply the saved sidebar width once, imperatively (see savedPanelWidth note).
+  // Runs after the value loads and the aside is mounted; CSS `resize` owns it
+  // afterwards, so we never re-apply and cancel an in-progress drag.
+  useEffect(() => {
+    if (sidebarRef.current && savedPanelWidth != null) {
+      sidebarRef.current.style.width = `${savedPanelWidth}px`;
+    }
+  }, [savedPanelWidth]);
+
+  // Persist the sidebar width when the user drag-resizes it (debounced). The
+  // observer only writes — it never sets React state, so it can't fight the drag.
+  useEffect(() => {
+    const el = sidebarRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    let timer: number | undefined;
+    let last = 0;
+    const ro = new ResizeObserver((entries) => {
+      const w = entries[0]?.contentRect.width;
+      if (!w || Math.abs(w - last) < 1) return;
+      last = w;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(() => {
+        savePanelLayout(w, cardHeightRef.current).catch(() => {});
+      }, 500);
+    });
+    ro.observe(el);
+    return () => {
+      ro.disconnect();
+      window.clearTimeout(timer);
+    };
   }, []);
 
   // Keep the console transcript pinned to the newest message.
@@ -519,7 +658,7 @@ export default function App() {
     <div className="app-shell">
     {booting && <Splash hiding={splashOut} />}
     <div className="app">
-      <aside className="sidebar">
+      <aside className="sidebar" ref={sidebarRef}>
         <header className="sidebar-header">
           <h1>Running Apps</h1>
           <button
@@ -704,6 +843,18 @@ export default function App() {
                       <>
                         <button
                           className="mini"
+                          onClick={() =>
+                            setConvSession({
+                              ref: r.identity.descriptor,
+                              title: r.display_name,
+                            })
+                          }
+                          title="Read the full conversation in-app"
+                        >
+                          Log
+                        </button>
+                        <button
+                          className="mini"
                           onClick={() => handleActivateSession(r)}
                           title="Bring the open Claude Code terminal to front"
                         >
@@ -866,6 +1017,14 @@ export default function App() {
           </button>
         </form>
       </footer>
+
+      {convSession && (
+        <ConversationModal
+          sessionRef={convSession.ref}
+          title={convSession.title}
+          onClose={() => setConvSession(null)}
+        />
+      )}
 
       {showGroupModal && (
         <div className="modal-backdrop" onClick={closeGroupModal}>
