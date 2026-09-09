@@ -117,6 +117,7 @@ impl ClaudeCodeSessionProvider {
     }
 
     /// File size (bytes) and mtime (unix seconds) for a session ref, best-effort.
+    /// Reads the exact attached session file (see [`resolve_path`]).
     fn stat(session_ref: &str) -> Option<(u64, u64)> {
         let path = Self::resolve_path(session_ref)?;
         let meta = fs::metadata(&path).ok()?;
@@ -190,8 +191,32 @@ impl ClaudeCodeSessionProvider {
         }
     }
 
+    /// Permanently delete a session's log file (the conversation), but ONLY if
+    /// it resolves to a real file living under `~/.claude/projects`. The
+    /// canonicalized target must sit inside the canonicalized projects tree, so
+    /// an arbitrary absolute `session_ref` can never delete a file elsewhere.
+    /// This is the only write this crate performs; everything else is read-only.
+    pub fn delete_session(session_ref: &str) -> std::io::Result<()> {
+        use std::io::{Error, ErrorKind};
+        let path = Self::resolve_path(session_ref)
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "session log not found"))?;
+        let projects = Self::projects_dir()
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "projects dir not found"))?;
+        let canon_path = path.canonicalize()?;
+        let canon_projects = projects.canonicalize()?;
+        if !canon_path.starts_with(&canon_projects) {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "refusing to delete a file outside ~/.claude/projects",
+            ));
+        }
+        fs::remove_file(&canon_path)
+    }
+
     /// (cwd, session_id) needed to resume a session with `claude --resume`.
-    /// cwd is read from the first log line that carries it.
+    /// cwd is read from the first log line that carries it. Resolves the EXACT
+    /// attached session file (see [`resolve_path`]) so resume targets the same
+    /// session the card is bound to — never a different sibling in the folder.
     pub fn resume_info(session_ref: &str) -> Option<(String, String)> {
         let path = Self::resolve_path(session_ref)?;
         let id = path.file_stem().and_then(|s| s.to_str())?.to_string();
@@ -264,6 +289,9 @@ impl CodingSessionProvider for ClaudeCodeSessionProvider {
     }
 
     fn read_snapshot(&self, session_ref: &str) -> Result<SessionSnapshot> {
+        // Read the EXACT attached session file so the card reflects the session
+        // the user resumed/typed into (resume/PTY appends in place to the same
+        // .jsonl — it does not fork into a sibling).
         let Some(path) = Self::resolve_path(session_ref) else {
             return Ok(SessionSnapshot::unavailable());
         };

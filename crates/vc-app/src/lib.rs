@@ -2,7 +2,9 @@
 // Orchestrates domain + adapters, exposes Tauri commands.
 
 mod claude;
+mod pty;
 mod status_query;
+mod term;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -1038,8 +1040,13 @@ async fn send_command_to_context_claude(
         });
     }
 
-    // D4/D5: deliver via resume one-shot (side effect performed outside any lock).
-    let delivery = run_resume_with_command(&session_ref, &command);
+    // D4/D5: deliver via a HEADLESS resume (no terminal window). Runs
+    // `claude --resume <id> -p "<command>"` as a detached background process in
+    // the session's cwd; it appends the new turn to the same session log, so the
+    // app's 1s status poll reflects Working→WaitingForUser and the summarized
+    // recent-work updates in place — the user drives Claude Code entirely from
+    // the app, never a popped-up terminal. Side effect performed outside any lock.
+    let delivery = run_resume_headless(&session_ref, &command);
     let status = delivery_status_after_resume(delivery.is_ok());
     let error = delivery.err();
 
@@ -1051,6 +1058,322 @@ async fn send_command_to_context_claude(
         current_work,
         error,
     })
+}
+
+/// Deliver a command to ONE specific Claude Code session by its ref, bypassing
+/// context resolution. This is what lets a group hold MULTIPLE sessions and
+/// still Send to each one individually (FR-4, per-session variant): the caller
+/// names the exact session, so there is no "ambiguous among many" rejection.
+/// Same safety rules as the context variant — an empty command is `Failed`, a
+/// `Working` session is protected (`Busy`, AC-16/NFR-3.2), otherwise a headless
+/// resume (`Resumed`/`Failed`) that never interrupts a running session. Returns
+/// `Ok` except on a poisoned lock; all outcomes ride `DeliveryStatus`/`error`.
+/// The Bedrock token is never involved (`claude` uses its own local auth).
+#[tauri::command]
+async fn send_command_to_session(
+    state: State<'_, SharedState>,
+    session_ref: String,
+    command: String,
+) -> std::result::Result<CommandDelivery, CommandError> {
+    let now = unix_now();
+
+    // D1: refuse an empty/whitespace-only command outright.
+    if command.trim().is_empty() {
+        return Ok(CommandDelivery {
+            context_ref: String::new(),
+            target_session: None,
+            delivery_status: DeliveryStatus::Failed,
+            current_status: SessionRunState::Unknown,
+            current_work: CurrentWork::Unknown,
+            error: Some("empty command".into()),
+        });
+    }
+
+    // Current run state of this exact session (busy-guard input).
+    let (target_id, run_state, current_work) = target_session_status(&state, &session_ref, now);
+
+    // D3: never inject into a Working session (AC-16).
+    if let Some(status) = delivery_block_reason(run_state, false) {
+        return Ok(CommandDelivery {
+            context_ref: String::new(),
+            target_session: Some(target_id),
+            delivery_status: status,
+            current_status: run_state,
+            current_work,
+            error: None,
+        });
+    }
+
+    // D4/D5: deliver via a HEADLESS resume (no terminal), same as the context
+    // path — appends the turn to this session's log so the 1s poll reflects it.
+    let delivery = run_resume_headless(&session_ref, &command);
+    let status = delivery_status_after_resume(delivery.is_ok());
+    let error = delivery.err();
+
+    Ok(CommandDelivery {
+        context_ref: String::new(),
+        target_session: Some(target_id),
+        delivery_status: status,
+        current_status: run_state,
+        current_work,
+        error,
+    })
+}
+
+/// Create a brand-new Claude Code session in `cwd` seeded with `prompt`, so the
+/// user can start a fresh conversation entirely from the app (the "+세션 → 새
+/// 세션" flow). Runs `claude --session-id <id> -p "<prompt>"` HEADLESSLY (no
+/// terminal window) and WAITS for it to finish, so the new session `.jsonl`
+/// exists — with its first turn recorded — by the time we return; the caller
+/// then attaches it to a group. `session_id` is a UUID minted by the caller and
+/// becomes the session's stable descriptor (resolve_path accepts a bare id).
+///
+/// Synchronous command: Tauri runs it on a worker thread, so the blocking wait
+/// never freezes the UI. Args are distinct argv entries (no shell/injection).
+/// No Bedrock token is involved — `claude` uses its own local auth.
+#[tauri::command]
+fn start_new_coding_session(
+    cwd: String,
+    prompt: String,
+    session_id: String,
+) -> std::result::Result<(), CommandError> {
+    let dir = std::path::Path::new(&cwd);
+    if !dir.is_dir() {
+        return Err(CommandError {
+            message: format!("작업 폴더를 찾을 수 없습니다: {cwd}"),
+        });
+    }
+    // A blank prompt still needs *something* for `claude -p` to run; seed a
+    // benign opener so the session is created and left awaiting the user.
+    let prompt = if prompt.trim().is_empty() {
+        "새 세션을 시작합니다. 준비되면 다음 지시를 기다려 주세요.".to_string()
+    } else {
+        prompt
+    };
+
+    let mut cmd = std::process::Command::new("claude");
+    cmd.current_dir(dir)
+        .arg("--session-id")
+        .arg(&session_id)
+        .arg("-p")
+        .arg(&prompt)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    let status = cmd.status().map_err(|e| CommandError {
+        message: format!("claude 실행 실패: {e}"),
+    })?;
+    if !status.success() {
+        return Err(CommandError {
+            message: format!("claude가 비정상 종료했습니다 (코드 {:?})", status.code()),
+        });
+    }
+    Ok(())
+}
+
+/// Permanently delete a Claude Code session's conversation log from disk (the
+/// "+세션 → 대화 제거" flow). Destructive and irreversible, so the UI confirms
+/// first. The backend still guards the path — `delete_session` only removes a
+/// file that resolves inside `~/.claude/projects`. Local-only; no external send.
+#[tauri::command]
+fn delete_coding_session(session_ref: String) -> std::result::Result<(), CommandError> {
+    ClaudeCodeSessionProvider::delete_session(&session_ref).map_err(|e| CommandError {
+        message: format!("세션 삭제 실패: {e}"),
+    })
+}
+
+// ── Session-coupled external terminals (session == terminal) ─────────────
+//
+// Each session is bound 1:1 to a visible PowerShell window running interactive
+// `claude`. The user types in that window; the app also injects input into the
+// SAME window (open/send below) and reflects results by reading the session
+// `.jsonl`. Lifecycle is coupled via the window PID (see the `term` module):
+// removing the session closes the window; closing the window drops the session.
+
+/// PowerShell one-liner that cd's into `cwd` and resumes `id` interactively (the
+/// window the user drives). The cwd is single-quoted; the id is a UUID.
+fn resume_terminal_command(cwd: &str, id: &str) -> String {
+    format!(
+        "Set-Location -LiteralPath {}; claude --resume {}",
+        ps_single_quote(cwd),
+        id
+    )
+}
+
+/// Open (or reuse + focus) the terminal that resumes an EXISTING session.
+#[tauri::command]
+fn open_session_terminal(session_ref: String) -> std::result::Result<(), CommandError> {
+    let (cwd, id) =
+        ClaudeCodeSessionProvider::resume_info(&session_ref).ok_or_else(|| CommandError {
+            message: "세션 경로/ID를 확인할 수 없습니다".to_string(),
+        })?;
+    let command = resume_terminal_command(&cwd, &id);
+    term::open(&session_ref, &command)
+        .map(|_pid| ())
+        .map_err(|message| CommandError { message })
+}
+
+/// Open a BRAND-NEW session in a visible terminal (`claude --session-id <id>`),
+/// optionally seeding an initial prompt as claude's first positional argument.
+/// `session_id` (a UUID) becomes the resource descriptor; claude writes the
+/// `.jsonl` on first turn.
+#[tauri::command]
+fn open_new_session_terminal(
+    cwd: String,
+    session_id: String,
+    initial_prompt: Option<String>,
+) -> std::result::Result<(), CommandError> {
+    let dir = std::path::Path::new(&cwd);
+    if !dir.is_dir() {
+        return Err(CommandError {
+            message: format!("작업 폴더를 찾을 수 없습니다: {cwd}"),
+        });
+    }
+    let mut command = format!(
+        "Set-Location -LiteralPath {}; claude --session-id {}",
+        ps_single_quote(&cwd),
+        session_id
+    );
+    if let Some(p) = initial_prompt.as_deref() {
+        let p = p.trim();
+        if !p.is_empty() {
+            command.push(' ');
+            command.push_str(&ps_single_quote(p));
+        }
+    }
+    term::open(&session_id, &command)
+        .map(|_pid| ())
+        .map_err(|message| CommandError { message })
+}
+
+/// Send a line to the session's terminal (app → the SAME interactive `claude`).
+#[tauri::command]
+fn send_to_session_terminal(
+    session_ref: String,
+    text: String,
+) -> std::result::Result<(), CommandError> {
+    term::send_line(&session_ref, &text).map_err(|message| CommandError { message })
+}
+
+/// Close (kill) the session's terminal window — called when removing the session.
+#[tauri::command]
+fn close_session_terminal(session_ref: String) -> std::result::Result<(), CommandError> {
+    term::close(&session_ref);
+    Ok(())
+}
+
+/// Whether a session's terminal is currently open.
+#[tauri::command]
+fn session_terminal_open(session_ref: String) -> bool {
+    term::is_open(&session_ref)
+}
+
+/// The session refs whose terminals are still open (dead ones are pruned). The
+/// frontend diffs this against its list to drop sessions whose window the user
+/// closed.
+#[tauri::command]
+fn list_open_session_terminals() -> Vec<String> {
+    term::open_refs()
+}
+
+// ── Interactive Claude-CLI selection ("A" / 스마트 프롬프트 감지) ─────────────
+//
+// Run `claude` in a PTY so its interactive selection/permission prompts render,
+// detect them, and surface them as native app buttons. All local; no Bedrock
+// token, no external send (§12). See `pty` module for the mechanism.
+
+/// Start (or reuse) an interactive PTY-backed `claude --resume` for a session,
+/// optionally seeding it with an initial prompt. Returns the key to poll/drive.
+#[tauri::command]
+fn start_interactive_session(
+    session_ref: String,
+    initial_prompt: Option<String>,
+) -> std::result::Result<String, CommandError> {
+    pty::start(&session_ref, initial_prompt.as_deref())
+        .map_err(|message| CommandError { message })
+}
+
+/// Open a BRAND-NEW interactive PTY-backed `claude --session-id <id>` session in
+/// `cwd` (the "새 세션" flow — a real terminal the user works in, not a headless
+/// file). `session_id` is a UUID minted by the caller and becomes the resource
+/// descriptor; `claude` creates the `.jsonl` on first turn. Returns the session
+/// ref (== `session_id`) the frontend polls/drives.
+#[tauri::command]
+fn start_new_interactive(
+    cwd: String,
+    session_id: String,
+    initial_prompt: Option<String>,
+) -> std::result::Result<String, CommandError> {
+    let dir = std::path::Path::new(&cwd);
+    if !dir.is_dir() {
+        return Err(CommandError {
+            message: format!("작업 폴더를 찾을 수 없습니다: {cwd}"),
+        });
+    }
+    pty::start_new(&session_id, &cwd, &session_id, initial_prompt.as_deref())
+        .map_err(|message| CommandError { message })
+}
+
+/// Type a full line into the interactive session and submit it (text + Enter) in
+/// one call, so the app's send box reliably lands a turn.
+#[tauri::command]
+fn submit_interactive_line(
+    session_ref: String,
+    text: String,
+) -> std::result::Result<(), CommandError> {
+    pty::submit_line(&session_ref, &text).map_err(|message| CommandError { message })
+}
+
+/// Poll the interactive session's rendered screen + any detected selection prompt.
+#[tauri::command]
+fn interactive_screen(
+    session_ref: String,
+) -> std::result::Result<pty::InteractiveScreen, CommandError> {
+    pty::screen(&session_ref).map_err(|message| CommandError { message })
+}
+
+/// Send a named key (up/down/enter/esc/digit/…) to the interactive session.
+#[tauri::command]
+fn send_interactive_key(
+    session_ref: String,
+    key: String,
+) -> std::result::Result<(), CommandError> {
+    pty::send_key(&session_ref, &key).map_err(|message| CommandError { message })
+}
+
+/// Type raw text into the interactive session (no implicit Enter).
+#[tauri::command]
+fn send_interactive_text(
+    session_ref: String,
+    text: String,
+) -> std::result::Result<(), CommandError> {
+    pty::write_input(&session_ref, text.as_bytes()).map_err(|message| CommandError { message })
+}
+
+/// Resize the interactive PTY to match the frontend terminal (rows x cols) so
+/// `claude`'s TUI repaints to fit — keeps boxes/wrapping aligned with the visible
+/// width. Called by the frontend when its xterm.js instance is fitted/resized.
+#[tauri::command]
+fn resize_interactive(
+    session_ref: String,
+    rows: u16,
+    cols: u16,
+) -> std::result::Result<(), CommandError> {
+    pty::resize(&session_ref, rows, cols).map_err(|message| CommandError { message })
+}
+
+/// Kill the interactive `claude` process and drop it from the registry.
+#[tauri::command]
+fn stop_interactive_session(session_ref: String) -> std::result::Result<(), CommandError> {
+    pty::stop(&session_ref).map_err(|message| CommandError { message })
 }
 
 fn reopen_resource(resource: &Resource) -> std::result::Result<(), String> {
@@ -1159,7 +1482,9 @@ fn resume_session(session_ref: &str) -> std::result::Result<(), String> {
             ps_single_quote(&cwd),
             id
         );
-        vc_os_windows::WinLauncher::run_in_terminal(&command).map_err(|e| e.to_string())
+        vc_os_windows::WinLauncher::run_in_terminal(&command)
+            .map(|_pid| ())
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
@@ -1178,6 +1503,10 @@ fn resume_session(session_ref: &str) -> std::result::Result<(), String> {
 /// quoting (`shell_quote` / `ps_single_quote`), never string-concatenated, so a
 /// command containing quotes/spaces/`;`/`&&` cannot break out (NFR-3 / D5). The
 /// Bedrock token is not involved — this is a purely local CLI resume.
+///
+/// Retained as the "open in a visible terminal" alternative; the default Send
+/// path is now [`run_resume_headless`] (in-app, no terminal window).
+#[allow(dead_code)]
 fn run_resume_with_command(session_ref: &str, command: &str) -> std::result::Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -1203,13 +1532,57 @@ fn run_resume_with_command(session_ref: &str, command: &str) -> std::result::Res
             id,
             ps_single_quote(command)
         );
-        vc_os_windows::WinLauncher::run_in_terminal(&terminal_command).map_err(|e| e.to_string())
+        vc_os_windows::WinLauncher::run_in_terminal(&terminal_command)
+            .map(|_pid| ())
+            .map_err(|e| e.to_string())
     }
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {
         let _ = (session_ref, command);
         Err("command delivery not supported on this platform".into())
     }
+}
+
+/// Deliver a command to a coding session HEADLESSLY (no terminal window): spawn
+/// `claude --resume <id> -p "<command>"` as a detached background child in the
+/// session's working directory. This is the in-app control path — unlike
+/// [`run_resume_with_command`] it opens no visible terminal; `claude`'s
+/// non-interactive print mode executes the prompt immediately and appends the
+/// new turn to the same session `.jsonl`, so the app's status poll updates in
+/// place (Working while it runs, then WaitingForUser with the reply).
+///
+/// Fire-and-forget: we don't await the child (a coding task can take minutes),
+/// so `send` returns promptly and the UI reflects progress via polling. The cwd,
+/// id, and command are passed as distinct argv entries (never shell-concatenated),
+/// so no quoting/injection concern (NFR-3 / D5). No Bedrock token is involved —
+/// `claude` uses its own local auth.
+fn run_resume_headless(session_ref: &str, command: &str) -> std::result::Result<(), String> {
+    let (cwd, id) = ClaudeCodeSessionProvider::resume_info(session_ref)
+        .ok_or_else(|| "cannot resolve session cwd/id".to_string())?;
+
+    let mut cmd = std::process::Command::new("claude");
+    cmd.current_dir(&cwd)
+        .arg("--resume")
+        .arg(&id)
+        .arg("-p")
+        .arg(command)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+
+    // Windows: run with no console window so nothing pops up (CREATE_NO_WINDOW).
+    #[cfg(target_os = "windows")]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        cmd.creation_flags(CREATE_NO_WINDOW);
+    }
+
+    // Spawn and detach: dropping the Child neither waits nor kills it, so the
+    // headless run continues to completion on its own.
+    cmd.spawn()
+        .map(|_child| ())
+        .map_err(|e| format!("failed to launch claude headlessly: {e}"))
 }
 
 /// Bring the existing Terminal/PowerShell running this session to the front,
@@ -1298,6 +1671,9 @@ pub fn run() {
         .setup(|app| {
             let state = AppState::new().map_err(|e| e.to_string())?;
             app.manage(Mutex::new(state));
+            // Hand the PTY module an app handle so its reader threads can stream
+            // raw output to the frontend terminal (xterm.js) via `pty://output`.
+            pty::set_app_handle(app.handle().clone());
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -1322,8 +1698,34 @@ pub fn run() {
             get_context_claude_status,
             get_summarization_consent,
             set_summarization_consent,
-            send_command_to_context_claude
+            send_command_to_context_claude,
+            send_command_to_session,
+            start_new_coding_session,
+            delete_coding_session,
+            start_interactive_session,
+            start_new_interactive,
+            submit_interactive_line,
+            interactive_screen,
+            send_interactive_key,
+            send_interactive_text,
+            resize_interactive,
+            stop_interactive_session,
+            open_session_terminal,
+            open_new_session_terminal,
+            send_to_session_terminal,
+            close_session_terminal,
+            session_terminal_open,
+            list_open_session_terminals
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running vibe-control");
+        .build(tauri::generate_context!())
+        .expect("error while running vibe-control")
+        .run(|_app_handle, event| {
+            // Terminals the user opened via Resume are theirs to close — we do
+            // NOT kill them on app exit (the user drives the session lifetime).
+            // Only reap any PTY-backed `claude` child we still own (normally
+            // none — the PTY path is unused by the current UI).
+            if let tauri::RunEvent::Exit = event {
+                pty::stop_all();
+            }
+        });
 }
