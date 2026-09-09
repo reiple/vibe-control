@@ -8,6 +8,7 @@ import type {
   ChatMsg,
   ClaudeStatus,
   ClaudeUsage,
+  LayoutSettings,
 } from "./types";
 
 const inTauri = (): boolean =>
@@ -196,6 +197,23 @@ export async function addChildResource(
     target,
     handle,
   });
+}
+
+// ── Layout persistence (E2 / FR-8.10 / AC-14) ────────────────────────
+/** Read the persisted UI layout (sidebar width, saved window rect). Returns
+ *  null outside Tauri so the web dev shell just uses CSS defaults. */
+export async function getLayout(): Promise<LayoutSettings | null> {
+  if (!inTauri()) return null;
+  return await invoke<LayoutSettings>("get_layout");
+}
+
+/** Persist the sidebar/card layout the user adjusted (debounced by the caller). */
+export async function savePanelLayout(
+  panelWidth: number,
+  cardHeight: number
+): Promise<void> {
+  if (!inTauri()) return;
+  await invoke("save_panel_layout", { panelWidth, cardHeight });
 }
 
 /** Activate a SAVED live browser tab (FR-4.1 / FR-4.2 / AC-20). `hint` is the
