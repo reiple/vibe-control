@@ -750,3 +750,11 @@ Important:
 **Context**: CONSTRUCTION — Code Generation (U1 vc-core, U6 vc-app, U7 frontend). P1 백로그 소진. 연기됐던 FR-7.1~7.3(저장 리소스 상태 표시) 재활성화·배선, `known-deviations.md#A4` 부분 해소. 실 Windows 실행 검증. AUTO MODE.
 
 ---
+
+## Bolt R1 — GitHub Releases 배포 + 명령어 설치
+**Timestamp**: 2026-09-09T00:00:00Z
+**User Input**: "AI-DLC 워크플로우를 계속 진행한다. 배포를 하는 방법을 수정. github의 release 페이지에 배포 가능한 파일을 업로드 하고, windows나 MacOS에서 명령어로 설치할 수 있도록 할 것. 이 변경사항을 AI-DLC 절차에 따라 분석하고, 필요한 기존 Inception artifact를 갱신한 후 새로운 Unit/Bolt로 Construction을 진행하라."
+**AI Response**: "분석: Brownfield · OPERATIONS(배포/패키징)+신규 CI/CD. 런타임 코드가 아닌 delivery 계층 → 새 런타임 Unit 불필요, 신규 Bolt R1로 처리. Inception 갱신: requirements v1.4 — FR-14(배포&설치) + AC-23 신설, §5 범위제외 정합화, SECURITY-10 CI 트리거 노트, DoD 보강. Construction(Bolt R1): .github/workflows/release.yml(create-release→build-macos‖build-windows→publish, 태그 v* 트리거, CI에서 beforeBuildCommand 무력화로 #H1 cwd 회피), install.sh(macOS, Releases API+quarantine 해제), install.ps1(Windows, irm|iex+무인설치). Operations 문서 3종 갱신. 검증: bash -n 통과, YAML 구조 확인(로컬 파서 부재). 실 CI/태그/릴리스/설치 E2E는 외부·비가역이라 미실행 — 사용자 태그 push 시 동작하도록 준비만. 브랜치 feature/release-github-distribution 로컬 커밋(push 안 함), U1~U7 코드 무수정."
+**Context**: OPERATIONS/CONSTRUCTION — 배포 방식 변경 (Bolt R1), Auto Mode
+
+---

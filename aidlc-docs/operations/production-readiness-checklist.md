@@ -48,6 +48,20 @@ Legend: ✅ done · ⚠️ done-with-caveat · ⛔ blocker for public release ·
   host anyway — no cross-compile).
 - N/A Auto-update feed — not in scope for 0.1.0.
 
+## 4b. Distribution channel & CLI install — **[Bolt R1, 2026-09-09]** (FR-14 / AC-23)
+- ✅ **Release pipeline authored** — `.github/workflows/release.yml`: tag-driven, builds
+  macOS-universal `.dmg` + Windows `.msi`/`-setup.exe` on their native runners (no cross-compile),
+  uploads to a GitHub Release, publishes when all assets are up.
+- ✅ **One-line install authored** — `install.sh` (macOS, curl-pipe, clears quarantine) + `install.ps1`
+  (Windows, `irm|iex`, silent install). Assets discovered via the Releases API (version-agnostic).
+- ⏳ **Pipeline not yet exercised** — no `v*` tag pushed, so the workflow has not run and no release
+  asset exists yet. **AC-23 verification pending**: push a tag → confirm CI green on both runners →
+  confirm assets on the Releases page → run each install one-liner once on a real macOS + Windows
+  machine. (Left to the maintainer — pushing a tag / publishing a release is an outward-facing action.)
+- ⚠️ Installers inherit the **unsigned/ad-hoc** posture (§4): macOS install clears Gatekeeper
+  quarantine; Windows shows SmartScreen "Unknown publisher". Fine for internal/demo; a public release
+  still needs the certs in §2/§4.
+
 ## 8. Running the hackathon build on another Mac (unsigned)
 The delivered `~/Desktop/vibe-control_0.1.0_universal.dmg` is a **universal binary** (`lipo -archs` →
 `x86_64 arm64`), so it runs on **both Apple Silicon and Intel** Macs. Because it is unsigned/not
@@ -86,3 +100,9 @@ windows / browser tabs); grant it in System Settings → Privacy & Security.
 (universal x86_64+arm64, ad-hoc signed, launch-verified). No further operational step is required for
 the hackathon. If this later goes public, the only remaining work is distribution signing/notarization
 (certs) + the deferred verification items.
+
+**Distribution automation (Bolt R1, 2026-09-09):** a tag-driven GitHub Releases pipeline
+(`.github/workflows/release.yml`) + one-line installers (`install.sh` / `install.ps1`) are now in the
+repo (FR-14). This replaces the manual "build locally, hand off the dmg" flow. **Not yet exercised** —
+push a `v*` tag to run it (see §4b for the AC-23 verification steps). Still ad-hoc/unsigned; the
+install scripts handle the quarantine/SmartScreen consequences.

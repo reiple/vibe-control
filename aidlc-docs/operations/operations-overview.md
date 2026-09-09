@@ -62,10 +62,23 @@ cross-compile) and are out of scope this round.
 
 ## Deliverables in this phase
 
-- `release-packaging.md` — how to produce distributable macOS + Windows builds, the signing gap, and
-  the exact command sequence.
+- `release-packaging.md` — how to produce distributable macOS + Windows builds, the signing gap, the
+  exact command sequence, **and the automated GitHub Releases pipeline + one-line CLI install (§6,
+  Bolt R1)**.
 - `production-readiness-checklist.md` — a go / no-go checklist referencing the CONSTRUCTION E2E
   checklists, the security posture (NFR-S1/S3), and the open backlog.
+- **`.github/workflows/release.yml`** (repo root) — tag-driven CI that builds macOS-universal + Windows
+  installers and publishes them to GitHub Releases (FR-14, requirements v1.4).
+- **`install.sh` / `install.ps1`** (repo root) — command-line installers that fetch the latest release
+  asset and install it (FR-14.3).
+
+## Distribution channel — **[Bolt R1, 2026-09-09]**
+
+The delivery method is now formalized: **GitHub Releases** is the distribution channel and a
+**one-line command** installs on either OS (macOS `install.sh` via curl, Windows `install.ps1` via
+`irm | iex`). Requirement **FR-14** (requirements v1.4). The pipeline files exist in the repo; **no
+release has been cut** by this Bolt — publishing happens when a maintainer pushes a `v*` tag (an
+outward-facing action left to the user). Full mechanics: `release-packaging.md#ci`.
 
 ## What this phase does NOT do
 

@@ -1,0 +1,169 @@
+name: Release
+
+# Builds distributable desktop installers for macOS (universal) and Windows and
+# publishes them to the GitHub Releases page. Triggered by pushing a version tag
+# (e.g. `git tag v0.1.0 && git push origin v0.1.0`) or run manually with a tag.
+#
+# Distribution channel + CLI install (install.sh / install.ps1) fetch the assets
+# uploaded here. See aidlc-docs/operations/release-packaging.md.
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to publish (e.g. v0.1.0). Created from the current ref if it does not exist."
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Phase 1 — create a DRAFT release up front so the parallel build jobs never
+  # race to create it (they only append assets). Also attaches the CLI install
+  # scripts so `.../releases/latest/download/install.sh` works too.
+  # ---------------------------------------------------------------------------
+  create-release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag
+        id: resolve
+        shell: bash
+        run: echo "tag=${{ github.event.inputs.tag || github.ref_name }}" >> "$GITHUB_OUTPUT"
+
+      - name: Create or update draft release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.resolve.outputs.tag }}
+          name: vibe-control ${{ steps.resolve.outputs.tag }}
+          draft: true
+          generate_release_notes: true
+          files: |
+            install.sh
+            install.ps1
+
+  # ---------------------------------------------------------------------------
+  # Phase 2a — macOS universal (Intel + Apple Silicon) .dmg
+  # ---------------------------------------------------------------------------
+  build-macos:
+    needs: create-release
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Rust (universal targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin,x86_64-apple-darwin
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend deps
+        shell: bash
+        run: npm --prefix frontend ci
+
+      - name: Build frontend bundle
+        shell: bash
+        run: npm --prefix frontend run build
+
+      # beforeBuildCommand is disabled here (frontend already built above) to
+      # avoid the relative-path cwd nuance documented in known-deviations.md#H1.
+      # Ad-hoc signing (APPLE_SIGNING_IDENTITY=-) — no Developer ID cert in CI.
+      - name: Build Tauri bundle (universal .dmg)
+        shell: bash
+        working-directory: crates/vc-app
+        env:
+          APPLE_SIGNING_IDENTITY: "-"
+        run: |
+          ../../frontend/node_modules/.bin/tauri build \
+            --target universal-apple-darwin \
+            --config '{"build":{"beforeBuildCommand":""}}'
+
+      - name: Upload macOS assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            target/universal-apple-darwin/release/bundle/dmg/*.dmg
+
+  # ---------------------------------------------------------------------------
+  # Phase 2b — Windows .msi (WiX) + -setup.exe (NSIS)
+  # ---------------------------------------------------------------------------
+  build-windows:
+    needs: create-release
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cargo cache
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install frontend deps
+        shell: bash
+        run: npm --prefix frontend ci
+
+      - name: Build frontend bundle
+        shell: bash
+        run: npm --prefix frontend run build
+
+      - name: Build Tauri bundle (.msi + -setup.exe)
+        shell: bash
+        working-directory: crates/vc-app
+        run: |
+          ../../frontend/node_modules/.bin/tauri build \
+            --config '{"build":{"beforeBuildCommand":""}}'
+
+      - name: Upload Windows assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          draft: true
+          fail_on_unmatched_files: true
+          files: |
+            target/release/bundle/msi/*.msi
+            target/release/bundle/nsis/*-setup.exe
+
+  # ---------------------------------------------------------------------------
+  # Phase 3 — flip the draft to a published (latest) release once every asset
+  # has been uploaded, so users never see a half-populated release.
+  # ---------------------------------------------------------------------------
+  publish:
+    needs: [create-release, build-macos, build-windows]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Publish release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "${{ needs.create-release.outputs.tag }}" --draft=false --latest
