@@ -85,6 +85,110 @@ RunningWindow  { handle: String, title: String, is_focused: bool }
 - **AC-20**(신규): 다중 창 앱 펼침 → 특정 창 선택 → 정확한 창 최전면; 단일 창 앱 동일 상호작용; 닫힌 창 갱신 후 제거.
 - 회귀 방지: **AC-2**(정확한 창/탭 최전면), **AC-3/AC-4**(드래그 1회 등록·같은 앱 다른 창 개별 등록), **AC-7**(닫힌/보조 창 제외).
 
+---
+
+## 6. Windows 브라우저 탭 열거 + 탭 지정 활성화 (U4 보완 Bolt, 2026-09-09)
+
+§5까지의 **창 단위**(G1–G3)에 이어, 지원 브라우저(Chrome/Edge/Brave/Whale)의 **탭 단위** 확인·선택을 보완한다. 탭은 OS 최상위 창이 아니라 브라우저 내부 UI이므로 `EnumWindows`로는 안 보이고, **UI Automation**으로 창의 탭 스트립을 읽어야 한다(FR-10.12). 이 Bolt는 §5 창 단위 모델과 **연속**이며, 창 열거/활성화·capture·DnD·아이콘은 무변경(순수 추가).
+
+### 6.1 접근 방식 — 관리형 UI Automation, 온디맨드
+- **왜 UIA인가**: 브라우저 탭 제목/선택 상태/선택 동작은 `System.Windows.Automation`(UIAutomationClient + UIAutomationTypes, .NET Framework 동봉)으로 표준적으로 접근된다. `ControlType.Tab`(탭 스트립) 컨테이너 → `ControlType.TabItem`(탭들). 활성 탭 = `SelectionItemPattern.IsSelected`, 탭 전환 = `SelectionItemPattern.Select`(폴백 `InvokePattern.Invoke`). `TabItem`만 취하므로 `+`/탭 목록/설정 등은 자연 제외(FR-9.6).
+- **왜 인라인 PowerShell `Add-Type`가 허용되는가**: 창 열거(§2)는 1초 폴링이라 FFI가 필수였지만, **탭 읽기는 그룹 펼침 시 온디맨드**로만 호출된다(FR-10.7). 따라서 `WinIconReader`와 동일하게 fresh `powershell.exe` + `Add-Type -AssemblyName UIAutomationClient/…` 패턴이 수용 가능(폴링 hot-path 아님). `windows`/`winapi` 크레이트 미도입 원칙 유지.
+- **보안(NFR-S2/SECURITY-05)**: 모든 신뢰 밖 값(대상 프로세스명, HWND, 탭 인덱스)은 `$env:VC_PROC`/`$env:VC_HWND`/`$env:VC_TABIDX`로 전달, 명령줄 연결 금지. Rust 측에서 프로세스명=식별자, HWND/인덱스=전(全)자릿수 검증.
+
+### 6.2 열거 — `WinBrowserTabReader::list_tabs(process) -> Vec<(handle_token, title, is_active)>`
+- 모든 최상위 `Window`를 순회하며 대상 프로세스명(`chrome`/`msedge`/…)의 창에서 `Tab` 스트립을 찾고 `TabItem`들을 방출. 워밍업(먼저 `FindFirst(Tab)`) + 350ms 대기로 Chromium 지연 트리 생성을 유도.
+- 출력: `<hwnd>\t<index>\t<selected 0|1>\t<name>` TSV → Rust가 파싱. **handle_token = `<hwnd>\u{1f}<index>`** (단위 구분자 `\u{1f}`) — 10진 HWND(창 활성화용)와 구분되고, macOS `name\u{1f}title` 관례와 대칭.
+- **제목 정리**: Chromium 메모리 세이버 주석(`… - 메모리 사용량 - 348MB` / `… - Memory usage - 120 MB`)을 `clean_tab_title`이 제거(숫자 없는 짧은 라벨 세그먼트만 안전하게 절단 — 실제 " - " 포함 제목은 보존). 빈 제목은 `(탭 N번 — 제목 없음)` (N=1기준 위치 — 사용자가 몇 번째 탭인지 파악 가능, §6.8 참조).
+- **한계(수용)**: URL 미제공(FR-9.1의 주소 부분은 라이브 탭 불가; FR-9.7에 따라 추측 금지) → 표시·활성화 전용. Chromium 지연 접근성으로 **최전면/관여 창의 탭만** 안정적으로 읽힘 → 백그라운드 전용 창은 빈 결과. 실패·빈 결과는 `Ok(vec![])`로 degrade(caller가 OS 창 목록으로 폴백).
+
+### 6.3 활성화 — `WinBrowserTabReader::activate_tab(handle_token) -> Result<()>`
+- 토큰을 `hwnd`/`index`로 분해·검증 → 대상 창을 **먼저 최전면화**(`ShowWindowAsync(SW_RESTORE)` + `SetForegroundWindow`; 이는 Chromium이 그 창의 접근성 트리를 (재)생성하게 하여 이전 백그라운드 창의 탭 스트립도 읽히게 함) → `Tab` 스트립의 `index`번째 `TabItem`을 `Select`(폴백 `Invoke`).
+- **FR-4.2 준수**: 창만 최전면화하고 탭 전환 실패면 성공으로 보고하지 않음. `GONE`(창 사라짐)/`NOSTRIP`(스트립 못 읽음)/`BADIDX`(탭 사라짐)/`NOPATTERN`을 각각 에러로 매핑 → U6가 드롭 후 재열거.
+
+### 6.4 vc-app(U6) / 프론트(U7) 계약
+- **U6**: 신규 `list_browser_tabs(name) -> Vec<RunningWindow>`(온디맨드), `activate_tab(handle)` async 커맨드. `RunningWindow{handle,title,is_focused}` **재사용**(탭=창과 동형: `is_focused`=활성 탭). `#[cfg(target_os=…)]` 분기 — Windows만 실동작, 그 외 빈 벡터/미지원 에러. `generate_handler!` 등록.
+- **U7**: 브라우저 이름(`chrome/msedge/brave/whale`) 그룹은 **항상 펼침 가능**. 펼칠 때 `listBrowserTabs` **지연 호출**(폴링에는 안 태움), 탭이 있으면 탭 행 렌더(클릭→`activateTab`, 이후 재-fetch로 활성 점 갱신), 없으면 OS 창 행으로 폴백 + 안내 문구. 앱 그룹 헤더 DnD·capture 무변경.
+
+### 6.5 테스트
+- `vc-os-windows`에 최초 단위 테스트 추가(`tab_tests`): `is_mem_token`(크기 토큰 판별), `clean_tab_title`(메모리 주석 절단 vs 실제 하이픈 제목 보존, ko/en), 토큰 라운드트립(`<hwnd>\u{1f}<index>` ↔ split). UIA 자체는 라이브 브라우저 필요 → 실측 검증으로 대체(§아래).
+
+### 6.6 실측 검증 (2026-09-09, 실 Windows + Chrome)
+- 열거: 활성 Chrome 창에서 탭 2개 방출, 활성 탭 `selected=1` 정확, TSV가 Rust 파서와 일치, 메모리 세이버 접미사 존재(정리 로직 적용 대상) 확인.
+- 활성화: 인덱스 1로 전환 → `OK`, 재열거 시 활성 플래그가 인덱스 1로 이동 확인 → 인덱스 0으로 복원까지 확인(정확히 지정 탭만 전환 = FR-4.2).
+- 회귀: `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test -p vc-os-windows` 5/5 통과, 프론트 `tsc --noEmit` 무오류. 창 열거(§2)·capture·DnD 코드 무변경(순수 추가).
+
+## AC 매핑(보완)
+- **AC-20 확장**: 브라우저 그룹 펼침 → 탭 목록 확인 → 특정 탭 선택 → 정확한 탭 최전면(활성 점 이동). 읽기 불가 창은 OS 창으로 폴백.
+- 회귀 방지: **AC-7**(탭 목록/설정 등 비-탭 UI 오인 금지 = `TabItem`만), **AC-2**(정확한 창/탭 최전면), FR-10.7(폴링 미지연).
+
+## 6.7 라이브 탭의 작업 묶음 등록 (보완 Bolt, 2026-09-09) — `#B3` 추가 해소
+
+§6이 "표시·활성화 전용"으로 남긴 라이브 탭을, 사용자 요청에 따라 **작업 묶음에 개별 리소스로 영속 등록**하도록 보완한다. URL을 얻을 수 없으므로(FR-9.7) **제목 기반 포커스 전용**으로 구현 — vc-os-windows 어댑터는 무변경(§6.2/6.3의 `list_tabs`/`activate_tab` 재사용), 도메인·vc-app·프론트만 확장한다.
+
+- **도메인(vc-core)**: 신규 `ResourceKind::BrowserTabLive`. `descriptor`=탭 제목, `hint`=`<browser>\u{1f}<hwnd>\u{1f}<idx>`(비영속 활성화 토큰), `reopen_info`=없음. 컴파일러가 강제하는 exhaustive match 지점 갱신: `distinct_key`(hint로 구분 — 같은 탭=중복, 다른 인덱스=별개), `plan_reopen`(→`FocusLinkedWindow`, URL 미개방), migrate PBT `prop_oneof!`(6→7종, 라운드트립 대상).
+- **vc-app(U6)**: 신규 커맨드 `add_tab_resource(bundle_id,title,browser,handle)`(hint 조합 후 **hint 전체로 중복 방지** FR-3.4), `activate_tab_resource(hint,title)`. 헬퍼 `activate_live_tab`: hint를 `(browser, <hwnd>\u{1f}<idx>)`로 분해(`split_tab_hint`) → 저장 토큰으로 `activate_tab` 시도 → 낡았으면 그 브라우저를 재열거해 **제목으로 재매칭**, 실패 시 에러(FR-4.2 — 앱만 최전면화는 성공 아님). `reopen_resource`에도 `BrowserTabLive`→`activate_live_tab` 분기(복원도 포커스 전용).
+- **프론트(U7)**: 탭 행을 **draggable**로(창 행은 기존대로 클릭 전용), 드롭 시 `addTabResource`로 등록. 저장된 탭 리소스는 아이콘 없이 배지 "Tab", 더블클릭 시 `activateTabResource`로 정확히 그 탭 재포커스. 앱 드래그와 탭 드래그는 별도 ref로 구분, 폴링은 두 드래그 중 어느 것이든 진행 중이면 양보(드래그 취소 방지).
+- **테스트**: vc-core `distinct_key`(hint 구분: 동일=중복/다른 인덱스=별개), `plan_reopen`(BrowserTabLive→FocusLinkedWindow) 신규 단위 테스트. vc-app 최초 단위 테스트(`split_tab_hint` 조합↔분해 라운드트립, malformed 거부). 라운드트립 PBT-02는 신규 종류 포함해 통과(24/24).
+- **실측 검증(2026-09-09, 실 Windows + Chrome)**: 임시 하니스(`list_tabs`→vc-app 방식으로 hint 조합→분해→`activate_tab`→재열거)로 Chrome 9탭 열거, 조합 hint `chrome\u{1f}525722\u{1f}1` 분해가 원 토큰과 일치, 인덱스 1로 정확 전환(활성 플래그 이동 확인) 후 원탭 복원 — **정확히 지정 탭만 활성화(FR-4.2)** 확인. `cargo build/clippy -p vc-core -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2, 프론트 `tsc --noEmit` 무오류. 순수 추가라 기존 앱 등록/DnD/복원 무변경. 하니스는 검증 후 삭제.
+
+## AC 매핑(보완 2)
+- **AC-20 추가 확장**: 브라우저 탭을 그룹으로 드래그 → 개별 탭 리소스 등록 → 같은 창 여러 탭 각각 등록 → 저장 탭 더블클릭 시 정확한 탭 활성화 → 같은 탭 중복 방지.
+- 회귀 방지: **AC-3/AC-4**(드래그 1회 등록·같은 앱/창 다른 탭 개별 등록), **AC-2**(정확한 탭 최전면), FR-9.7(URL 미추측).
+
+## 6.8 저장된 탭 활성화 정확도 보완 + 빈 제목 표시 개선 (보완 Bolt H3, 2026-09-09)
+
+§6.7(개별 탭 등록)에 이어 두 가지 보완을 추가한다.
+
+**문제 1: 탭 순서 변경 후 잘못된 탭 활성화**
+
+`activate_live_tab`(vc-app)이 저장된 토큰(`<hwnd>\u{1f}<idx>`)으로 `focus_tab`을 직접 호출했고, ACTIVATE_TAB_SCRIPT는 위치 인덱스로만 탭을 선택했다. 탭 순서 변경·닫기 후 인덱스가 다른 탭을 가리켜도 `SelectionItemPattern.Select`가 `OK`를 반환하여 **제목 검증 없이 잘못된 탭이 활성화**되는 문제(FR-4.2 위반).
+
+- **수정**: `activate_live_tab`이 `focus_tab` 호출 전에 live tab을 열거(`enumerate_browser_tab_sessions`)하여 저장된 핸들이 기대 제목을 가진 탭을 가리키는지 검증. 불일치면 제목 기반 검색으로 직행.
+- **잔여 한계(수용)**: 같은 창에 동일 제목 탭 2개 이상이면 첫 번째 매칭 선택 — URL 없이는 구분 불가(FR-9.7).
+
+**문제 2: Edge 빈 제목 표시**
+
+Chromium 지연 접근성 트리(배경 창 `Name` 미생성)로 탭 제목이 빈 문자열로 반환될 때, 기존 `(제목 없음)` 표시만으로는 어떤 탭인지 파악 불가.
+
+- **수정**: `(제목 없음)` → `(탭 N번 — 제목 없음)` (N=1기준 탭 위치) — 사용자가 몇 번째 탭인지 파악 가능하고 실제 제목 없는 탭이 아닌 읽기 실패임을 암시.
+- **한계**: "진짜 빈 제목"과 "읽기 실패"는 UIA 반환값으로 구분 불가. 위치 번호가 탭 순서 변경 후에는 달라질 수 있어 저장 후 제목 기반 활성화 불가(오히려 잘못된 탭 활성화를 막음 — FR-4.2 일치).
+
+**검증**: `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2 통과. live 탭 순서 변경 후 saved tab 활성화 검증은 수동 필요(이 환경에서 실행 불가 — 완료로 기록하지 않음).
+
+## 6.9 Edge 중첩 Tab 수집·접근성 트리 준비·개별 창 등록 (보완 Bolt H4, 2026-09-09)
+
+§6.8이 남긴 "Edge 읽기 실패 원인(추정)"을 2단계 진단 스크립트(`diag_edge_tabs.ps1`/`diag_edge_tabs2.ps1`, 읽기 전용)로 실측 규명하고, 그 결과에 근거해 수집·활성화·사용자 흐름·개별 창 등록을 보완한다.
+
+**확정된 진단(실측)**
+- **중첩 Tab**: Edge 탭 스트립 = 바깥 `Tab`('탭 표시줄', `TabItem` Children=0/Descendants=3) ⊃ 안쪽 무명 `Tab`(직계 `TabItem` Children=3). 기존 `FindFirst(Descendants,Tab)`가 바깥을 잡고 `FindAll(Children,TabItem)`→0이라 수집 실패였다.
+- **지연 접근성 트리**: 백그라운드 창은 스트립만 있고 `TabItem`이 아직 없음(Children=0/Descendants=0). 포그라운드 전환 시 생성·안정.
+- 미확정(일반화 금지): 고정 대기 확대만으로 백그라운드 창이 항상 읽힌다는 보장 없음. Chrome은 이번에 실측 재확인 못 함(설계상 회귀 방지만).
+
+### 6.9.1 수집·활성화 (U4)
+- 탭 스트립 하위 `TabItem` 탐색을 `Children`→**`Descendants`**로 변경(`LIST_TABS_SCRIPT`·`ACTIVATE_TAB_SCRIPT` 공통). 범위를 **찾은 스트립 하위로 한정** → 페이지 내부 ARIA `TabItem`은 스트립의 자손이 아니라 오수집 안 됨(FR-9.6). 두 스크립트가 **동일 탐색·순서**(FindFirst Tab → FindAll Descendants TabItem)라 수집 인덱스와 활성화 인덱스 정합. Chrome 직계 `TabItem`도 Descendants에 포함되어 회귀 없음.
+- 고정 350ms 단발 → **제한 재시도**: warm-up(옵션 포그라운드 포함) 후 창별 최대 6×150ms 폴링, `TabItem`>0이면 조기 종료. 실패 시 빈 결과(창 목록 폴백).
+- `list_tabs(process, bring_to_front)`: `bring_to_front`(=`$env:VC_TAB_FG='1'`)일 때만 `VcFg` P/Invoke(ShowWindowAsync+SetForegroundWindow)로 대상 창을 먼저 포그라운드. 그룹 펼치기는 `false`(포커스 미탈취, FR-10.7의 "폴링 미포함" 유지), 명시적 "다시 읽기"와 저장 탭 활성화만 `true`.
+
+### 6.9.2 접근성 트리 준비·사용자 흐름 (U6/U7)
+- `list_browser_tabs(name, reveal)`에 `reveal` 추가 → `enumerate_browser_tab_sessions(name, bring_to_front)`. `activate_live_tab`은 저장 탭 활성화 시 `reveal=true`로 재열거(§6.8 제목 재검증 유지).
+- 프론트: 목록 펼침만으로 Edge를 앞으로 가져오지 않음. 자동 수집 실패 시 사유 안내("백그라운드 창이라 탭을 읽지 못했습니다 …") + **"⟳ 앞으로 가져와 다시 읽기"** 버튼(→ `fetchTabs(name, true)`)으로 사용자가 명시적으로 선택.
+
+### 6.9.3 일반 앱 개별 창 등록 (U6/U7, `WindowRef` 배선)
+- 지금까지 아무 곳도 생성하지 않던 `ResourceKind::WindowRef`를 배선. 신규 커맨드 `add_window_resource(bundle_id,title,app,handle)`(→ `WindowRef`: descriptor=제목, hint=HWND, reopen_info=app; **제목으로 중복 방지** — vc-core `distinct_key(WindowRef)=descriptor`와 정합, HWND는 OS 재활용이라 식별키 제외)·`activate_window_resource(hint,title,app)`.
+- 헬퍼 `activate_live_window`: `enumerate_running_windows()` 재열거 → 저장 HWND가 같은 창이면 포커스, 낡았으면 (app,제목) 재매칭, 없으면 에러(FR-4.2). `reopen_resource`의 `WindowRef`도 이 경로. **닫힌 창은 재열지 않음**(범위 외 — 에러로 표면화).
+- 프론트: 창 하위 행을 draggable로(일반 앱 창 + 브라우저 OS-창 폴백 행 모두, 즉 **탭 수집 실패 시에도 창 등록 가능**). `draggedWin` ref, 폴링은 app/tab/win 세 드래그 어느 것이든 진행 중이면 양보. 저장 `WindowRef`는 배지 "Window"(앱/창/탭 구분), 더블클릭 시 그 창 복귀. 앱 전체 등록 유지.
+
+### 6.9.4 검증
+- **정적(실행 완료)**: `cargo clippy --workspace --all-targets` 0 경고, `cargo test --workspace` 전 통과(vc-core 24/24·vc-os-windows 5/5·vc-app 2/2·vc-sessions 8/8·vc-store 2/2), `npx tsc --noEmit` 무오류·`vite build` 성공. 진단 스크립트는 실 Windows+Edge에서 실행해 중첩 Tab·지연 트리 실측 확정.
+- **런타임(미완료 — 직접 실행 못 함, 완료로 기록하지 않음)**: Edge 백그라운드/포그라운드 수집, 여러 Edge 창, 탭 순서 변경 후 저장 탭 활성화, Chrome 회귀, 카카오톡 개별 창 등록·복귀 — 앱 UI 플로우 실행은 미수행, 사용자 실환경 확인 필요.
+
+## AC 매핑(보완 3)
+- **AC-20 추가 확장**: 중첩 Tab 처리로 Edge 탭 개별 표시·등록·활성화; 백그라운드 창은 명시적 "다시 읽기"로만 포그라운드; 개별 OS 창(카카오톡 채팅방 등)을 그룹에 등록·복귀; 탭 수집 실패 시에도 창 등록 가능.
+- 회귀 방지: **AC-7**(스트립 하위로 범위 한정 → 페이지 내부 TabItem 미수집), **AC-2/FR-4.2**(정확한 탭/창만 활성화, 앱만 활성화는 성공 아님), FR-10.7(펼침이 포커스 탈취·폴링 부하 유발 안 함).
+
 ## 미해결/후속
-- Windows 브라우저 탭 창 단위(Edge/Chrome 탭)는 여전히 `known-deviations.md#B3`(스텁) — 이 기능은 **일반 앱 창** 우선. 브라우저 탭 열거는 후속.
-- U1 `matching/window.rs` L2 매처(`app_id|role|title`)는 저장 리소스↔실행 창 재추적(FR-4.4)에 사용 가능하나 본 기능 1차 범위는 실행 목록 표시·활성화에 한정.
+- 탭 **URL 수집**(캡처 경로 `read_tabs`, FR-9.1의 주소 부분·DevTools 프로토콜)만 잔존 — 라이브 탭의 **작업 묶음 등록/복원은 §6.7에서 제목 기반 포커스 전용으로 해소**(URL 불필요).
+- macOS 라이브 탭 세션(현재 앱 창 폴백) — AX 기반 탭 열거는 후속.
+- 동일 제목 탭 다수 구분 — URL 없이는 불가(FR-9.7 수용된 한계).
+- U1 `matching/window.rs` L2 매처(`app_id|role|title`)는 저장 리소스↔실행 창 재추적(FR-4.4)에 사용 가능하나 본 기능 범위는 실행 목록 표시·활성화에 한정.

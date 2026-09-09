@@ -604,6 +604,30 @@ body { margin: 0; background: var(--body); }
   text-overflow: ellipsis;
 }
 
+/* Informational row shown under an expanded browser when its tabs are still
+   loading or couldn't be read — not clickable, quieter than a real tab. */
+.running-window-hint {
+  cursor: default;
+  opacity: 0.7;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.running-window-hint:hover { background: transparent; }
+.running-window-hint .win-title {
+  font-style: italic;
+  white-space: normal;
+}
+/* Explicit "bring forward and re-read" action inside the fallback hint — the
+   opt-in that foregrounds a background browser window (accessibility-tree
+   readiness / FR-10.7). */
+.reveal-tabs {
+  font-family: var(--grotesk);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
 /* ── Buttons = EP-133 keys: SHARP · FLAT · SOFT ────────────
    Teenage Engineering keys are low, near-flush pads with crisp
    square-ish corners and a matte face — sharp and flat, never a

@@ -47,6 +47,11 @@ pub fn distinct_key(id: &ResourceIdentity) -> DistinctKey {
     let key = match id.kind {
         ResourceKind::WindowRef => id.descriptor.clone(),
         ResourceKind::BrowserTab => extract_host_path(&id.descriptor),
+        // A live tab has no URL (FR-9.7): distinguish tabs by their activation
+        // token (browser+window+index) when present, else by title.
+        ResourceKind::BrowserTabLive => {
+            id.hint.clone().unwrap_or_else(|| id.descriptor.clone())
+        }
         ResourceKind::Folder => id.descriptor.clone(),
         ResourceKind::AppLaunch => id.descriptor.clone(),
         ResourceKind::Url => extract_host_path(&id.descriptor),
@@ -123,5 +128,35 @@ mod tests {
         let key2 = distinct_key(&id2);
         // 같은 호스트면 동일 경로까지 제외 가능 (설계에 따라)
         assert_ne!(key1, key2); // 경로까지 포함하면 다름
+    }
+
+    // FR-3.4: 라이브 탭은 URL이 없으므로(FR-9.7) 활성화 토큰(hint =
+    // <browser>\u{1f}<hwnd>\u{1f}<idx>)으로 구분된다 — 같은 탭이면 동일 키(중복),
+    // 다른 탭(다른 인덱스)이면 다른 키(개별 등록 허용).
+    #[test]
+    fn test_distinct_live_tabs_by_hint() {
+        let same_title = "GitHub - reiple/vibe-control".to_string();
+        let tab0 = ResourceIdentity {
+            kind: ResourceKind::BrowserTabLive,
+            descriptor: same_title.clone(),
+            hint: Some("chrome\u{1f}12345\u{1f}0".to_string()),
+            reopen_info: None,
+        };
+        let tab0_again = ResourceIdentity {
+            kind: ResourceKind::BrowserTabLive,
+            descriptor: same_title.clone(),
+            hint: Some("chrome\u{1f}12345\u{1f}0".to_string()),
+            reopen_info: None,
+        };
+        let tab1 = ResourceIdentity {
+            kind: ResourceKind::BrowserTabLive,
+            descriptor: same_title,
+            hint: Some("chrome\u{1f}12345\u{1f}1".to_string()),
+            reopen_info: None,
+        };
+        // 동일 탭 → 동일 키 (묶음 내 중복 방지 근거)
+        assert_eq!(distinct_key(&tab0), distinct_key(&tab0_again));
+        // 같은 제목이라도 인덱스가 다르면 별개 탭 → 다른 키 (개별 등록 허용)
+        assert_ne!(distinct_key(&tab0), distinct_key(&tab1));
     }
 }

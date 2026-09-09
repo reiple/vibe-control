@@ -1,6 +1,7 @@
 export type ResourceKind =
   | "WindowRef"
   | "BrowserTab"
+  | "BrowserTabLive"
   | "Folder"
   | "AppLaunch"
   | "Url"
