@@ -1,6 +1,6 @@
 use std::fs;
 use std::path::PathBuf;
-use vc_core::{WorkBundle, AppSettings, Result, CoreError};
+use vc_core::{WorkBundle, AppSettings, AnalysisCache, Result, CoreError};
 
 pub trait BundleStore {
     fn load(&self) -> Result<Vec<WorkBundle>>;
@@ -9,6 +9,7 @@ pub trait BundleStore {
     fn save_settings(&self, settings: &AppSettings) -> Result<()>;
 }
 
+#[derive(Clone)]
 pub struct JsonBundleStore {
     store_dir: PathBuf,
 }
@@ -55,6 +56,37 @@ impl JsonBundleStore {
 
     fn settings_path(&self) -> PathBuf {
         self.store_dir.join("settings.json")
+    }
+
+    fn analysis_cache_path(&self) -> PathBuf {
+        self.store_dir.join("analysis-cache.json")
+    }
+
+    /// Load the incremental-analysis cache. **Non-critical** (NFR-1.2): a missing
+    /// or corrupt cache is not an error — it degrades to an empty cache so the
+    /// caller recomputes from scratch. Never fails.
+    pub fn load_analysis_cache(&self) -> AnalysisCache {
+        let path = self.analysis_cache_path();
+        match fs::read(&path) {
+            Ok(bytes) => serde_json::from_slice(&bytes).unwrap_or_default(),
+            Err(_) => AnalysisCache::default(),
+        }
+    }
+
+    /// Persist the analysis cache atomically (temp + rename), same pattern as
+    /// `save`. A write failure is non-fatal (NFR-1.2): the cache is always
+    /// reconstructible, so callers may ignore the error and retry next time.
+    pub fn save_analysis_cache(&self, cache: &AnalysisCache) -> Result<()> {
+        let path = self.analysis_cache_path();
+        let temp_path = PathBuf::from(format!("{}.tmp", path.display()));
+
+        let bytes = serde_json::to_vec(cache)
+            .map_err(|e| CoreError::Corrupt(format!("Cannot serialize analysis cache: {}", e)))?;
+        fs::write(&temp_path, bytes)
+            .map_err(|e| CoreError::Corrupt(format!("Cannot write analysis cache temp: {}", e)))?;
+        fs::rename(&temp_path, &path)
+            .map_err(|e| CoreError::Corrupt(format!("Cannot rename analysis cache: {}", e)))?;
+        Ok(())
     }
 
     /// Durably write `bytes` to `path` via a temp-file swap.
@@ -152,6 +184,46 @@ mod tests {
         assert_eq!(loaded.len(), 2);
         assert_eq!(loaded[0].name, "A");
         assert_eq!(loaded[1].name, "B");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    // --- analysis cache (NFR-1.2, non-critical) ---
+
+    #[test]
+    fn analysis_cache_missing_is_default() {
+        let (store, dir) = temp_store("cache-missing");
+        let cache = store.load_analysis_cache();
+        assert!(cache.entries.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn analysis_cache_save_load_roundtrip() {
+        let (store, dir) = temp_store("cache-roundtrip");
+        let mut cache = AnalysisCache::default();
+        cache.upsert(vc_core::CacheEntry {
+            session_id: "s1".to_string(),
+            context_ref: "ctx".to_string(),
+            last_analyzed_offset: 128,
+            last_analyzed_mtime: 1700,
+            analyzed_at: 1701,
+            cached_summary: None,
+        });
+        store.save_analysis_cache(&cache).unwrap();
+
+        let loaded = store.load_analysis_cache();
+        assert_eq!(loaded, cache);
+        assert_eq!(loaded.get("s1").unwrap().last_analyzed_offset, 128);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn analysis_cache_corrupt_is_default_not_error() {
+        let (store, dir) = temp_store("cache-corrupt");
+        fs::write(dir.join("analysis-cache.json"), b"{ not valid json").unwrap();
+        // Corrupt file must degrade to an empty cache, never panic or error.
+        let cache = store.load_analysis_cache();
+        assert!(cache.entries.is_empty());
         let _ = fs::remove_dir_all(&dir);
     }
 

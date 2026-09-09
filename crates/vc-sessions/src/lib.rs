@@ -56,6 +56,30 @@ pub struct Turn {
     pub content: String,
 }
 
+/// Result of an incremental snapshot read (NFR-1).
+///
+/// The cache carries `(offset, mtime)` from the previous analysis. If the file
+/// is unchanged since then, `snapshot` is `None` and the caller reuses the
+/// previously derived status (the warm fast-path — no parse, no full read).
+/// When the file changed (grew, was truncated, rotated, or is new) we re-parse
+/// the *whole* file so the snapshot always equals a full parse (PBT-05 / P10
+/// oracle). Parsing the whole file on change keeps the summary correct because
+/// completion/turns depend on the entire conversation, not just the tail.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct IncrementalRead {
+    /// `Some` when (re)parsed; `None` when the file was unchanged (reuse prior).
+    pub snapshot: Option<SessionSnapshot>,
+    /// True when the file was unchanged since `prev_offset`/`prev_mtime`.
+    pub unchanged: bool,
+    /// New resume point (file size in bytes) to persist in the cache.
+    pub new_offset: u64,
+    /// New file mtime (unix seconds) to persist in the cache.
+    pub new_mtime: u64,
+    /// Last log activity (unix seconds); best-effort file mtime. `None` if the
+    /// session file is missing.
+    pub last_activity: Option<u64>,
+}
+
 pub struct ClaudeCodeSessionProvider;
 
 impl ClaudeCodeSessionProvider {
@@ -92,6 +116,103 @@ impl ClaudeCodeSessionProvider {
         None
     }
 
+    /// File size (bytes) and mtime (unix seconds) for a session ref, best-effort.
+    /// Reads the exact attached session file (see [`resolve_path`]).
+    fn stat(session_ref: &str) -> Option<(u64, u64)> {
+        let path = Self::resolve_path(session_ref)?;
+        let meta = fs::metadata(&path).ok()?;
+        let size = meta.len();
+        let mtime = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        Some((size, mtime))
+    }
+
+    /// Read a session snapshot incrementally against a cached `(offset, mtime)`.
+    ///
+    /// Read-only (NFR-3), never panics, degrades on any failure (NFR-2). Pass
+    /// `prev_mtime == 0` to force a full read (no prior analysis). See
+    /// [`IncrementalRead`] for the fast-path semantics.
+    pub fn read_snapshot_incremental(
+        session_ref: &str,
+        prev_offset: u64,
+        prev_mtime: u64,
+    ) -> IncrementalRead {
+        let Some((size, mtime)) = Self::stat(session_ref) else {
+            // Missing / unreadable → unavailable snapshot, non-fatal.
+            return IncrementalRead {
+                snapshot: Some(SessionSnapshot::unavailable()),
+                unchanged: false,
+                new_offset: 0,
+                new_mtime: 0,
+                last_activity: None,
+            };
+        };
+
+        // Warm fast-path: prior analysis exists and the file is byte-for-byte
+        // unchanged (same size and mtime) → skip the parse entirely.
+        if prev_mtime != 0 && size == prev_offset && mtime == prev_mtime {
+            return IncrementalRead {
+                snapshot: None,
+                unchanged: true,
+                new_offset: size,
+                new_mtime: mtime,
+                last_activity: Some(mtime),
+            };
+        }
+
+        // Changed (grew / truncated / rotated / new) → full reparse for
+        // correctness (snapshot == full parse, guaranteeing the P10 oracle).
+        let path = match Self::resolve_path(session_ref) {
+            Some(p) => p,
+            None => {
+                return IncrementalRead {
+                    snapshot: Some(SessionSnapshot::unavailable()),
+                    unchanged: false,
+                    new_offset: 0,
+                    new_mtime: 0,
+                    last_activity: None,
+                }
+            }
+        };
+        let snapshot = match fs::read(&path) {
+            Ok(bytes) => parse_session_bytes(&bytes),
+            Err(_) => SessionSnapshot::unavailable(),
+        };
+        IncrementalRead {
+            snapshot: Some(snapshot),
+            unchanged: false,
+            new_offset: size,
+            new_mtime: mtime,
+            last_activity: Some(mtime),
+        }
+    }
+
+    /// Permanently delete a session's log file (the conversation), but ONLY if
+    /// it resolves to a real file living under `~/.claude/projects`. The
+    /// canonicalized target must sit inside the canonicalized projects tree, so
+    /// an arbitrary absolute `session_ref` can never delete a file elsewhere.
+    /// This is the only write this crate performs; everything else is read-only.
+    pub fn delete_session(session_ref: &str) -> std::io::Result<()> {
+        use std::io::{Error, ErrorKind};
+        let path = Self::resolve_path(session_ref)
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "session log not found"))?;
+        let projects = Self::projects_dir()
+            .ok_or_else(|| Error::new(ErrorKind::NotFound, "projects dir not found"))?;
+        let canon_path = path.canonicalize()?;
+        let canon_projects = projects.canonicalize()?;
+        if !canon_path.starts_with(&canon_projects) {
+            return Err(Error::new(
+                ErrorKind::PermissionDenied,
+                "refusing to delete a file outside ~/.claude/projects",
+            ));
+        }
+        fs::remove_file(&canon_path)
+    }
+
     /// The working directory a session was started in, read cheaply by
     /// streaming only the first lines that could carry `cwd` (transcripts can be
     /// many MB, so we never load the whole file just for this). Used to match an
@@ -113,7 +234,9 @@ impl ClaudeCodeSessionProvider {
     }
 
     /// (cwd, session_id) needed to resume a session with `claude --resume`.
-    /// cwd is read from the first log line that carries it.
+    /// cwd is read from the first log line that carries it. Resolves the EXACT
+    /// attached session file (see [`resolve_path`]) so resume targets the same
+    /// session the card is bound to — never a different sibling in the folder.
     pub fn resume_info(session_ref: &str) -> Option<(String, String)> {
         let path = Self::resolve_path(session_ref)?;
         let id = path.file_stem().and_then(|s| s.to_str())?.to_string();
@@ -186,6 +309,9 @@ impl CodingSessionProvider for ClaudeCodeSessionProvider {
     }
 
     fn read_snapshot(&self, session_ref: &str) -> Result<SessionSnapshot> {
+        // Read the EXACT attached session file so the card reflects the session
+        // the user resumed/typed into (resume/PTY appends in place to the same
+        // .jsonl — it does not fork into a sibling).
         let Some(path) = Self::resolve_path(session_ref) else {
             return Ok(SessionSnapshot::unavailable());
         };
@@ -514,6 +640,74 @@ mod tests {
             .read_snapshot("claude-code:definitely-not-a-real-session-id-xyz")
             .unwrap();
         assert!(!missing.available);
+    }
+
+    // --- incremental read (NFR-1, P10 oracle) ---
+
+    fn incr_temp_file(name: &str, body: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let dir = std::env::temp_dir().join(format!("vc-sessions-incr-{}-{name}", std::process::id()));
+        let _ = fs::create_dir_all(&dir);
+        let path = dir.join("sess.jsonl");
+        fs::write(&path, body).unwrap();
+        (dir, path)
+    }
+
+    #[test]
+    fn incremental_equals_full_parse_oracle() {
+        // P10: on a changed file the incremental read returns exactly the full parse.
+        let body = concat!(
+            r#"{"type":"user","message":{"role":"user","content":"hi"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"hello"}]}}"#,
+            "\n",
+        );
+        let (dir, path) = incr_temp_file("oracle", body);
+        let sref = path.to_string_lossy().to_string();
+
+        // Cold read (prev_mtime = 0 forces a full parse).
+        let read = ClaudeCodeSessionProvider::read_snapshot_incremental(&sref, 0, 0);
+        assert!(!read.unchanged);
+        let snap = read.snapshot.expect("cold read parses");
+        let oracle = parse_session_bytes(body.as_bytes());
+        assert_eq!(snap.conversation.len(), oracle.conversation.len());
+        assert_eq!(snap.completion, oracle.completion);
+        assert_eq!(snap.last_question, oracle.last_question);
+        assert!(read.new_offset > 0);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn incremental_unchanged_fast_path() {
+        let body = r#"{"type":"user","message":{"role":"user","content":"hi"}}"#;
+        let (dir, path) = incr_temp_file("unchanged", body);
+        let sref = path.to_string_lossy().to_string();
+
+        let first = ClaudeCodeSessionProvider::read_snapshot_incremental(&sref, 0, 0);
+        assert!(!first.unchanged);
+        // Second read with the persisted offset/mtime → unchanged, no snapshot.
+        let second = ClaudeCodeSessionProvider::read_snapshot_incremental(
+            &sref,
+            first.new_offset,
+            first.new_mtime,
+        );
+        assert!(second.unchanged);
+        assert!(second.snapshot.is_none());
+        assert_eq!(second.new_offset, first.new_offset);
+
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn incremental_missing_is_unavailable_not_panic() {
+        let read = ClaudeCodeSessionProvider::read_snapshot_incremental(
+            "claude-code:definitely-not-a-real-session-xyz",
+            10,
+            10,
+        );
+        assert!(!read.unchanged);
+        assert_eq!(read.last_activity, None);
+        assert!(!read.snapshot.unwrap().available);
     }
 }
 
