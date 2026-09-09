@@ -6,6 +6,7 @@ mod pty;
 mod status_query;
 mod term;
 mod usage_cw;
+mod usage_local;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
@@ -92,7 +93,28 @@ impl AppState {
         // is kept so status queries can reach `load/save_analysis_cache` (Q4=A);
         // `Clone` on JsonBundleStore is a cheap PathBuf copy to the same dir.
         let concrete = JsonBundleStore::new()?;
-        let bundles = concrete.load()?;
+        let mut bundles = concrete.load()?;
+        // Drop every persisted CodingSession on launch. Claude Code only starts
+        // cleanly in a freshly-spawned PTY; reopening a group after an app
+        // restart (or rebuild) would otherwise `claude --resume` the stale
+        // session id, which fails to boot the REPL. Stripping the record here
+        // (before the frontend loads its bundles) means the group has no live
+        // session ref, so the next prompt spawns a brand-new terminal via
+        // `claude --session-id`. The group's other resources (folders, windows,
+        // tabs) are untouched; only the ephemeral coding session is cleared.
+        let had_coding_session = bundles
+            .iter()
+            .any(|b| b.resources.iter().any(|r| matches!(r.kind, ResourceKind::CodingSession)));
+        if had_coding_session {
+            for b in &mut bundles {
+                b.resources
+                    .retain(|r| !matches!(r.kind, ResourceKind::CodingSession));
+            }
+            // Persist the pruned set so the cleared sessions never reappear, even
+            // if the app is force-killed before any later save. Best-effort: a
+            // write failure must not block launch.
+            let _ = concrete.save(&bundles);
+        }
         // Corrupt settings must not brick the app — fall back to defaults.
         let settings = concrete.load_settings().unwrap_or_default();
         // The analysis cache is non-critical: a missing/corrupt file loads empty.
@@ -1247,6 +1269,16 @@ async fn claude_usage(
         }
     }
     Ok(usage)
+}
+
+/// Today's LOCAL `claude` CLI usage (all sessions) + USD cost, read from the
+/// on-disk transcripts under `~/.claude/projects`. Unlike [`claude_usage`]
+/// (this app's Bedrock/CloudWatch spend), this reflects the interactive group
+/// terminals — they run the user's own `claude` auth. `since` is the caller's
+/// local-midnight epoch (seconds). Reads only numeric usage, never content.
+#[tauri::command]
+fn claude_local_usage(since: i64) -> usage_local::LocalUsage {
+    usage_local::scan_today(since)
 }
 
 /// Report whether Claude is connected (key present) without revealing the key.
@@ -2756,6 +2788,7 @@ pub fn run() {
             save_panel_layout,
             claude_status,
             claude_usage,
+            claude_local_usage,
             set_claude_api_key,
             set_claude_model,
             send_claude_message,

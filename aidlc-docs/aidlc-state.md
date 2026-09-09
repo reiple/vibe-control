@@ -339,7 +339,17 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **결과**: `create-release` ✅(draft + 설치 스크립트 첨부) · `build-macos` ✅(유니버설 .dmg 업로드) · **`build-windows` ❌** · `publish` ⏭(windows 실패로 skip).
 - **Windows 실패 원인(진단 완료)**: 워크스페이스는 **컴파일 성공**(10분, `vibe-control.exe` 생성, dead_code 경고 1건뿐)했으나 **WiX/MSI 번들링에서 `failed to bundle project: Couldn't find a .ico icon`**. 근본 원인 = `crates/vc-app/tauri.conf.json`의 `bundle.icon`이 `["icons/icon.png"]` 하나만 참조 → Windows 번들러가 `.ico`를 못 찾음. **`icons/icon.ico`(유효한 6크기 MS 아이콘)는 리포에 이미 존재·추적**되는데 config 목록에 누락돼 있었을 뿐.
 - **수정**: `bundle.icon`을 표준 Tauri 목록으로 확장 — `32x32.png`/`128x128.png`/`128x128@2x.png`/`icon.icns`/`icon.ico`(전부 존재). macOS(.icns)·Windows(.ico) 모두 커버. (브랜치 `fix/windows-ico-icon` → PR → main, `v0.1.0` 태그 재지정 후 재실행.)
-- **결론(윈도우 배포 가능 여부)**: 코드/컴파일은 Windows에서 정상 — 유일한 블로커는 아이콘 config 누락이었고 수정됨. 재실행으로 `.msi`+`-setup.exe` 산출 확인 예정.
+- **결론(윈도우 배포 가능 여부)**: 코드/컴파일은 Windows에서 정상 — 유일한 블로커는 아이콘 config 누락이었고 수정됨.
+
+#### ✅ 재실행 성공 + 릴리스 발행 (run 34318680356, PR #23 병합 후 v0.1.0 재지정)
+아이콘 수정 후 `v0.1.0` 태그 재지정 → 릴리스 워크플로우 재실행. **4잡 전부 성공**: `create-release` ✅ · `build-macos` ✅ · **`build-windows` ✅**(.ico 수정으로 WiX/NSIS 번들링 통과) · `publish` ✅(draft→published/latest 전환).
+- **발행된 릴리스** `https://github.com/reiple/vibe-control/releases/tag/v0.1.0` (draft:false), 자산 5종:
+  - `vibe-control_0.1.0_universal.dmg` (~20 MB, macOS Intel+Apple Silicon)
+  - **`vibe-control_0.1.0_x64_en-US.msi` (~8.1 MB, Windows WiX)**
+  - **`vibe-control_0.1.0_x64-setup.exe` (~5.4 MB, Windows NSIS)**
+  - `install.sh` / `install.ps1` (설치 스크립트)
+- **Windows 배포 가능 = YES(확정)**. `install.ps1` 자산 해석을 Windows PowerShell로 dry-run 검증(설치는 미실행): 최신 태그 `v0.1.0` → `-setup.exe` 선택 → 다운로드 URL 정상 해석.
+- **AC-23 상태**: CI 그린(양 OS) + 릴리스 자산 존재 + Windows 설치 스크립트 자산 해석 확인 = **충족**. 잔여는 두 OS에서 실제 한 줄 설치 후 앱 기동 육안 확인 1회(머신 변경 수반이라 사용자 실행 권장).
 
 ---
 
@@ -357,16 +367,17 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 |---|---|---|---|---|
 | Context Control | FR-15 / NFR-S4 · AC-24 | `session-control/design.md` §3·§5 | `vc-core/{claude_status,summarize,deliver}.rs`, `vc-app/status_query.rs` | 단위 ✅ / UI **ORPHANED** ❌ |
 | 인앱 터미널·PTY | FR-16 · AC-25 | `session-control/design.md` §2·§4 | `vc-app/{pty,term}.rs`, `GroupTerminal.tsx` | 대화형 PTY 배선 ✅ / 외부 터미널·세션 생성삭제 **ORPHANED** ❌ → **PARTIALLY WIRED** |
-| CloudWatch 사용량 | FR-17 · AC-26 | `session-control/design.md` §2·§5 | `vc-app/usage_cw.rs`, `App.tsx` 미터 | 배선 **WIRED** ✅ (단위 테스트는 I/O 경계라 없음) |
+| 사용량 미터 | FR-17 · AC-26 | `session-control/design.md` §2·§5 | 현행: `vc-app/usage_local.rs`(로컬 `claude` CLI, main `43d2084`) → `App.tsx` 미터 · legacy: `vc-app/usage_cw.rs`(CloudWatch) | **미터 UI WIRED** ✅ / **로컬 CLI(`claude_local_usage`) WIRED** ✅(3회 참조·상시 렌더) / **CloudWatch(`claude_usage`) 프론트 ORPHANED** ❌(백엔드 커맨드 존속, 미터 미소비) — `known-deviations.md#E5` |
 
 ### 현재 배선 상태 (vc-integration `App.tsx`·`GroupTerminal.tsx` 실측 invoke 기준)
 - **FR-15 Context Control → ORPHANED**: `getContextClaudeStatus`/`sendCommandToContextClaude`/`sendCommandToSession`/`get·setSummarizationConsent` 모두 0회 참조.
 - **FR-16 인앱 터미널/PTY → PARTIALLY WIRED**: 대화형 PTY(`startInteractiveSession`·`interactiveScreen`·`submitInteractiveLine`·`sendInteractiveText`·`startNewInteractive`·`resizeInteractive`·`onPtyOutput`) **WIRED**; 외부 세션 터미널(term.rs 6종) **ORPHANED**; `startNewCodingSession`/`deleteCodingSession` **ORPHANED**. (미사용 래퍼 `sendInteractiveKey`/`stopInteractiveSession`도 0회.)
-- **FR-17 CloudWatch 사용량 → WIRED**: `claudeUsage` 3회 참조 + 사용량 미터 상시 렌더.
+- **FR-17 사용량 미터 → WIRED**: `App.tsx` 미터는 최신 main(`43d2084`) 이후 `claudeLocalUsage`(로컬 `claude` CLI 트랜스크립트 집계·USD 비용, 3회 참조 + 상시 렌더)를 소비한다. 미터 UI·로컬 CLI 경로 모두 **WIRED**.
+- **CloudWatch(`claude_usage`) → 프론트 ORPHANED (legacy)**: 백엔드 커맨드 `claude_usage`(`usage_cw.rs`)는 존속하나 현행 미터가 소비하지 않는다(0회 참조). CloudWatch 계정 조회는 legacy/optional 구현으로 강등 — `known-deviations.md#E5`, requirements FR-17 rev 1.6 참조.
 - 관련 이탈: `known-deviations.md#E4`(orphaned 래퍼)·`#F2`(요약 Bedrock 외부 전송, 동의 게이트 의도적 이탈)·`#A2`(커맨드 인벤토리).
 
 ### 현행 커맨드 인벤토리
-- **53개** — `crates/vc-app/src/lib.rs`의 `generate_handler!` 등록 항목 직접 카운트(2026-09-09 실측). 종전 표기 18/22/24/32는 각 시점 기준 역사적 값으로 보존(`known-deviations.md#A2`). 신규 목록: `session-control/design.md` §4.
+- **54개** — `crates/vc-app/src/lib.rs`의 `generate_handler!` 등록 항목 직접 카운트(2026-09-09 최신 main 병합 후 실측). 직전 IDA 시점의 **53에서 +1** — 최신 main(`43d2084`)이 로컬 CLI 사용량 커맨드 `claude_local_usage`를 추가. 종전 표기 18/22/24/32/53은 각 시점 기준 역사적 값으로 보존(`known-deviations.md#A2`). 신규 목록: `session-control/design.md` §4.
 
 ### 실제 실행한 검증 (grep 아님 — 실행 결과 기준)
 - `cargo test --workspace` (vc-integration) → **120 passed / 0 failed**. 내역: vc-app 18 · vc-core 77 · vc-os-windows 5 · vc-sessions 12 · vc-store 8. vc-os-macos는 Windows에서 0(macOS 전용, 미실행).

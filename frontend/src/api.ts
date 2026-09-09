@@ -12,6 +12,7 @@ import type {
   CommandDelivery,
   InteractiveScreen,
   ClaudeUsage,
+  LocalUsage,
   LayoutSettings,
 } from "./types";
 
@@ -332,6 +333,27 @@ export async function claudeUsage(): Promise<ClaudeUsage> {
   if (!inTauri()) return NO_USAGE;
   return await invoke<ClaudeUsage>("claude_usage", {
     today: localDate(),
+    since: localMidnightEpoch(),
+  });
+}
+
+const NO_LOCAL_USAGE: LocalUsage = {
+  configured: false,
+  total_cost_usd: 0,
+  input_tokens: 0,
+  output_tokens: 0,
+  cache_creation_tokens: 0,
+  cache_read_tokens: 0,
+  total_tokens: 0,
+  messages: 0,
+};
+
+/** Today's LOCAL `claude` CLI usage + USD cost for the graphical meter, summed
+ *  across every session under `~/.claude/projects`. Reflects the interactive
+ *  group terminals (user's own Claude auth); never returns content. */
+export async function claudeLocalUsage(): Promise<LocalUsage> {
+  if (!inTauri()) return NO_LOCAL_USAGE;
+  return await invoke<LocalUsage>("claude_local_usage", {
     since: localMidnightEpoch(),
   });
 }

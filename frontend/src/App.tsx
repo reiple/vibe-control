@@ -8,7 +8,7 @@ import type {
   RunningApp,
   RunningWindow,
   ClaudeStatus,
-  ClaudeUsage,
+  LocalUsage,
   SessionSnapshot,
 } from "./types";
 import {
@@ -23,7 +23,7 @@ import {
   addAppResource,
   saveBundles,
   claudeStatus,
-  claudeUsage,
+  claudeLocalUsage,
   setClaudeApiKey,
   setClaudeModel,
   startInteractiveSession,
@@ -73,6 +73,13 @@ const fmtTokens = (n: number): string => {
 };
 // The big cumulative counter shows full digits with thousands separators.
 const fmtFull = (n: number): string => n.toLocaleString("en-US");
+// Today's local CLI spend as USD. Sub-dollar keeps cents visible ($0.42);
+// larger amounts round to whole dollars with separators ($1,234) so the LED
+// stays legible. Cache tokens are already priced in at their reduced rate.
+const fmtUSD = (n: number): string =>
+  n < 100
+    ? `$${n.toFixed(2)}`
+    : `$${Math.round(n).toLocaleString("en-US")}`;
 // Human label for the connected model id (falls back to the raw id's tail).
 const modelLabel = (id: string): string =>
   CLAUDE_MODELS.find((m) => m.id === id)?.label ??
@@ -350,7 +357,7 @@ function AppIcon({
 // stylesheet + the vendored scripts. The stylesheet is scoped to the splash's
 // lifetime — removed on unmount — so the example's global resets never leak
 // into the app.
-const INTRO_HTML = `<main id="hero" class="hero" hidden><div class="hero-top">SP●DEV</div><div class="hero-grid"></div></main><div class="loader-loader" id="loader" role="status" aria-label="Loading"><div class="loader-wrapper"><div class="loader-empty loader-empty1"><p>S</p></div><div class="loader-empty loader-empty2"><p>P</p></div><div class="loader-text"><h2>Fake loading...</h2></div><div class="loader-slash"><p>/</p></div><div class="loader-number loader-number1"><p>0</p></div><div class="loader-number loader-number2"><p>0</p></div><div class="loader-number loader-number3"><p>0</p></div><div class="loader-percent"><p>%</p></div><div class="loader-logo"><svg width="45" height="10" viewBox="0 0 45 10" fill="none" xmlns="http://www.w3.org/2000/svg"><g clip-path="url(#clip0_517_15380)"><path d="M30.0915 4.98203C30.0915 6.13403 29.9835 7.20203 29.5035 7.97003C29.0235 8.75003 28.1235 9.25403 26.7915 9.25403H24.2595V0.746033H26.7915C28.1235 0.746033 29.0355 1.28603 29.5155 2.06603C29.9955 2.83403 30.0915 3.83003 30.0915 4.98203ZM28.9995 4.98203C28.9995 3.89003 28.9515 2.89403 28.3635 2.29403C28.0395 1.95803 27.5235 1.73003 26.7915 1.73003H25.3275V8.27003H26.7915C27.5595 8.27003 28.0755 8.01803 28.3995 7.67003C28.9635 7.05803 28.9995 6.03803 28.9995 4.98203Z" fill="#1A1A1A"></path><path d="M37.2569 9.25403H31.6289V0.746033H37.2569V1.73003H32.6969V4.32203H36.1409V5.33003H32.6969V8.27003H37.2569V9.25403Z" fill="#1A1A1A"></path><path d="M44.6263 0.746033L41.9863 9.25403H40.7143L38.0743 0.746033H39.2143L41.3743 8.01803L43.4983 0.746033H44.6263Z" fill="#1A1A1A"></path><rect x="16.2595" y="0.746033" width="6" height="6" rx="3" fill="#1A1A1A"></rect><path d="M6.78178 6.91403C6.78178 7.62203 6.49378 8.16203 6.07378 8.57003C5.48578 9.14603 4.58578 9.41003 3.67378 9.41003C2.64178 9.41003 1.83778 9.13403 1.26178 8.60603C0.721779 8.10203 0.373779 7.37003 0.373779 6.56603H1.48978C1.48978 7.07003 1.72978 7.57403 2.07778 7.91003C2.46178 8.28203 3.07378 8.42603 3.67378 8.42603C4.32178 8.42603 4.84978 8.29403 5.23378 7.93403C5.49778 7.69403 5.66578 7.39403 5.66578 6.93803C5.66578 6.27803 5.26978 5.72603 4.26178 5.57003C3.79378 5.49803 3.40978 5.43803 2.95378 5.36603C1.68178 5.17403 0.709779 4.46603 0.709779 3.11003C0.709779 2.47403 0.973779 1.86203 1.42978 1.43003C2.01778 0.878027 2.73778 0.590027 3.62578 0.590027C4.45378 0.590027 5.24578 0.842027 5.80978 1.38203C6.32578 1.87403 6.58978 2.49803 6.61378 3.21803H5.49778C5.47378 2.79803 5.32978 2.45003 5.08978 2.17403C4.76578 1.80203 4.27378 1.57403 3.61378 1.57403C3.00178 1.57403 2.50978 1.75403 2.13778 2.17403C1.92178 2.42603 1.81378 2.70203 1.81378 3.08603C1.81378 3.85403 2.42578 4.20203 3.06178 4.28603C3.54178 4.34603 3.97378 4.43003 4.44178 4.50203C5.85778 4.70603 6.78178 5.57003 6.78178 6.91403Z" fill="#1A1A1A"></path><path d="M14.2592 3.31403C14.2592 4.14203 13.9952 4.75403 13.5392 5.21003C13.0832 5.66603 12.2792 5.95403 11.3432 5.95403H9.33919V9.25403H8.27119V0.746027H11.3312C12.3272 0.746027 13.1432 1.05803 13.5992 1.55003C14.0072 1.99403 14.2592 2.57003 14.2592 3.31403ZM13.1552 3.31403C13.1552 2.23403 12.3632 1.71803 11.3072 1.71803H9.33919V4.98203H11.3192C12.4592 4.98203 13.1552 4.45403 13.1552 3.31403Z" fill="#1A1A1A"></path></g><defs><clipPath id="clip0_517_15380"><rect width="45" height="10" fill="white"></rect></clipPath></defs></svg></div><div class="loader-arrow loader-arrow1"><p>&gt;</p></div></div></div><button class="replay" id="replay" hidden>다시 재생 ↗</button>`;
+const INTRO_HTML = `<main id="hero" class="hero" hidden><div class="hero-top">NOTHANGTON</div><div class="hero-grid"></div></main><div class="loader-loader" id="loader" role="status" aria-label="Loading"><div class="loader-wrapper"><div class="loader-empty loader-empty1"><p>S</p></div><div class="loader-empty loader-empty2"><p>P</p></div><div class="loader-text"><h2>LOADING</h2></div><div class="loader-slash"><p>/</p></div><div class="loader-number loader-number1"><p>0</p></div><div class="loader-number loader-number2"><p>0</p></div><div class="loader-number loader-number3"><p>0</p></div><div class="loader-percent"><p>%</p></div><div class="loader-logo"><p>NOTHANGTON</p></div><div class="loader-arrow loader-arrow1"><p>&gt;</p></div></div></div><button class="replay" id="replay" hidden>다시 재생 ↗</button>`;
 
 function Splash({ hiding }: { hiding: boolean }) {
   useEffect(() => {
@@ -531,16 +538,16 @@ export default function App() {
   // macOS-only: Accessibility not yet granted → per-instance window lists are empty.
   const [accessNeeded, setAccessNeeded] = useState(false);
 
-  // Live Bedrock token usage for the KO-II meter. This tallies the APP's OWN
-  // Bedrock calls (session summarization), or — when AWS credentials are present
-  // — the whole account's Bedrock usage in-region. It does NOT track the tokens
-  // the interactive `claude` terminals consume (those run on the user's own
-  // Claude auth, outside this app's accounting) — the meter label says so.
-  const [usage, setUsage] = useState<ClaudeUsage | null>(null);
+  // Today's LOCAL `claude` CLI usage for the KO-II meter, summed from the on-disk
+  // transcripts under ~/.claude/projects across every session. This tracks what
+  // the interactive group terminals actually spend (they run on the user's own
+  // Claude auth) and is priced per model, so the amber readout shows real USD.
+  // Polled every few seconds so the number climbs live as a terminal works.
+  const [usage, setUsage] = useState<LocalUsage | null>(null);
   // Distinguish the meter's four states so an un-fetched value is never shown as
   // "0": `usageLoading` = a fetch is in flight and we have no data yet;
   // `usageErr` = the last fetch failed (holds the reason). A successful fetch
-  // clears both; `usage.configured === false` is the "no key / connect" state.
+  // clears both; `usage.configured === false` is the "CLI not used yet" state.
   const [usageLoading, setUsageLoading] = useState(true);
   const [usageErr, setUsageErr] = useState<string | null>(null);
 
@@ -627,9 +634,9 @@ export default function App() {
     // lands. The hard cap still guarantees the splash lifts if boot stalls.
     const MIN_SPLASH_MS = 5100;
     const MAX_SPLASH_MS = 8000;
-    const FADE_MS = 500; // must match the .splash opacity transition
+    const FADE_MS = 0; // switch to the app instantly when the intro ends (no fade)
 
-    // Fade the splash out, then unmount it. Idempotent: whichever of the boot
+    // Hide the splash, then unmount it. Idempotent: whichever of the boot
     // completion or the hard-cap fires first wins; the other is a no-op.
     const finish = () => {
       if (cancelled || finished) return;
@@ -668,7 +675,7 @@ export default function App() {
           .catch(() => {
             /* no saved layout → CSS defaults */
           }),
-        claudeUsage()
+        claudeLocalUsage()
           .then((u) => {
             if (cancelled) return;
             setUsage(u);
@@ -766,18 +773,19 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Keep the "today" usage meter fresh: account-wide CloudWatch totals move as
-  // the whole account keeps working, independent of this app's own calls. A
-  // light poll every few minutes (boot did the first fetch).
+  // Keep the "today" usage meter live: the CLI appends each turn's usage to its
+  // transcript as a terminal works, so a short poll makes the amber readout
+  // climb in near real time. The backend caches per-file parses, so this only
+  // re-reads the one transcript that changed (boot did the first fetch).
   useEffect(() => {
     const id = window.setInterval(() => {
-      claudeUsage()
+      claudeLocalUsage()
         .then((u) => {
           setUsage(u);
           setUsageErr(null);
         })
         .catch((e) => setUsageErr(errText(e)));
-    }, 180_000);
+    }, 3_000);
     return () => window.clearInterval(id);
   }, []);
 
@@ -1520,22 +1528,19 @@ export default function App() {
                   : "loading";
           const ready = meterState === "ready" && usage != null;
           const ledOn = usage?.configured ?? claude?.configured ?? false;
-          const model = modelLabel(
-            usage?.model ?? claude?.model ?? DEFAULT_MODEL
-          );
-          // Mode-aware scope note (approved): app-local counts only this app's
-          // prompt-console calls; account-wide is the whole region's Bedrock
-          // usage and can include the group terminals' Claude Code sessions.
+          const model = modelLabel(claude?.model ?? DEFAULT_MODEL);
+          // Local-CLI scope note: today's spend across every `claude` session on
+          // this machine (all group terminals), priced per model. Cache tokens
+          // are billed at their real reduced rate, so the $ reflects true cost.
           const note = ready
-            ? usage!.account
-              ? `※ ${usage!.region || "계정"} 계정 전체 Bedrock 사용량(모든 모델). 그룹 터미널의 Claude Code 세션이 같은 Bedrock 계정을 사용하면 이 수치에 포함됩니다.`
-              : "※ vibe-control 프롬프트 콘솔 호출만 집계 — 그룹 터미널의 Claude Code 세션은 포함되지 않습니다."
+            ? "※ 오늘 로컬 Claude CLI 전체 세션 사용량 — 모델별 단가로 환산(캐시 토큰 포함). 그룹 터미널이 작업할수록 실시간으로 올라갑니다."
             : meterState === "unconfigured"
-              ? "※ Claude 미연결 — 설정에서 Bedrock 키를 추가하면 사용량이 집계됩니다."
+              ? "※ 아직 로컬 Claude CLI 기록이 없습니다 — 그룹 터미널에서 대화하면 집계됩니다."
               : meterState === "loading"
                 ? "※ 사용량을 불러오는 중입니다…"
                 : `※ 조회 실패: ${usageErr ?? "데이터 없음"}`;
           return (
+            <>
             <div className="ko-screen">
               <div className="ko-screen-glass">
                 <div className="ko-usage">
@@ -1544,7 +1549,9 @@ export default function App() {
                       className={`ko-led ${ledOn ? "on" : "off"}`}
                       aria-hidden
                     />
-                    <b>{ready ? fmtFull(usage!.total_tokens) : "—"}</b>
+                    <b title={ready ? `$${usage!.total_cost_usd.toFixed(4)}` : undefined}>
+                      {ready ? fmtUSD(usage!.total_cost_usd) : "—"}
+                    </b>
                     <span className="ko-usage-model">{model}</span>
                   </div>
                   <div className="ko-legend">
@@ -1560,20 +1567,20 @@ export default function App() {
                         </span>
                         <span className="ko-chip req">
                           <em />
-                          {usage!.requests} CALLS
+                          CACHE{" "}
+                          {fmtTokens(
+                            usage!.cache_creation_tokens +
+                              usage!.cache_read_tokens
+                          )}
                         </span>
-                        <span className="ko-chip">
-                          {usage!.account
-                            ? `계정 전체 · ${usage!.region}`
-                            : "이 앱 콘솔 사용량"}
-                        </span>
+                        <span className="ko-chip">오늘 · 로컬 CLI</span>
                       </>
                     ) : (
                       <span className="ko-chip">
                         {meterState === "loading"
                           ? "조회 중…"
                           : meterState === "unconfigured"
-                            ? "연결 필요"
+                            ? "기록 없음"
                             : "조회 실패"}
                       </span>
                     )}
@@ -1584,12 +1591,12 @@ export default function App() {
                     className="ko-last"
                     title={
                       ready
-                        ? `직전 호출 ${fmtFull(usage!.last_total)} 토큰`
+                        ? `오늘 누적 ${fmtFull(usage!.total_tokens)} 토큰 · ${usage!.messages} 턴`
                         : undefined
                     }
                   >
-                    <b>{ready ? fmtTokens(usage!.last_total) : "—"}</b>
-                    <i>last call</i>
+                    <b>{ready ? fmtTokens(usage!.total_tokens) : "—"}</b>
+                    <i>tokens today</i>
                   </div>
                   <div className="ko-mini">
                     <span>
@@ -1604,17 +1611,9 @@ export default function App() {
                 </div>
                 <span className="ko-screen-glare" aria-hidden />
               </div>
-              <div
-                style={{
-                  fontSize: "11px",
-                  opacity: 0.7,
-                  marginTop: "4px",
-                  lineHeight: 1.3,
-                }}
-              >
-                {note}
-              </div>
             </div>
+            {note && <div className="ko-note">{note}</div>}
+            </>
           );
         })()}
 
@@ -1772,7 +1771,7 @@ export default function App() {
                 return (
                   <div className="group-live">
                     <div className="group-live-bar">
-                      <span className="group-live-title">터미널</span>
+                      <span className="group-live-title">Terminal</span>
                       <button
                         className="mini"
                         onClick={() =>
@@ -1780,11 +1779,11 @@ export default function App() {
                         }
                         title={
                           open
-                            ? "터미널 뷰를 접습니다 (claude는 계속 실행)"
-                            : "이 그룹의 claude 터미널을 엽니다"
+                            ? "Collapse the terminal view (claude keeps running)"
+                            : "Open this group's claude terminal"
                         }
                       >
-                        {open ? "접기" : "열기"}
+                        {open ? "Close" : "Open"}
                       </button>
                       {sessions.map((s) => (
                         <button

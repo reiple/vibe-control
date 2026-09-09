@@ -822,6 +822,14 @@ Important:
 
 ---
 
+## Bolt R1 후속 2 — 재실행 성공 + v0.1.0 발행 + Windows 배포 확정
+**Timestamp**: 2026-09-09T06:30:00Z
+**User Input**: "push 하고, 알아서 한국어로 PR 작성및 태그 등을 진행. 윈도우 버전 배포 가능한지 확인" (연속)
+**AI Response**: ".ico 수정(PR #23) main 병합 후 v0.1.0 태그 재지정 → 릴리스 워크플로우 재실행(run 34318680356). 4잡 전부 성공: create-release/build-macos/build-windows/publish. 릴리스 published(draft:false), 자산 5종: universal.dmg(~20MB), x64_en-US.msi(~8.1MB), x64-setup.exe(~5.4MB), install.sh, install.ps1. Windows 배포 가능=YES 확정(.msi+setup.exe 산출·업로드). install.ps1 자산 해석 Windows PowerShell dry-run 검증(설치 미실행): 최신 v0.1.0 → -setup.exe 선택 → URL 정상. AC-23: CI 그린+자산 존재+스크립트 해석 확인=충족. 잔여는 실제 설치 E2E 1회(머신 변경 수반, 사용자 권장)."
+**Context**: OPERATIONS — Bolt R1 릴리스 파이프라인 E2E 성공, v0.1.0 발행, Windows 배포 가능 확정.
+
+---
+
 ## Integration Drift Audit + delta 정합화 (2026-09-09) — 세션 제어 클러스터 문서 편입
 **Timestamp**: 2026-09-09T07:40:00Z
 **User Input**: "vc-integration을 canonical 기준으로 계속 진행해줘. vibe-control에서 이미 작성한 정합화 문서를 최대한 재사용하여 vc-integration으로 포팅하고, vc-integration 실제 코드 기준으로 잘못된 wiring 판단만 수정해라. 최종 기준: - FR-14 Context Control: ORPHANED - FR-15: PARTIALLY WIRED (interactive PTY: WIRED, term.rs external terminal: ORPHANED, start_new_coding_session / delete_coding_session: ORPHANED) - FR-16 CloudWatch usage: WIRED - current Tauri command inventory: 53. requirements에는 요구사항과 acceptance 중심으로 작성하고, WIRED/PARTIAL/ORPHANED 및 실제 검증 상태는 session-control design / known-deviations / aidlc-state에 배치해라. 기존 historical 기록은 수정하지 마라. 전체 repository나 기존 Bolt를 다시 분석하지 마라. 또한 lib.rs의 'PTY path is unused by the current UI' 주석은 현재 integrated code와 불일치하는 stale comment로 확인되었으므로 최종 보고에 별도 명시해라. 문서 정합화가 끝나기 전에는 임의로 코드 수정하지 마라. 포팅 완료 후에는 Requirement → Design → Code → Validation 추적성을 다시 확인하고, 변경한 문서 목록과 남아 있는 intentional/orphaned 항목만 보고해라."

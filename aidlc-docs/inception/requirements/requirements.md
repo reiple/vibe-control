@@ -18,6 +18,7 @@
 | **1.3** | **2026-09-09** | **FR-13.8 신설(인트로 시각 구성)** — 도구 패드를 중앙 정렬 5줄 그리드로 배치, 중앙에 로고를 초점으로, 패드는 저불투명도로 흐릿하게 유지(로고 미강조). AC-21에 구성 확인 절 추가 | 사용자 요청 — 인트로 애니메이션 디자인 변경(랜덤 산포 → 조직화된 그리드 + 중앙 로고). U7 프론트엔드 신규 Bolt |
 | **1.4** | **2026-09-09** | **FR-14 신설(배포 & 설치) + AC-23 신설**. 배포 채널을 **GitHub Releases**로 정식화하고 **macOS/Windows 명령어 한 줄 설치**(install.sh / install.ps1)를 제공한다. §5 "범위 제외"의 "앱 장터 배포"를 유지하되 "GitHub Releases 배포는 범위 내"로 정합화. SECURITY-10 waiver의 "CI 도입 시 해제" 조건 트리거 반영 | 사용자 요청 — "배포 방법 수정: GitHub release 페이지에 배포 파일 업로드 + Windows/macOS 명령어 설치". Operations/Delivery **신규 Bolt R1** |
 | **1.5** | **2026-09-09** | **Integration Drift Audit + delta 정합화로 편입** — ① FR-15 신설(Claude Code Context Control: 5-상태 실행 상태 + 동의 게이트 작업 요약 + 명령 전달 결정 코어). ② FR-16 신설(인앱 세션 터미널 + 대화형 PTY 세션). ③ FR-17 신설(계정 CloudWatch 토큰 사용량 미터). ④ NFR-S4 신설(요약의 Bedrock 외부 전송을 NFR-S1 예외로 명시 — 동의 게이트). AC-24/25/26 신설. | **전체 RE 재실행이 아님**: origin/main 병합 후 코드에 존재하나 요구/설계에 없던 델타만 감사·편입(커밋 `f4540b9`·`4bca8d1`·`3cd305f`). 구현 현황·검증·orphaned 여부는 `aidlc-state.md`·`known-deviations.md`·`construction/vc-app/session-control/design.md`에 기록 |
+| **1.6** | **2026-09-09** | **FR-17·AC-26 개정(사용량 미터 데이터원 정합화)** — 최신 main(`43d2084`, "local CLI token/cost meter")이 사용량 미터의 데이터원을 CloudWatch 계정 조회에서 **로컬 `claude` CLI 트랜스크립트 집계(`claude_local_usage`)로 전환**. FR-17을 **로컬 CLI 사용량·비용 미터**로 개정하고, CloudWatch 계정 조회(`claude_usage`/`usage_cw.rs`)는 **backend 존속·frontend 미소비의 legacy/optional 경로**로 강등(→ `known-deviations.md#E5`). | 최신 origin/main 병합 정합화(semantic delta) — 실측: `App.tsx`가 `claudeLocalUsage` 3회 참조·`claudeUsage` 0회. 코드 무수정 |
 
 > **개정 원칙 (1.1)**: 코드에 맞춰 요구사항을 사후 합리화하지 않는다. 각 개정 항목은 **① 축소(scope-down)** / **② 연기(deferred — 백로그 유지)** / **③ 범위 제외(out of scope)** 중 하나로 명시하고, 되돌릴 근거를 남긴다. 연기 항목은 삭제가 아니며 `known-deviations.md` 백로그와 1:1 대응한다.
 
@@ -228,12 +229,13 @@
 - **FR-16.3** 외부 PowerShell 터미널도 열 수 있으며(`vc-app/src/term.rs`), **세션 == 터미널**로 PID 추적한다. 여러 세션 터미널의 개폐·목록·전송을 지원한다.
 - **FR-16.4** 앱이 담당하는 **세션 터미널·PTY 제어와 입출력 전달은 전부 로컬**이다 — 앱은 세션 데이터를 Bedrock 등 외부로 전송하지 않는다(§12 / NFR-S1 유지). 단 PTY 안에서 실행되는 **claude-CLI 자체의 외부 통신(모델 호출·인증)은 CLI의 실행·인증 정책을 따르며 앱의 관할 밖**이다 — 이는 앱의 자동 외부 전송(NFR-S1)이나 요약의 동의 게이트 전송(NFR-S4)과 구분된다. 새 코딩 세션 생성·삭제(`start_new_coding_session`/`delete_coding_session`)도 로컬 파일 조작이다.
 
-### FR-17 계정 토큰 사용량 미터 (Account CloudWatch Usage) — **[1.5 신설]**
-> **정합화 유래**: Integration Drift Audit(2026-09-09)에서 편입된 요구(커밋 `3cd305f`). 구현 현황·검증 여부는 `aidlc-state.md`·`construction/vc-app/session-control/design.md`(§검증)에 기록한다.
+### FR-17 토큰 사용량 미터 (Token Usage Meter) — **[1.5 신설 · 1.6 개정]**
+> **정합화 유래**: Integration Drift Audit(2026-09-09)에서 편입된 요구(커밋 `3cd305f`). **[1.6 개정]** 최신 main(`43d2084`)이 미터가 보여주는 사용량의 **집계 대상을 로컬 `claude` CLI 사용량으로 전환**했다. 데이터원·집계 방식 등 구현 세부는 `construction/vc-app/session-control/design.md`(§사용량 미터), 배선·이탈 현황은 `aidlc-state.md`·`known-deviations.md#E5`에 둔다.
 
-- **FR-17.1** 당일(로컬 자정~현재) **계정 전체 Bedrock 토큰 사용량**(입력·출력 토큰, 호출 수)을 표시한다. 앱 내 콘솔 호출뿐 아니라 계정 전체가 대상이다.
-- **FR-17.2** 사용량은 **Amazon CloudWatch** `AWS/Bedrock` 지표(`InputTokenCount`/`OutputTokenCount`/`Invocations`)를 `GetMetricData` SEARCH로 모델 전체 합산해 조회한다. **표준 AWS 자격증명**(`cloudwatch:GetMetricData`)이 필요하며(Bedrock invoke 키로는 불가), 없으면 **로컬 집계로 폴백**한다.
-- **FR-17.3** 조회는 **8초 타임아웃**으로 제한해 자격증명 부재·IMDS 프로브가 UI를 지연시키지 않게 한다(→ NFR-Pf1/NFR-R1). **정수 토큰 수만 반환**되며 자격증명·프롬프트·응답은 넘어오지 않는다.
+- **FR-17.1** **[1.6 개정]** 사용자는 당일(로컬 자정~현재) 자신의 `claude` CLI 토큰 사용량(입력·출력 토큰, 호출 수)과 **추정 비용(USD)**을 그래픽 미터로 확인할 수 있다. *(종전 1.5 문구는 "계정 전체 Bedrock 사용량" — 1.6에서 로컬 CLI 사용량 기준으로 개정.)*
+- **FR-17.2** 미터는 앱 사용 중 새로운 사용량이 발생하면 별도 조작 없이 갱신되어 최신 값을 보여준다.
+- **FR-17.3** 사용량 표시는 UI를 지연시키지 않아야 하며(→ NFR-Pf1/NFR-R1), 미터에는 **집계된 토큰 수·비용만** 나타나고 자격증명·프롬프트·응답 본문은 노출·수집하지 않는다.
+> **CloudWatch 계정 조회 = legacy/orphaned 백엔드 경로**: 1.5 당시의 CloudWatch 계정 전체 조회(`claude_usage`/`usage_cw.rs`)는 백엔드 커맨드로 남아 있으나 **현행 프론트 미터가 호출하지 않는다(0회 참조)**. optional 기능이 아니라 **소비처가 없는 legacy/orphaned 구현**이며, 정식 배선 판정·구현 세부는 `known-deviations.md#E5` / `session-control/design.md`에 둔다. 계정 전체 집계가 다시 요구로 승격되면 그때 미터에 재배선한다.
 
 ---
 
@@ -347,7 +349,7 @@ macOS·Windows 실제 환경에서 확인한다.
 - **AC-23** **[1.4 신설 2026-09-09]** 버전 태그(`v*`)를 푸시하면 GitHub Releases 페이지에 **macOS 유니버설 .dmg + Windows .msi/`-setup.exe`** 자산이 게시되고, 모든 자산 업로드 후 릴리스가 published(latest)로 전환된다. 새 macOS/Windows 머신에서 문서의 **한 줄 설치 명령**을 실행하면 최신 릴리스가 내려받아져 설치되고 앱이 실행된다(macOS는 격리 해제 후 실행) (FR-14.1~14.5). *검증*: CI 성공(각 OS 러너 그린) + 실제 릴리스 자산 존재 + 두 OS에서 설치 명령 E2E 1회.
 - **AC-24** **[1.5 신설]** 사용자 동의가 없으면 작업 요약을 위한 Bedrock 외부 호출이 **0건**이고, 콘텐츠가 불변이면 재요약이 스로틀되며, 실행 상태는 5-상태로 판별되고 판별 불가는 `Unknown`으로 남는다 (FR-15.1/15.3/15.4). *(검증 범위·현황은 `construction/vc-app/session-control/design.md` §검증 참조)*
 - **AC-25** **[1.5 신설]** 세션을 앱 내부 터미널로 열어 claude-CLI와 상호작용할 수 있고(라인/키/텍스트/리사이즈/중지), 선택 프롬프트가 감지·표면화되며, **앱이 담당하는 PTY 제어·세션 입출력 전달은 전부 로컬**이라 앱이 세션 데이터를 외부로 전송하지 않는다(claude-CLI 자체의 외부 통신은 CLI의 실행·인증 정책을 따르며 앱의 관할 밖) (FR-16.1~16.4). *(경로별 배선 상태는 `session-control/design.md` §검증 참조)*
-- **AC-26** **[1.5 신설]** 표준 AWS 자격증명이 있으면 당일 계정 Bedrock 토큰 사용량이 CloudWatch로 조회되고, 없거나 8초 초과 시 로컬 집계로 폴백하며 UI가 지연되지 않는다 (FR-17.1~17.3).
+- **AC-26** **[1.5 신설 · 1.6 개정]** 미터에 당일(로컬 자정~현재) 로컬 `claude` CLI 토큰 사용량(입력·출력·호출 수)과 추정 비용(USD)이 표시되고, 사용 중 새 사용량이 생기면 자동 갱신되며 UI가 지연되지 않는다. 자격증명·프롬프트·응답 본문은 노출되지 않는다 (FR-17.1~17.3). *(종전 1.5: "표준 AWS 자격증명 시 CloudWatch 계정 조회, 없으면 로컬 폴백" — CloudWatch 경로가 legacy/orphaned로 강등되어 개정. `known-deviations.md#E5`.)*
 
 ---
 
