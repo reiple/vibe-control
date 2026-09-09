@@ -93,28 +93,18 @@ impl AppState {
         // is kept so status queries can reach `load/save_analysis_cache` (Q4=A);
         // `Clone` on JsonBundleStore is a cheap PathBuf copy to the same dir.
         let concrete = JsonBundleStore::new()?;
-        let mut bundles = concrete.load()?;
-        // Drop every persisted CodingSession on launch. Claude Code only starts
-        // cleanly in a freshly-spawned PTY; reopening a group after an app
-        // restart (or rebuild) would otherwise `claude --resume` the stale
-        // session id, which fails to boot the REPL. Stripping the record here
-        // (before the frontend loads its bundles) means the group has no live
-        // session ref, so the next prompt spawns a brand-new terminal via
-        // `claude --session-id`. The group's other resources (folders, windows,
-        // tabs) are untouched; only the ephemeral coding session is cleared.
-        let had_coding_session = bundles
-            .iter()
-            .any(|b| b.resources.iter().any(|r| matches!(r.kind, ResourceKind::CodingSession)));
-        if had_coding_session {
-            for b in &mut bundles {
-                b.resources
-                    .retain(|r| !matches!(r.kind, ResourceKind::CodingSession));
-            }
-            // Persist the pruned set so the cleared sessions never reappear, even
-            // if the app is force-killed before any later save. Best-effort: a
-            // write failure must not block launch.
-            let _ = concrete.save(&bundles);
-        }
+        // KEEP persisted CodingSession resources across launches so a group's
+        // Claude sessions survive an app restart and can be resumed (the user
+        // asked for exactly this). A session ref is the transcript path under
+        // `~/.claude/projects`, which Claude Code owns and which outlives this
+        // app, so a resume (`claude --resume <id>`) is valid after a restart.
+        // Liveness is checked at resume time — `pty::start`/`resume_info` return
+        // an Err when the transcript is gone, so a stale ref surfaces a clear
+        // error instead of being silently deleted here. Nothing is auto-resumed
+        // on launch (restore pushes coding sessions to `skipped`); resume is an
+        // explicit user action. (This used to prune-and-resave every session on
+        // startup, which is why they "완전히 사라졌다".)
+        let bundles = concrete.load()?;
         // Corrupt settings must not brick the app — fall back to defaults.
         let settings = concrete.load_settings().unwrap_or_default();
         // The analysis cache is non-critical: a missing/corrupt file loads empty.
