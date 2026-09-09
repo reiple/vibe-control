@@ -732,9 +732,17 @@ impl MacLauncher {
     /// `display_name\u{1f}title` or `display_name\u{1f}title\u{1f}idx` (the 1-based
     /// window index, when known) as produced by `app_windows`/`list_running_windows`.
     /// Activates the app first (works without Accessibility), then best-effort
-    /// raises the exact window via `System Events` `AXRaise`: by window index first
-    /// (unambiguous when two windows share a title), falling back to a title match
-    /// for older, index-less handles. Raising the exact window needs Accessibility
+    /// raises the exact window via `System Events` `AXRaise`.
+    ///
+    /// The window TITLE is the source of truth, NOT the index: a process's window
+    /// z-order shifts constantly (and the `open_app` above just brought a window
+    /// forward), so the saved index frequently points at a DIFFERENT window than it
+    /// did at enumeration time — trusting a stale-but-in-range index raised the
+    /// wrong window (e.g. the wrong VS Code project came forward). So we: (1) fast
+    /// path — raise the window at the saved index ONLY when its title still matches
+    /// (unambiguous even when two windows share a title); (2) otherwise raise the
+    /// first window whose title matches (index went stale); (3) title-less legacy
+    /// handle — fall back to a bare index raise. Raising needs Accessibility
     /// permission; failure is non-fatal because the app is already frontmost. When
     /// the handle carries neither title nor index, this degrades to plain app
     /// activation (single-window consistency). Also used to restore a WindowRef
@@ -751,18 +759,23 @@ impl MacLauncher {
         }
         let esc_app = app.replace('\\', "\\\\").replace('"', "\\\"");
         let esc_title = title.replace('\\', "\\\\").replace('"', "\\\"");
-        // Raise the exact window position first; if that index is now out of range
-        // (a window closed), fall through to a title match.
-        let index_raise = match idx {
-            Some(i) => format!(
+        // Fast path: raise the window at the saved index, but ONLY if its title
+        // still matches — the index alone is not trustworthy (z-order shifts), so
+        // this guard is what stops a stale index from raising the wrong window.
+        let index_when_title_matches = match (idx, title.is_empty()) {
+            (Some(i), false) => format!(
                 "try\n\
+                 if (name of (window {i} of p)) is \"{esc_title}\" then\n\
                  perform action \"AXRaise\" of (window {i} of p)\n\
                  set frontmost of p to true\n\
                  return\n\
+                 end if\n\
                  end try\n"
             ),
-            None => String::new(),
+            _ => String::new(),
         };
+        // Primary path: match by title (handles the saved index having gone stale
+        // since the window was enumerated).
         let title_raise = if title.is_empty() {
             String::new()
         } else {
@@ -776,12 +789,23 @@ impl MacLauncher {
                  end repeat\n"
             )
         };
+        // Last resort for title-less legacy handles: honour the bare index.
+        let index_only = match (idx, title.is_empty()) {
+            (Some(i), true) => format!(
+                "try\n\
+                 perform action \"AXRaise\" of (window {i} of p)\n\
+                 set frontmost of p to true\n\
+                 end try\n"
+            ),
+            _ => String::new(),
+        };
         let script = format!(
             "tell application \"System Events\"\n\
              try\n\
              set p to first process whose name is \"{esc_app}\"\n\
-             {index_raise}\
+             {index_when_title_matches}\
              {title_raise}\
+             {index_only}\
              end try\n\
              end tell"
         );
