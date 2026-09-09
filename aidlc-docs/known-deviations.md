@@ -17,7 +17,7 @@
 | # | 원 설계 | 실제 코드 | 유형 | 근거(file:line) |
 |---|---|---|---|---|
 | A1 | vc-core가 포트 트레이트 **P1–P8**를 모두 정의(도메인이 능력을 선언, 어댑터가 구현) | vc-core에 `trait` 정의 **0개**. P4는 `vc-sessions`, P5는 `vc-store`에 트레이트로 존재. P1/P3는 트레이트 없이 OS별 구체 struct만. P2/P6/P7/P8은 트레이트로 존재하지 않음 | [문서반영]+[코드백로그] | `vc-core/src/*`(trait 없음), `vc-sessions/src/lib.rs:17`, `vc-store/src/lib.rs:5` |
-| A2 | 애플리케이션 서비스 **S1–S7** + `TauriCommandBridge` + `RefreshScheduler`로 유스케이스 오케스트레이션(포트 DI) | 서비스/브리지/스케줄러 struct 부재. 기능이 `AppState` + **18개**(`activate_window` 추가 반영, 2026-09-08 재검증) `#[tauri::command]` 핸들러 + 자유 함수로 평면화, 어댑터는 `#[cfg(target_os=…)]` 블록에서 **구체 타입 직접 호출** | [문서반영]+[코드백로그] | `vc-app/src/lib.rs:23`(AppState), `:683-701`(invoke_handler), `:542-668`(cfg dispatch) |
+| A2 | 애플리케이션 서비스 **S1–S7** + `TauriCommandBridge` + `RefreshScheduler`로 유스케이스 오케스트레이션(포트 DI) | 서비스/브리지/스케줄러 struct 부재. 기능이 `AppState` + **32개**(2026-09-09 실측 `generate_handler!` — main 병합으로 `request_accessibility`·`claude_usage`·`list_app_children`·`activate_child`·`add_child_resource`·`get_layout`·`save_panel_layout`·`remove_resource` 추가됨. 종전 표기 18/22/24는 각 시점 기준이며 병합분 미반영이었음) `#[tauri::command]` 핸들러 + 자유 함수로 평면화, 어댑터는 `#[cfg(target_os=…)]` 블록에서 **구체 타입 직접 호출** | [문서반영]+[코드백로그] | `vc-app/src/lib.rs:23`(AppState), `:683-701`(invoke_handler), `:542-668`(cfg dispatch) |
 | A3 | 프론트엔드는 코어 이벤트를 **구독하는 얇은 뷰**(`status_delta`/`activation_report` emit) | 백엔드 `emit` 없음, 프론트 `listen()` 없음. 프론트가 1초 `setInterval`로 **폴링** | [문서반영]+[코드백로그] | `frontend/src/App.tsx:262` |
 | A4 | 도메인 코어(`IdentityMatcher`/`RestorePlanner`/`StatusEvaluator`)를 서비스가 조합 | vc-app이 이들을 **import조차 하지 않음**; 매칭/복원계획/노이즈판정이 오케스트레이션에 연결되지 않음 | [코드백로그] | `vc-app/src/lib.rs:13`(import 목록) |
 
@@ -34,7 +34,7 @@
 | B3 | `WinBrowserTabReader`가 Edge/Chrome 탭 수집 | **대부분 해소(2026-09-09)** — 라이브 좌측 패널용 `list_tabs`(제목+활성여부)·`activate_tab`(정확한 탭 전환)을 **UI Automation**으로 구현(§H). 이어 라이브 탭을 **작업 묶음에 개별 등록**(제목 기반 포커스 전용 `ResourceKind::BrowserTabLive`, URL 미저장 — §H2)까지 구현. 이후 Edge **중첩 Tab 구조·지연 접근성 트리**를 진단·처리(Descendants 수집 + 제한 재시도 + 명시적 포그라운드 폴백)하고 **일반 앱 개별 창 등록**(`ResourceKind::WindowRef` 배선)을 추가(§H4). 잔여: capture용 `read_tabs`(제목+**URL**)만 — UIA가 URL 미제공(FR-9.7 추측 금지)이라 빈 스텁, DevTools 프로토콜 필요 | [문서반영(라이브+등록)]+[코드백로그(capture URL)] | `vc-os-windows/src/lib.rs`(`WinBrowserTabReader`), `vc-app/src/lib.rs`(`add_tab_resource`/`activate_live_tab`) |
 | B4 | `WinIconProvider`(Windows 아이콘 제공) | ✅ **구현됨** (2026-09-08 커밋 `6039456`) — `WinIconReader`가 PowerShell + C# `Add-Type`(shell32 `SHGetImageList` jumbo 256px → 48px → 32px 폴백, 투명 여백 트림)로 exe 아이콘을 base64 PNG data URI로 추출. vc-app이 `extract_app_icon`에서 호출 + 캐시. **이탈 해소** | [문서반영] | `vc-os-windows/src/lib.rs:127-259`, `vc-app/src/lib.rs:365-372` |
 | B5 | Windows 트레이/전역 단축키 훅(FR-10.13, US-10.4) | **부재** | [코드백로그] | vc-os-windows 크레이트 전반 |
-| B6 | `MacPermissionChecker`(P6, AC-13) | **부재** — PermissionChecker struct 없음 | [코드백로그] | vc-os-macos 크레이트 전반 |
+| B6 | `MacPermissionChecker`(P6, AC-13) | **부분 구현(2026-09-09 main 병합)** — `vc_os_macos::accessibility_trusted(prompt)`(`AXIsProcessTrustedWithOptions`) + `request_accessibility` Tauri 커맨드 + 부팅 시 프롬프트(FR-10.2의 "권한 안내" 부분 충족). 잔여: `PermissionChecker` struct 및 `ResourceStatus::PermissionRequired` 상태 배선은 여전히 부재 | [부분 문서반영]+[코드백로그] | `vc-os-macos/src/lib.rs:53`, `vc-app/src/lib.rs:1553`(`request_accessibility`)·`:1568`(부팅 프롬프트) |
 | B7 | 어댑터 이름 `*WindowActivator` / `*IconProvider` | 활성화는 `*Launcher`(macOS/Windows), 아이콘은 `MacIconReader`/`WinIconReader`로 명명. `open_app`은 실행 전 이미 떠 있는 창 포커스 시도(FR-2.6, 커밋 `1abc6ed`) | [문서반영] | `vc-os-macos/src/lib.rs:174,309`, `vc-os-windows/src/lib.rs:127,278,315` |
 
 **참고**: B5/B6은 여전히 미구현. B3은 **대부분 해소** — 라이브 탭 표시·활성화(§H) + 작업 묶음 개별 등록(§H2)은 2026-09-09 구현, capture용 URL 수집만 잔존. B4(Windows 아이콘)는 2026-09-08 git pull로 들어온 커밋 `6039456`에서 구현되어 이탈 해소됨. Windows 앱 활성화 중복창 문제도 커밋 `1abc6ed`에서 "실행 중이면 기존 창 포커스" 경로 추가로 해결됨(FR-2.6).
@@ -167,7 +167,7 @@ G1(창 단위)에 이어 사용자 요청("지원 브라우저의 열린 탭을 
 
 - **도메인(vc-core)**: 신규 `ResourceKind::BrowserTabLive`(원 6종→7종, §D "일치 확인"). `descriptor`=탭 제목, `hint`=`<browser>\u{1f}<hwnd>\u{1f}<idx>`(비영속 활성화 토큰, FR-11.4), `reopen_info`=없음(URL 미저장). 컴파일러 강제 exhaustive-match 지점 갱신: `distinct_key`(hint 전체로 구분 — 같은 탭=중복, 다른 인덱스=별개), `plan_reopen`(→`FocusLinkedWindow`, URL 미개방), migrate PBT `prop_oneof!`(라운드트립 대상 7종).
 - **vc-app(U6)**: 신규 커맨드 `add_tab_resource(bundle_id,title,browser,handle)`(hint 조합 후 **hint 전체로 중복 방지** FR-3.4 — 중복 검사는 D1/A4대로 vc-app 인라인)·`activate_tab_resource(hint,title)`. 헬퍼 `split_tab_hint`(hint→`(browser, <hwnd>\u{1f}<idx>)`)+`activate_live_tab`: 저장 토큰으로 `activate_tab` 시도 → 낡았으면 그 브라우저 재열거해 **제목으로 재매칭**, 실패 시 에러(FR-4.2 — 앱만 최전면화는 성공 아님). `reopen_resource`에도 `BrowserTabLive`→`activate_live_tab` 분기(복원도 포커스 전용). `generate_handler!`는 이제 **22개** 커맨드.
-- **프론트(U7)**: 탭 행을 **draggable**로(창 행은 기존대로 클릭 전용), 드롭 시 `addTabResource` 등록. 저장된 탭 리소스는 아이콘 없이 배지 "Tab", 더블클릭 시 `activateTabResource`로 정확히 그 탭 재포커스. 앱 드래그(`draggedApp`)와 탭 드래그(`draggedTab`)는 별도 ref로 구분, 폴링은 두 드래그 중 어느 것이든 진행 중이면 양보(드래그 취소 방지).
+- **프론트(U7)**: 탭 행을 **draggable**로(창 행은 기존대로 클릭 전용), 드롭 시 `addTabResource` 등록. 저장된 탭 리소스는 배지 "Tab" + **브라우저 앱 아이콘 표시**(hint 앞 세그먼트의 browser 이름을 `getAppIcon`으로 해석 — 커밋 `382be34`, 2026-09-09), 더블클릭 시 `activateTabResource`로 정확히 그 탭 재포커스. 앱 드래그(`draggedApp`)와 탭 드래그(`draggedTab`)는 별도 ref로 구분, 폴링은 두 드래그 중 어느 것이든 진행 중이면 양보(드래그 취소 방지).
 - **테스트**: vc-core `distinct_key`(hint 구분: 동일=중복/다른 인덱스=별개)·`plan_reopen`(BrowserTabLive→FocusLinkedWindow) 신규 단위 테스트. vc-app 최초 단위 테스트(`split_tab_hint` 조합↔분해 라운드트립, malformed 거부). 라운드트립 PBT-02는 신규 종류 포함해 통과.
 - **실측 검증(2026-09-09, 실 Windows + Chrome)**: 임시 하니스(`list_tabs`→vc-app 방식 hint 조합→분해→`activate_tab`→재열거)로 Chrome 9탭 열거, 조합 hint `chrome\u{1f}525722\u{1f}1` 분해가 원 토큰과 일치, 인덱스 1로 정확 전환(활성 플래그 이동) 후 원탭 복원 — **정확히 지정 탭만 활성화(FR-4.2)** 확인. `cargo build/clippy -p vc-core -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2, 프론트 `tsc --noEmit` 무오류. 순수 가법 추가라 기존 앱 등록/DnD/복원 무변경. 하니스는 검증 후 삭제.
 - **설계 문서**: `construction/vc-os-windows/functional-design/window-enumeration.md` §6.7, `construction/vc-core/functional-design/domain-entities.md`(ResourceKind·ResourceIdentity), `inception/requirements/requirements.md`(FR-9 보완 정합화 노트).
@@ -181,7 +181,7 @@ G1(창 단위)에 이어 사용자 요청("지원 브라우저의 열린 탭을 
 
 - **수정(vc-app/src/lib.rs `activate_live_tab`)**: `focus_tab` 호출 전에 `enumerate_browser_tab_sessions`로 live tab 목록을 먼저 가져와, 저장된 핸들(`handle`)이 기대 제목(`title`)을 가진 탭을 실제로 가리키는지 확인. 일치 시 빠른 경로로 `focus_tab`; 불일치 시 제목 기반 검색으로 직행.
 - **잔여 한계(수용)**: 같은 창에 제목이 동일한 탭이 여러 개이면 첫 번째 매칭을 선택 — URL 없이는 구분 불가(FR-9.7).
-- **테스트**: `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2. 탭 순서 변경 후 saved tab 활성화 정확도는 수동 검증 필요(이 환경에서 실행 불가 — 미완료로 기록).
+- **테스트**: `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2. 탭 순서 변경 후 saved tab 활성화 정확도는 **✅ 2026-09-09 사용자 수동 검증 PASS**(순서 변경 후에도 저장 탭이 정확히 활성화됨, Chrome/Edge).
 
 **문제 2 — Edge 탭 빈 제목 표시 개선**
 
@@ -213,7 +213,7 @@ vc-os-windows `list_tabs`에서 UIA `Name`이 빈 문자열인 탭을 `(제목 �
   - 탭 읽기 실패 폴백 문구를 사유 안내로("백그라운드 창이라 탭을 읽지 못했습니다 — 창 목록을 표시합니다") + **"⟳ 앞으로 가져와 다시 읽기"** 버튼(→ `fetchTabs(name, reveal=true)`). 목록 펼치기만으로는 창을 포그라운드로 가져오지 않음.
   - 저장 `WindowRef` 리소스는 배지 "Window"(앱/창/탭 구분 유지), 더블클릭 시 `activateWindowResource`로 그 창 복귀. 앱 전체 등록(`add_app_resource`) 유지.
 - **정적 검증(2026-09-09, 실행 완료)**: `cargo clippy --workspace --all-targets` 0 경고, `cargo test --workspace` 전 크레이트 통과(vc-core 24/24·vc-os-windows 5/5·vc-app 2/2·vc-sessions 8/8·vc-store 2/2), 프론트 `npx tsc --noEmit` 무오류·`vite build` 성공. 2단계 진단 스크립트는 실 Windows+Edge에서 실행해 중첩 Tab·지연 트리를 실측 확정.
-- **런타임 검증(미완료 — 이 세션에서 직접 실행 못 함, 검증 완료로 처리하지 않음)**: ① Edge 백그라운드/포그라운드 탭 수집, ② 여러 Edge 창, ③ 탭 순서 변경 후 저장 탭 정확 활성화, ④ Chrome 회귀(직계 `TabItem` 수집 유지), ⑤ 카카오톡 개별 창 등록·복귀. 진단은 실측했으나 앱을 통한 위 UI 플로우 실행은 미수행. 사용자 실환경 확인 필요.
+- **✅ 런타임 검증 완료(2026-09-09, 사용자 수동 검증)**: ① Edge 백그라운드/포그라운드 탭 수집(reveal "⟳ 앞으로 가져와 다시 읽기" 동작 확인), ② 여러 Edge 창 각각 구분, ③ 탭 순서 변경 후 저장 탭 정확 활성화, ④ Chrome 회귀 없음(직계 `TabItem` 수집 유지), ⑤ 카카오톡 개별 창 등록·복귀 — **모두 PASS**. 추가로 정확 활성화(KakaoTalk 창/Chrome 탭/일반 앱, AC-20)·Chrome 탭 개별 표시·활성 탭 표시·DnD 개별 등록·AC-21 splash(노출·입력 차단·8초 내 해제)도 실환경 PASS. **검증 방식 주의**: PowerShell 좌표 기반 자동 UI 클릭은 WebView2에 합성 더블클릭이 신뢰성 있게 전달되지 않아(단일 클릭 hover는 전달됨) 검증 수단에서 제외 — 표시/등록은 실행 앱 스크린샷 실측, 정확 활성화·Edge·순서변경·splash는 사용자 수동 검증으로 확정.
 - **설계 문서**: `construction/vc-os-windows/functional-design/window-enumeration.md` §6.9.
 
 ---

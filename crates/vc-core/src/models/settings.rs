@@ -23,6 +23,12 @@ pub struct AppSettings {
     /// `AWS_REGION` or the app default.
     #[serde(default)]
     pub claude_region: Option<String>,
+    /// Explicit user consent to send Claude Code session content to an external
+    /// service for work summarization (§12 / NFR-4). Defaults to `false`: without
+    /// opt-in, summaries degrade to `insufficient_information` rather than making
+    /// any external call. `#[serde(default)]` so older settings.json still loads.
+    #[serde(default)]
+    pub session_summary_consent: bool,
     /// Local calendar date (YYYY-MM-DD) the daily usage counters below belong
     /// to. The frontend supplies it (it owns the local timezone); a new date
     /// rolls the counters back to zero. Purely a UI readout — token counts only,
@@ -52,10 +58,44 @@ impl Default for AppSettings {
             claude_api_key: None,
             claude_model: None,
             claude_region: None,
+            session_summary_consent: false,
             usage_date: None,
             usage_input: 0,
             usage_output: 0,
             usage_requests: 0,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// P12 / AC-18 / NFR-5: settings.json written by an older build (without the
+    /// new fields) must still load, filling the new fields from `#[serde(default)]`.
+    #[test]
+    fn loads_legacy_settings_without_new_fields() {
+        let legacy = r#"{
+            "panel_width": 320.0,
+            "card_height": 160.0,
+            "window_x": null,
+            "window_y": null,
+            "window_width": null,
+            "window_height": null
+        }"#;
+        let s: AppSettings = serde_json::from_str(legacy).unwrap();
+        assert_eq!(s.panel_width, 320.0);
+        // New fields default when absent.
+        assert_eq!(s.session_summary_consent, false);
+        assert!(s.claude_api_key.is_none());
+    }
+
+    #[test]
+    fn roundtrips_with_consent() {
+        let mut s = AppSettings::default();
+        s.session_summary_consent = true;
+        let json = serde_json::to_string(&s).unwrap();
+        let back: AppSettings = serde_json::from_str(&json).unwrap();
+        assert!(back.session_summary_consent);
     }
 }

@@ -112,7 +112,11 @@ Per-unit stages: Functional Design → NFR Requirements → NFR Design → (Infr
 - [x] Build and Test — finalized (workspace builds, tests pass — see corrected count above, clippy clean, Tauri app runs)
 
 ### 🟡 OPERATIONS PHASE
-- [ ] Operations — PLACEHOLDER
+- [x] Operations — **커밋/푸시 + origin/main 병합 통합 + macOS 빌드 복구 + 산출물 재빌드 (2026-09-09)**: operations 작업분 커밋(`97144e9`) 후 push가 거부됨 → origin/main이 PR #13/#14/#15(Claude Code Context Control, xterm.js 터미널, 인트로 애니메이션)로 선행. `origin/main` 병합(merge 커밋 `345cb5d`; audit.md 충돌은 양측 로그 append라 **union**으로 해소, state.md 자동 병합). **공유 main push 전 빌드 검증에서 macOS 컴파일 실패 발견** — 병합분의 세션-터미널 커맨드가 크로스플랫폼 등록인데 호출하는 `ps_single_quote`가 `#[cfg(windows)]`로 게이트되어 E0425 3건(origin/main 기존 결함, 병합 전 macOS는 정상 빌드였음). **수정(`9bbdc32`)**: 게이트 제거로 전 플랫폼 컴파일(Windows 동작 불변; 비-Windows는 term::open 스텁이라 미사용). 검증: `cargo build/test --workspace` macOS EXIT 0(vc-app 18·vc-core 75·vc-os-macos 1·vc-sessions 12·vc-store 8). 잔여 경고 1건(term.rs:95 `stop_all` 미사용 — 병합분, 무수정). **push 완료** `049b872..9bbdc32`(3커밋), main 동기화. **산출물 재빌드**: stale였던 Desktop dmg를 병합 main으로 재빌드(`npm install`+유니버설) → `~/Desktop/vibe-control_0.1.0_universal.dmg`(18 MB, `x86_64 arm64`, sha256 `ab1c32b9…`)에 병합 기능 포함. (터미널 기능은 Windows 전용, macOS는 스텁으로 graceful degrade.)
+- [x] Operations — **해커톤 릴리스 출고 완료 (2026-09-09)**: 사용자 결정 "인증서 고려 안 함(해커톤)" → **배포 서명 블로커 정식 면제**(⛔→면제). 서명 안 된 빌드가 심사자 Mac에서 실행되도록: (1) Gatekeeper 우회 검증 — 임시 dmg에 `com.apple.quarantine` 부여 후 `xattr -dr com.apple.quarantine`로 해제 확인(체크리스트 §8 문서화, 첫 실행 시 Automation/Accessibility 권한 안내 포함), (2) 기존 빌드가 **arm64 전용**(Intel Mac 실행 불가) → **유니버설 빌드**: `tauri build --target universal-apple-darwin`(ad-hoc), `lipo -archs` → `x86_64 arm64` 검증. **최종 산출물 `~/Desktop/vibe-control_0.1.0_universal.dmg`**(18 MB, Intel+Apple Silicon 공용, sha256 `4aa05aa7…`) 출고, 구 arm64 전용 dmg 제거. Windows 설치본은 Windows 호스트 필요(크로스컴파일 불가) — 이번 범위 밖. 3개 operations 문서 갱신(서명 WAIVED/해커톤, go-no-go GO/SHIPPED). **코드 무수정.**
+- [x] Operations — **파이프라인 블로커 #2 해소 (2026-09-09)**: `crates/vc-app/tauri.conf.json` `beforeBuildCommand` `""` → `"npm --prefix ../frontend run build"`(`beforeDevCommand`과 동일 패턴; CLI가 `crates/vc-app`에서 실행되므로 `../frontend` 정확 — #H1). `tauri build` 재실행으로 검증(`Running beforeBuildCommand …` → vite build → compile → 번들, exit 0) → 프론트 stale 불가. `frontendDist`/`devUrl` 무변경(프로덕션 임베드·dev 서버 무영향). DMG는 `~/Desktop`에 복사(SHA-256 일치 검증). **남은 릴리스 블로커는 배포 서명(⛔)뿐** — 인증서 필요(STOP). 코드(Rust/프론트) 무수정, config 1줄만 변경.
+- [x] Operations — **내부/데모 릴리스 빌드 실행·검증 완료 (2026-09-09)**. 릴리스 트랙 = 내부/데모(GO). macOS(arm64, 이 머신)에서 `npm install`(누락된 `@tauri-apps/cli` 설치)→`npm run build`(frontend/dist)→`tauri build`(crates/vc-app 기준, `APPLE_SIGNING_IDENTITY=-` ad-hoc — 이 머신에 `vibe-control-dev` 키체인 신원 없음). 산출물: `target/release/bundle/macos/vibe-control.app` + `target/release/bundle/dmg/vibe-control_0.1.0_aarch64.dmg`(8.9 MB). 검증: codesign adhoc/arm64/`com.vibecontrol.desktop`, **spctl REJECTED**(체크리스트 서명 블로커 실증), Info.plist v0.1.0, `open`→PID 생성·무크래시·정상 종료(macOS 실행 검증 갭 해소). **코드 무수정.** Windows `.msi`/`.exe`는 Windows 호스트에서 별도 빌드 필요(크로스컴파일 불가). **공개 배포 트랙은 여전히 NO-GO/STOP** — Apple Developer ID+공증, Windows Authenticode 인증서 필요(비용·자격증명·비가역).
+- [x] Operations — **INSTANTIATED as documentation (2026-09-09)**. The framework ships this stage as a rule-defined PLACEHOLDER (`operations/operations.md`: workflow ends after Build & Test) — no executable steps exist. Given INCEPTION + CONSTRUCTION are complete and the app is built/verified, the phase was instantiated with the project-appropriate content the placeholder is defined to eventually hold: **Release & Packaging + Production Readiness** (local desktop app → no cloud infra, consistent with Infrastructure Design SKIP). Artifacts: `operations/{operations-overview.md, release-packaging.md, production-readiness-checklist.md}`. **No code changed; nothing built/signed/published.** Go/no-go: **GO for internal/dev builds; NO-GO for public distribution** until 2 signing blockers cleared — (1) macOS `signingIdentity` is dev self-signed `vibe-control-dev` (needs Apple Developer ID + notarization), (2) Windows has no Authenticode cert — plus macOS E2E + H3/H4 runtime-verification items closed. Also flagged: empty `beforeBuildCommand` (frontend must be built before `tauri build`).
 
 ### 🔧 Post-Construction Fixes
 - [x] **Windows freeze fix (2026-09-08)** — running-apps list was empty and the window went "not responding" then closed. Cause: `WinWindowEnumerator` used `tasklist /v` (hangs for minutes when any window is unresponsive) from a SYNCHRONOUS Tauri command polled every 1s on the UI thread. Fixed by (a) enumerating via PowerShell `Get-Process`/`MainWindowTitle` (no window messaging → no hang, ~1s) in `crates/vc-os-windows/src/lib.rs`, and (b) making OS-touching commands `async` in `crates/vc-app/src/lib.rs` so they run off the main thread. Verified on real Windows: clippy 0 warnings, app stable, `Responding = True`. Detail in `audit.md`. Still open on Windows: browser-tab reading + app-icon extraction. *(Update 2026-09-08: app-icon extraction since implemented — `WinIconReader`, commit `6039456`; browser-tab reading still open.)*
@@ -231,6 +235,26 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 
 ---
 
+## 🆕 New Bolt (U7 frontend) — Intro animation redesign (2026-09-09)
+트리거: 사용자 요청 — "블럭을 랜덤 정렬이 아닌 화면 중앙 가로 정렬로 5줄로 하고 가운데에는 로고를 배치하며 블럭에 걸린 디자인은 유지하되 … 로고보다 강조되서는 안되며 이를 위해 opacity같이 흐릿하게 한다."
+
+**분류**: 브라운필드, 프론트엔드 전용 시각 변경. **새 Unit 불필요** — 기존 U7(frontend)의 부팅 스플래시(FR-13)에 대한 **신규 Bolt**. Application Design / 신규 컴포넌트 없음(적응형 워크플로우 — 해당 스테이지 스킵).
+
+### INCEPTION 문서 반영
+- [x] `requirements.md` v1.3 — **FR-13.8 신설**(인트로 시각 구성: 중앙 5줄 그리드 · 중앙 로고 초점 · 패드 저불투명도 유지) + 개정 이력 · AC-21 보강
+- [x] `stories.md` US-13.1 — "인트로 구성" 시나리오 신설(FR-13.8)
+- [x] `intro-animation.md` — 스토리보드 재작성(scattered→converge → 조직화된 중앙 그리드 + 중앙 로고, 패드 흐릿)
+
+### CONSTRUCTION (U7 Code Generation)
+- [x] `frontend/src/App.tsx` `Splash` — 패드를 **중앙 정렬 5×7 그리드**(`GRID_ROWS=5`, 고정 셀 오프셋, 랜덤 산포 제거)로 배치, 활성화는 **중앙→바깥 리플** 순서. 수렴 허브+타이틀 종료를 **중앙 `.intro-logo`**(오렌지 레코드-닷 마크 + `vibe control` 워드마크)로 교체
+- [x] `frontend/src/styles.css` — `.intro-field` **opacity 0.24**(흐릿하게, 로고 미강조) · `intro-pad-converge`/`intro-hub`/`intro-steps`/`intro-title` 제거 · `.intro-logo(+::before 스포트라이트)`/`.intro-logo-mark`/`.intro-logo-word` 추가 · reduced-motion 종료 상태 갱신
+- [x] **사용자 중간 요청 반영** — "동그란 원 scale 되는 애니메이션 제거" → 원형 스케일 `.intro-pulse` 링 삭제(JSX+CSS+reduced-motion)
+- [x] **검증**: `npx tsc --noEmit` 통과 · `npx vite build` 성공(CSS 25.00 kB / JS 166.20 kB) · `cargo build -p vc-app` — vc-app 컴파일 성공(마지막 단계만 실행 중 `vibe-control.exe` 파일 잠금 `os error 5`로 교체 실패 — 코드 오류 아님)
+- [x] **추가 조정 (2026-09-09)** — (1) 블럭이 **뷰포트 가로 폭을 가득 채우도록** 열 개수를 `window.innerWidth` 기준으로 계산(고정 7열 → 반응형), 리플 스윕 시간은 패드 수와 무관하게 `SWEEP_S=2.6s`로 정규화. (2) 원형 스케일 `.intro-pulse` 제거(이전 요청). (3) 패드 활성 플래시를 **조화로운 다중 색상**으로 — `FLASH_HUES` 팔레트(오렌지·앰버·코랄·마젠타·바이올렛·블루·틸·그린)를 패드별 `--hue`로 부여, `intro-pad-activate` 키프레임이 `hsl(var(--hue) …)`로 발광. 재검증: `tsc` 통과 · `vite build` 성공
+- [ ] **실 OS 시각 확인 (AC-21 E2E)** — Windows 실행하여 가로 꽉 찬 5줄 그리드·중앙 로고·흐릿한 패드·다중 색상 플래시·~5.8s 코레오그래피 육안 확인 필요(이 환경에서 GUI 확인 불가)
+
+---
+
 ### ✅ DONE (2026-09-09): 백로그 소진 (E1·E2·D6 — feature/backlog-layout-conversation-store)
 창 단위 재정렬(G) 이후 남은 백로그 상위 항목을 구현·검증하고 main에 병합했다. **C1·C2(vc-store 원자적 쓰기)는 병합 시점에 main이 이미 반영(PR #7)**되어 있어 중복분은 폐기하고 main 버전을 채택 — 이 브랜치의 실기여는 E2·E1·D6.
 - [x] **E2 — 레이아웃 영속화**: `LayoutSettings` DTO(패널폭/카드높이/창 rect, Claude 자격증명 제외) + `get_layout`/`save_panel_layout` 커맨드(`generate_handler!` 등록). 창 위치/크기는 백엔드 `on_window_event`가 Moved/Resized 시 메모리에 stash, CloseRequested/Destroyed 시 1회 디스크 flush(폴링 디스크쓰기 회피). 부팅 시 `restore_window_rect`가 저장 rect를 창에 적용. 프론트: 부팅 시 사이드바 폭 적용(ref 명령형, CSS `resize`와 충돌 방지) + `ResizeObserver` 디바운스(500ms) 저장. **실측 검증(병합 전 브랜치)**: 창을 (150,120)/920×640으로 이동 후 종료 → settings.json에 rect 기록; 재기동 → outer rect 정확히 복원.
@@ -267,9 +291,9 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **U6 vc-app**: `activate_live_tab` — `focus_tab` 전에 `enumerate_browser_tab_sessions`로 live tab 열거 → 저장 핸들이 기대 제목을 가리키는지 검증 → 일치 시 fast-path, 불일치 시 제목 기반 검색. vc-os-windows 어댑터 무변경.
 - **U4 vc-os-windows**: 빈 제목 fallback을 `(탭 N번 — 제목 없음)` (N=1기준 위치) 형식으로 변경. vc-app·프론트 계약 무변경(제목 문자열 내용만 변화).
 - **빌드·테스트**: `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고; `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2 통과.
-- **미완료(live 검증)**: 탭 순서 변경 후 saved tab 활성화 정확도는 실제 브라우저 필요 — 이 환경에서 실행 불가; 완료로 기록하지 않음.
+- **✅ live 검증 완료(2026-09-09, 사용자 수동 검증)**: 탭 순서 변경 후 saved tab 활성화 정확도 PASS(Chrome/Edge). 자동 UI 클릭(PowerShell 좌표)은 WebView2에 합성 더블클릭이 신뢰성 있게 전달되지 않아(단일 클릭 hover는 전달됨) 검증 수단에서 제외 → 사용자 실환경 수동 검증으로 확정.
 - **문서**: `known-deviations.md` §H3, `window-enumeration.md` §6.2 갱신 + §6.8 추가, `aidlc-state.md`, `audit.md` 추가.
-- [x] 분석(확인된 원인 vs 추정 원인 구분) → [x] Construction Code Generation(U4·U6 코드 수정) → [x] build/clippy/test 통과 → [ ] live 검증(탭 순서 변경 후 활성화·Edge 빈 제목 변경 확인 — 수동 필요)
+- [x] 분석(확인된 원인 vs 추정 원인 구분) → [x] Construction Code Generation(U4·U6 코드 수정) → [x] build/clippy/test 통과 → [x] live 검증(탭 순서 변경 후 활성화·Edge 빈 제목 변경 확인 — 2026-09-09 사용자 수동 검증 PASS)
 
 ### 🔧 Supplement Bolt H4 (2026-09-09): Edge 중첩 Tab 수집·접근성 트리 준비·일반 앱 개별 창 등록
 **트리거**: 사용자 요청 — 재현 진단 결과에 근거한 AI-DLC 보완. ① Edge 탭 수집·활성화(중첩 Tab), ② 접근성 트리 준비/사용자 흐름(제한 재시도 + 실패 안내 + 명시적 "다시 읽기", 펼침만으로 포그라운드 금지), ③ 일반 앱 개별 창 등록(카카오톡 등, 탭 수집 실패 시에도 등록 가능; 닫힌 창 자동 재열기 제외).
@@ -278,6 +302,6 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **U6 vc-app**: `enumerate_browser_tab_sessions(name, bring_to_front)`·`list_browser_tabs(name, reveal)`; `activate_live_tab` 저장 탭은 포그라운드 재열거(§H3 제목 재검증 유지); 신규 `add_window_resource`/`activate_window_resource`+`activate_live_window`(`WindowRef` 배선, 제목 중복 방지, 닫힌 창 재열기 없음), `reopen_resource` WindowRef 분기. `generate_handler!` 22→24개.
 - **U7 프론트**: 창 행 draggable(일반 앱+브라우저 폴백)→`addWindowResource`, `draggedWin` ref+폴링 양보; 폴백 사유 안내+"⟳ 앞으로 가져와 다시 읽기" 버튼(reveal); 저장 `WindowRef` 배지 "Window"+더블클릭 복귀.
 - **정적 검증(실행 완료)**: `cargo clippy --workspace --all-targets` 0 경고, `cargo test --workspace` 전 통과(vc-core 24/24·vc-os-windows 5/5·vc-app 2/2·vc-sessions 8/8·vc-store 2/2), `npx tsc --noEmit` 무오류·`vite build` 성공.
-- **미완료(런타임 검증)**: Edge 백/포그라운드·여러 창·탭 순서 변경·Chrome 회귀·카카오톡 개별 창 등록 — 앱 UI 플로우 직접 실행 못 함, 완료로 기록하지 않음(사용자 실환경 확인 필요).
+- **✅ 런타임 검증 완료(2026-09-09, 사용자 수동 검증)**: Edge 포그라운드 탭 목록·백그라운드 폴백 + "⟳ 앞으로 가져와 다시 읽기"(reveal)·다중 Edge 창 구분·빈 제목/중첩 Tab 재발 없음·탭 순서 변경 후 저장 탭 활성화·Chrome 회귀 없음·카카오톡 개별 창 등록·복귀 모두 PASS. 정확 활성화(KakaoTalk 창/Chrome 탭/일반 앱)·AC-21 splash(노출·입력 차단·8초 내 해제)도 PASS. 자동 UI 클릭은 신뢰성 문제로 제외, 사용자 수동 검증으로 확정.
 - **문서**: `known-deviations.md` §H4 + B3 백로그 갱신, `window-enumeration.md` §6.9 추가, `aidlc-state.md`, `audit.md` 추가.
-- [x] 진단(확정/미확정 구분) → [x] 설계·수용 기준 제시 → [x] Construction Code Generation(U4·U6·U7) → [x] clippy/test/tsc/vite 정적 검증 통과 → [ ] 런타임 검증(Edge 백/포그라운드·다중 창·순서 변경·Chrome 회귀·카카오톡 등록 — 수동 필요)
+- [x] 진단(확정/미확정 구분) → [x] 설계·수용 기준 제시 → [x] Construction Code Generation(U4·U6·U7) → [x] clippy/test/tsc/vite 정적 검증 통과 → [x] 런타임 검증(Edge 백/포그라운드·다중 창·순서 변경·Chrome 회귀·카카오톡 등록 — 2026-09-09 사용자 수동 검증 PASS)

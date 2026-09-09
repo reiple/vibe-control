@@ -102,12 +102,16 @@ body { margin: 0; background: var(--body); }
    click, drag, and key focus underneath until it fades out. Rendered by React
    (not static HTML) so it paints at the correct DPI scale on Windows/WebView2.
 
-   Story (see intro-animation.md): scattered, drifting application tiles are
-   pulled by a central signal toward one point, sweep in on curved paths, and
-   collapse into a single glowing control core — then VIBE CONTROL resolves.
-   Dark and holographic, carrying the TE hero-orange as the unified core so the
-   intro reads as of a piece with the product. The final fade to the light
-   chassis is itself the transition into the app.
+   Story (see intro-animation.md): a centred, organised 5-row grid of tool
+   "pads" (filling the viewport width) powers on — an activation ripples out
+   from the centre, lighting the pads step-by-step in varied but harmonious
+   accent hues. The pads start clearly visible, then dim to a faded backdrop as
+   the "vibe control" logo (record-dot mark + wordmark) resolves in the exact
+   centre as the clear focal point, ending with a confirmation pulse.
+   The motion language borrows the KO-II hardware sampler's tactile, grid/pad,
+   step-timed feel (NOT a music UI): many tools organised around one control
+   system. Dark, minimal, premium; the final fade to the light chassis is the
+   transition into the app.
    ------------------------------------------------------------------------- */
 .splash {
   /* Absolute (not fixed) inside the relatively-positioned .app-shell: WebView2
@@ -124,7 +128,7 @@ body { margin: 0; background: var(--body); }
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Dark command-centre backdrop: a soft central glow lifting off deep,
+  /* Dark control-surface backdrop: a soft central glow lifting off deep,
      near-black plastic — high-tech, calm, not cyberpunk. */
   background:
     radial-gradient(120% 100% at 50% 45%, #17171c 0%, #0d0d10 58%, #08080a 100%);
@@ -138,239 +142,222 @@ body { margin: 0; background: var(--body); }
 }
 
 .intro {
-  position: absolute;
-  inset: 0;
+  /* A zero-size anchor at the flex-centre of .splash. Every child is placed
+     relative to this exact centre (left/top: 0) rather than against a
+     percentage of the overlay box, which keeps centring correct regardless of
+     WebView2's early-frame viewport scaling. */
+  position: relative;
+  width: 0;
+  height: 0;
 }
 
-/* The scattered field of application tiles. */
+/* The centred control grid of tool pads (0-size, at the centre anchor). It
+   starts clearly visible while the activation ripple plays, then dims down to a
+   faded backdrop as the logo resolves — so the pads hand focus to the logo
+   (the requirement's "흐릿하게"), never competing with it. */
 .intro-field {
   position: absolute;
-  inset: 0;
+  left: 0;
+  top: 0;
+  opacity: 0.24; /* resting/end state (also used under reduced-motion) */
+  animation: intro-field-dim 4s ease both;
+}
+@keyframes intro-field-dim {
+  0% { opacity: 0; }
+  12% { opacity: 0.62; }  /* fade in bright — pads clear during activation */
+  52% { opacity: 0.62; }  /* hold through the ripple */
+  80% { opacity: 0.24; }  /* dim as the logo mark + wordmark resolve */
+  100% { opacity: 0.24; }
 }
 
-/* Each tile lives at the centre and is pushed out to its scatter point by the
-   converge keyframe (via --x/--y), then swept back through a curved mid-point
-   (--mx/--my) into the core. The inner face carries only the idle float, so the
-   two motions compose cleanly. */
-.intro-icon {
-  --size: 34px;
+/* A charcoal "rubber pad" holding a tool glyph, placed at a fixed cell in the
+   5-row grid (offset from centre via --x/--y — no random scatter). The inner
+   face runs the tactile step-activation snap as the ripple reaches it. */
+.intro-pad {
+  --size: 40px;
   position: absolute;
-  left: 50%;
-  top: 50%;
+  left: 0;
+  top: 0;
   width: var(--size);
   height: var(--size);
+  /* Centre the pad on its grid cell. */
   margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
-  will-change: transform, opacity;
-  animation: intro-converge 5.6s cubic-bezier(0.5, 0, 0.2, 1) both;
+  transform: translate(var(--x), var(--y));
 }
-.intro-icon-face {
+.intro-pad-face {
   position: relative;
-  display: block;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   width: 100%;
   height: 100%;
-  border-radius: 22%;
-  background: linear-gradient(150deg, rgba(255, 255, 255, 0.15),
-    rgba(255, 255, 255, 0.03));
-  border: 1px solid rgba(255, 255, 255, 0.16);
-  box-shadow:
-    0 6px 18px rgba(0, 0, 0, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.18);
-  animation: intro-float 3.4s ease-in-out infinite;
+  border-radius: 26%;
+  background: linear-gradient(180deg, var(--pad-hi) 0%, var(--pad) 62%,
+    var(--pad-edge) 100%);
+  color: rgba(255, 255, 255, 0.28);
+  --hue: 16; /* per-pad accent hue for the flash, overridden inline */
+  will-change: transform, box-shadow, color;
+  /* Held at its "off" state until the pad's step arrives (per-pad delay set
+     inline), then snaps on. `both` keeps it dim before the delay. */
+  animation: intro-pad-activate 0.6s cubic-bezier(0.2, 0, 0.2, 1) both;
 }
-/* Faint, softly-blurred tool glyph on the larger tiles — atmospheric, not a
-   literal icon set. Sits behind the tile's own light with low contrast. */
-.intro-icon-glyph {
+.intro-pad-glyph {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  color: rgba(255, 255, 255, 0.62);
-  opacity: 0.3;
-  filter: blur(0.6px);
 }
-.intro-icon.is-accent .intro-icon-glyph {
-  color: rgba(255, 210, 195, 0.8);
-  opacity: 0.38;
-}
-.intro-icon-glyph svg {
-  width: 56%;
-  height: 56%;
-}
-.intro-icon.is-accent .intro-icon-face {
-  background: linear-gradient(150deg, rgba(255, 90, 50, 0.55),
-    rgba(240, 67, 30, 0.16));
-  border-color: rgba(255, 120, 80, 0.55);
-  box-shadow:
-    0 6px 22px rgba(240, 67, 30, 0.45),
-    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+.intro-pad-glyph svg {
+  width: 50%;
+  height: 50%;
 }
 
-@keyframes intro-converge {
-  /* Scattered and holding (chaos). */
-  0%,
-  20% {
-    transform: translate(var(--x), var(--y)) scale(1);
-    opacity: 1;
+/* Tactile step activation: dim → a snappy over-scaled flash (pad press) in the
+   pad's own accent hue (--hue) → settles to a lit, "on" state. The varied hues
+   read as a coordinated, harmonious field rather than a single orange. */
+@keyframes intro-pad-activate {
+  0% {
+    color: rgba(255, 255, 255, 0.26);
+    transform: scale(0.92);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.06),
+      0 6px 16px rgba(0, 0, 0, 0.5);
   }
-  /* Sweep through the curved mid-point (attraction). */
-  55% {
-    transform: translate(var(--mx), var(--my)) scale(0.62);
-    opacity: 1;
+  12% {
+    color: hsl(var(--hue) 100% 88%);
+    transform: scale(1.16);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 0 20px 4px hsl(var(--hue) 90% 55% / 0.6),
+      0 6px 16px rgba(0, 0, 0, 0.5);
   }
-  /* Gathered tight at the core (organisation). */
-  82% {
-    transform: translate(0, 0) scale(0.16);
-    opacity: 0.85;
-  }
-  /* Absorbed into the unified core. */
-  100% {
-    transform: translate(0, 0) scale(0.04);
-    opacity: 0;
-  }
-}
-
-/* Gentle idle drift while scattered; imperceptible once collapsed to the core. */
-@keyframes intro-float {
-  0%,
-  100% { transform: translate(0, 0); }
-  50% { transform: translate(3px, -4px); }
-}
-
-/* Central signal: a ring pulsing out from the core, cueing the attraction. */
-.intro-pulse {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 20px;
-  height: 20px;
-  margin: -10px 0 0 -10px;
-  border-radius: 50%;
-  border: 1.5px solid rgba(255, 90, 50, 0.6);
-  opacity: 0;
-  animation: intro-pulse 2.2s ease-out 1s 2;
-}
-.intro-pulse--2 { animation-delay: 1.9s; }
-@keyframes intro-pulse {
-  0% { transform: scale(0.4); opacity: 0; }
-  12% { opacity: 0.75; }
-  100% { transform: scale(26); opacity: 0; }
-}
-
-/* Faint orbiting network ring that forms as the tiles gather, then fades. */
-.intro-ring {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 150px;
-  height: 150px;
-  margin: -75px 0 0 -75px;
-  border-radius: 50%;
-  border: 1px dashed rgba(255, 255, 255, 0.18);
-  opacity: 0;
-  animation: intro-ring 3s ease-out 2.6s both;
-}
-@keyframes intro-ring {
-  0% { transform: rotate(0deg) scale(0.3); opacity: 0; }
-  30% { opacity: 0.55; }
-  70% { opacity: 0.45; }
-  100% { transform: rotate(210deg) scale(1); opacity: 0; }
-}
-
-/* The unified control core: grows, flares, and settles into a steady glow. */
-.intro-core {
-  position: absolute;
-  left: 50%;
-  top: 50%;
-  width: 16px;
-  height: 16px;
-  margin: -8px 0 0 -8px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 40% 35%, #ff7a52,
-    var(--accent) 55%, var(--accent-deep));
-  opacity: 0;
-  animation: intro-core 3.4s cubic-bezier(0.3, 0, 0.2, 1) 2.8s both;
-}
-@keyframes intro-core {
-  0% { opacity: 0; transform: scale(0); box-shadow: 0 0 0 0 rgba(240, 67, 30, 0); }
-  35% {
-    opacity: 1;
-    transform: scale(1.7);
-    box-shadow: 0 0 36px 9px rgba(240, 67, 30, 0.55);
-  }
-  60% {
-    transform: scale(2.3);
-    box-shadow: 0 0 52px 15px rgba(240, 67, 30, 0.5);
+  36% {
+    color: hsl(var(--hue) 85% 80% / 0.92);
+    transform: scale(1);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.12),
+      0 0 10px 1px hsl(var(--hue) 85% 55% / 0.35),
+      0 6px 16px rgba(0, 0, 0, 0.5);
   }
   100% {
-    opacity: 1;
-    transform: scale(2.05);
-    box-shadow: 0 0 44px 11px rgba(240, 67, 30, 0.45);
+    color: hsl(var(--hue) 78% 76% / 0.8);
+    transform: scale(1);
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.1),
+      0 0 7px hsl(var(--hue) 80% 55% / 0.25),
+      0 6px 16px rgba(0, 0, 0, 0.5);
   }
 }
 
-/* Title resolves below the settled core (unification → VIBE CONTROL). */
-.intro-title-wrap {
+/* The logo — the clear focal point, centred on the grid. A soft radial
+   spotlight darkens the faded pads right behind it so it reads sharp and
+   dominant; the record-dot mark and wordmark then resolve. */
+.intro-logo {
   position: absolute;
   left: 0;
-  right: 0;
-  top: calc(50% + 46px);
+  top: 0;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 16px;
+  white-space: nowrap;
   text-align: center;
   pointer-events: none;
 }
-.intro-title {
+.intro-logo::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  left: 50%;
+  top: 50%;
+  width: 340px;
+  height: 240px;
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+  background: radial-gradient(ellipse at center,
+    rgba(13, 13, 16, 0.96) 0%, rgba(13, 13, 16, 0.8) 40%,
+    rgba(13, 13, 16, 0) 72%);
+  opacity: 0;
+  animation: intro-spotlight 1.2s ease 0.3s both;
+}
+@keyframes intro-spotlight {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+/* Orange record-dot mark — the same brand mark as the app header, snapping in
+   with a slight overshoot as the ripple settles. */
+.intro-logo-mark {
+  width: 46px;
+  height: 46px;
+  border-radius: 22%;
+  background: radial-gradient(circle at 38% 32%, #ff7a52, var(--accent) 62%,
+    var(--accent-deep));
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.28),
+    0 0 26px 4px rgba(240, 67, 30, 0.55),
+    0 8px 22px rgba(0, 0, 0, 0.5);
+  opacity: 0;
+  animation: intro-logo-mark 1s cubic-bezier(0.34, 1.4, 0.5, 1) 2.6s both;
+}
+@keyframes intro-logo-mark {
+  0% { opacity: 0; transform: scale(0.4); }
+  60% { opacity: 1; transform: scale(1.12); }
+  100% { opacity: 1; transform: scale(1); }
+}
+
+/* The wordmark resolves below the mark. */
+.intro-logo-word {
   font-family: var(--display);
   font-weight: 700;
   font-size: 34px;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.16em;
   color: #f3f1ec;
   text-shadow: 0 0 20px rgba(240, 67, 30, 0.35);
   opacity: 0;
-  animation: intro-title 1.6s cubic-bezier(0.2, 0, 0.2, 1) 4.1s both;
+  animation: intro-logo-word 1.4s cubic-bezier(0.2, 0, 0.2, 1) 3.2s both;
 }
-@keyframes intro-title {
-  0% { opacity: 0; transform: translateY(14px); letter-spacing: 0.42em; }
-  60% { opacity: 1; }
-  100% { opacity: 1; transform: translateY(0); letter-spacing: 0.22em; }
+@keyframes intro-logo-word {
+  0% { opacity: 0; transform: translateY(10px); letter-spacing: 0.4em; }
+  100% { opacity: 1; transform: translateY(0); letter-spacing: 0.16em; }
 }
-.intro-sub {
-  margin-top: 11px;
-  font-family: var(--mono);
-  text-transform: uppercase;
-  letter-spacing: 0.34em;
-  font-size: 11px;
-  color: rgba(255, 255, 255, 0.55);
+
+/* Final confirmation pulse: a single rounded-square ring expanding from the
+   logo mark once the name has resolved — "centralised control" locked in. */
+.intro-confirm {
+  position: absolute;
+  left: 0;
+  top: 0;
+  width: 54px;
+  height: 54px;
+  margin: -50px 0 0 -27px; /* centred on the mark, which sits above centre */
+  border-radius: 22%;
+  border: 2px solid rgba(240, 67, 30, 0.55);
   opacity: 0;
-  animation: intro-sub 1.2s ease 4.8s both;
+  animation: intro-confirm 1.4s ease-out 4.4s 1;
 }
-@keyframes intro-sub {
-  0% { opacity: 0; }
-  100% { opacity: 0.85; }
+@keyframes intro-confirm {
+  0% { opacity: 0.8; transform: scale(1); }
+  100% { opacity: 0; transform: scale(3.4); }
 }
 
 /* Respect reduced-motion: skip the choreography, show the resolved end state
-   (a steady core with the title) and no movement. */
+   (the faded control grid with the logo centred on it) and no movement. */
 @media (prefers-reduced-motion: reduce) {
   .splash { transition: none; }
-  .intro-field,
-  .intro-pulse,
-  .intro-ring { display: none; }
-  .intro-icon,
-  .intro-icon-face { animation: none; }
-  .intro-core {
-    animation: none;
-    opacity: 1;
-    transform: scale(2.05);
-    box-shadow: 0 0 44px 11px rgba(240, 67, 30, 0.45);
-  }
-  .intro-title,
-  .intro-sub {
+  .intro-confirm { display: none; }
+  .intro-field { animation: none; opacity: 0.24; }
+  .intro-pad-face { animation: none; }
+  .intro-logo::before { animation: none; opacity: 1; }
+  .intro-logo-mark { animation: none; opacity: 1; transform: scale(1); }
+  .intro-logo-word {
     animation: none;
     opacity: 1;
     transform: none;
-    letter-spacing: 0.22em;
+    letter-spacing: 0.16em;
   }
-  .intro-sub { opacity: 0.85; }
 }
 
 /* Small technical-caption utility (uppercase mono, wide tracking). */
@@ -622,6 +609,20 @@ body { margin: 0; background: var(--body); }
 .running-expand:active { transform: none; box-shadow: none; filter: none; }
 .running-expand:focus-visible { outline: none; box-shadow: none; }
 
+/* Windows path: chevron + window/tab count next to the app name. Kept small and
+   tidy (mono, tabular-nums) and pushed to the row's trailing edge so the digit
+   sits at the same quiet level as the expanded sub-items below it. */
+.running-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* One live window/tab/folder inside an expanded app group (FR-2.2/2.8).
    Indented under the app icon; drag-registerable into a context group. */
 .running-window {
@@ -637,7 +638,7 @@ body { margin: 0; background: var(--body); }
 /* Placeholder rows (Loading… / No windows or tabs): non-interactive, dimmed. */
 .running-window.muted {
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: 11px;
   cursor: default;
 }
 .running-window.muted:hover { background: transparent; }
@@ -665,7 +666,7 @@ body { margin: 0; background: var(--body); }
 }
 .win-title {
   font-family: var(--grotesk);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-muted);
   white-space: nowrap;
   overflow: hidden;
@@ -847,6 +848,19 @@ button.mini.resume-button {
   --cap-ink: var(--ink);
   --key-hi: rgba(255, 255, 255, 0.9);
   --key-lo: rgba(0, 0, 0, 0.14);
+}
+
+/* Detach a session from a group — a muted, low-emphasis key (non-destructive:
+   it only removes the link, not the conversation). */
+button.mini.remove-button {
+  --face-a: #d9d5cc;
+  --face-b: #cecabf;
+  --face-c: #c2beb3;
+  --wall-a: #b0aca1;
+  --wall-b: #97938a;
+  --cap-ink: var(--ink-muted);
+  --key-hi: rgba(255, 255, 255, 0.7);
+  --key-lo: rgba(0, 0, 0, 0.16);
 }
 
 /* Destructive confirm — deep red-orange (same hue family). */
@@ -1147,6 +1161,10 @@ button.mini.danger {
   grid-template-columns: repeat(2, 1fr);
   gap: 16px;
   counter-reset: grp;
+  /* Each card sizes to its own content and top-aligns in its track. Without
+     this, a row's height is the tallest card, so opening/collapsing one group's
+     terminal stretches (and visibly shoves) its row-mate. */
+  align-items: start;
 }
 @media (max-width: 900px) {
   .group-grid { grid-template-columns: 1fr; }
@@ -1403,6 +1421,69 @@ button.mini.danger {
   letter-spacing: 0.1em;
   font-size: 10px;
 }
+.session-status {
+  flex-wrap: wrap; /* let Claude's reply drop to its own full-width line */
+}
+/* Collapsed sessions are tighter (just the toggle row). */
+.session-status.collapsed {
+  padding: 4px 8px;
+}
+/* Full-width clickable header: caret + completion chip + (when collapsed) a
+   one-line summary. Looks like text, behaves like a button. */
+.session-toggle {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0;
+  margin: 0;
+  background: none;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  color: inherit;
+}
+.session-caret {
+  color: var(--ink-muted);
+  font-size: 9px;
+  width: 10px;
+  flex: none;
+}
+.session-ago {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  flex: none;
+}
+/* Collapsed one-line preview of Claude's latest reply, so the card hints at the
+   conversation state without being expanded. Pushed right of the summary. */
+.session-preview {
+  margin-left: auto;
+  max-width: 45%;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  flex: none;
+}
+.session-summary {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.session-summary.generating {
+  color: var(--ink-muted);
+  font-style: italic;
+}
 .last-q {
   margin: 0;
   flex: 1;
@@ -1413,6 +1494,138 @@ button.mini.danger {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+/* Claude's latest reply, shown so the answer to a Send is visible in-app. Own
+   full-width line; wraps and scrolls for longer answers. */
+.last-a {
+  margin: 0;
+  flex-basis: 100%;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 180px;
+  overflow-y: auto;
+  padding-top: 6px;
+  margin-top: 2px;
+  border-top: 1px dashed var(--keyline);
+}
+.qa-tag {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  font-size: 8px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  vertical-align: 1px;
+  background: var(--sunk);
+  border: 1px solid var(--keyline);
+  color: var(--ink-muted);
+}
+.qa-tag--a {
+  background: var(--accent);
+  border-color: var(--accent-edge);
+  color: #fff;
+}
+/* Per-session command box: its own full-width row under the status/reply, so
+   each attached session sends independently. Reuses .cc-input for the field. */
+.session-send {
+  flex-basis: 100%;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+/* ── App-owned live session terminal ─────────────────────────────────── */
+/* The whole terminal block sits on its own full-width row under the header. */
+.session-term {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+  padding-top: 6px;
+  border-top: 1px dashed var(--keyline);
+}
+.term-loading {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+/* The rendered PTY screen: monospace, dark, scrollable. Preserves the vt100
+   layout (spaces + newlines) exactly as `claude` drew it. */
+.term-screen {
+  margin: 0;
+  max-height: 320px;
+  overflow: auto;
+  padding: 8px 10px;
+  background: #14120f;
+  color: #e6e1d6;
+  border: 1px solid var(--keyline);
+  border-radius: 4px;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre;
+  overflow-wrap: normal;
+}
+/* Detected selection prompt: the question + native EP-133 option buttons. */
+.term-prompt {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.term-q {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+}
+.term-opts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.term-opts .mini.sel {
+  background: var(--accent);
+  border-color: var(--accent-edge);
+  color: #fff;
+}
+.term-keys {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.term-dead {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent-deep);
+}
+/* "생성 중…" placeholder shown in place of the previous (stale) reply while
+   Claude is producing a new answer, so a just-sent command doesn't look
+   already-answered. Muted + a gently pulsing ellipsis. */
+.last-a.generating {
+  color: var(--ink-muted);
+  font-style: italic;
+}
+.gen-dots {
+  animation: gen-pulse 1.1s ease-in-out infinite;
+}
+@keyframes gen-pulse {
+  0%, 100% { opacity: 0.45; }
+  50% { opacity: 1; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .gen-dots { animation: none; }
 }
 
 /* ── New-group modal = a raised instrument card over a dim panel ── */
@@ -1481,6 +1694,139 @@ button.mini.danger {
   justify-content: flex-end;
   gap: 8px;
 }
+/* Session picker: a taller modal with a scrollable list of discovered sessions. */
+.modal.session-picker {
+  width: min(520px, 100%);
+}
+.picker-empty {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  padding: 10px 2px;
+}
+.picker-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.picker-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--keyline);
+  border-radius: 6px;
+  background: var(--sunk);
+}
+.picker-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  flex: 1;
+}
+/* Per-row action keys (연결 / 대화 제거), stacked and pinned to the row top so
+   they stay put even when the preview makes the row taller. */
+.picker-actions {
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  align-self: flex-start;
+  flex-shrink: 0;
+}
+.picker-name {
+  font-family: var(--display);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.picker-ref {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* What the session was about: last request + last reply, each clamped to one
+   line so the picker stays scannable. */
+.picker-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 5px;
+  padding-top: 5px;
+  border-top: 1px dashed var(--keyline);
+}
+.picker-preview--empty {
+  margin-top: 5px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  font-style: italic;
+}
+.picker-line {
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1.4;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* "새 세션 만들기": a small inline form below the discovered list. */
+.picker-new {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--keyline);
+}
+.picker-new-title {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+.picker-new-note {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.5;
+  color: var(--ink-muted);
+}
+.picker-new-input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 10px;
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  resize: vertical;
+}
+.picker-new-input::placeholder {
+  color: var(--ink-muted);
+}
+.picker-new-input:focus {
+  outline: none;
+  border-color: var(--accent);
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.12), 0 0 0 2px rgba(240, 67, 30, 0.2);
+}
+
 @keyframes modal-fade {
   from { opacity: 0; }
   to { opacity: 1; }
@@ -1728,3 +2074,506 @@ button.mini.danger {
 /* Send borrows the hero-orange face but not the record dot. */
 button.rec.send { padding: 11px 22px; }
 button.rec.send::before { content: none; }
+
+/* ── Claude context control panel (U4) ───────────────────────────────
+   A recessed status+command well inside each context-group card, echoing
+   .session-status. All colour comes from existing EP-133 tokens. */
+
+/* Header consent toggle — a compact, mono-labelled switch. */
+.cc-consent {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+  color: var(--ink-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.cc-consent input {
+  width: 13px;
+  height: 13px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.cc-panel {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--sunk);
+  border: 1px solid var(--keyline);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.cc-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+/* Run-state chip — same footprint/typography as .completion. */
+.cc-chip {
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 3px 7px;
+  border-radius: 3px;
+  border: 1px solid var(--keyline);
+  flex-shrink: 0;
+}
+.cc-working {
+  background: var(--lcd-bg);
+  color: var(--lcd-seg);
+  border-color: var(--lcd-bg2);
+} /* actively working → running LCD */
+.cc-waiting {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent-edge);
+} /* waiting for you → the sanctioned accent */
+.cc-idle,
+.cc-inactive,
+.cc-unknown {
+  background: var(--sunk);
+  color: var(--ink-muted);
+}
+.cc-inactive { opacity: 0.85; }
+
+.cc-ago {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  flex-shrink: 0;
+}
+.cc-latest {
+  flex: 1;
+  min-width: 0;
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.cc-expand {
+  flex-shrink: 0;
+  padding: 2px 6px;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+  border-radius: 3px;
+  cursor: pointer;
+}
+.cc-expand:hover { color: var(--ink); }
+
+.cc-banner {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+}
+
+.cc-recent {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cc-recent li {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  padding-left: 10px;
+  position: relative;
+}
+.cc-recent li::before {
+  content: "·";
+  position: absolute;
+  left: 0;
+  color: var(--ink-muted);
+}
+
+.cc-send {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.cc-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+  border-radius: 4px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.08);
+}
+.cc-input::placeholder { color: var(--ink-muted); }
+.cc-input:focus {
+  outline: none;
+  border-color: var(--accent);
+}
+/* Multi-line command box: Enter sends, Shift+Enter inserts a newline. Grows
+   vertically (a couple of lines) then scrolls; never wider than the row. */
+textarea.cc-input--multiline {
+  resize: vertical;
+  min-height: 32px;
+  max-height: 160px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+/* When the field is multi-line, keep the Send button pinned to the bottom. */
+.session-send { align-items: flex-end; }
+
+.cc-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.cc-delivery {
+  align-self: flex-start;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 3px 7px;
+  border-radius: 3px;
+  border: 1px solid var(--keyline);
+}
+.cc-ok {
+  background: var(--lcd-bg);
+  color: var(--lcd-seg);
+  border-color: var(--lcd-bg2);
+}
+.cc-warn {
+  color: var(--accent-deep);
+  background: rgba(240, 67, 30, 0.08);
+  border-color: rgba(240, 67, 30, 0.28);
+}
+
+/* ── Interactive Claude-CLI selection ("A" / 스마트 프롬프트 감지) ──────────
+   A PTY-backed session surfaced as native buttons. All colour from EP-133
+   tokens; sits inside a .session-status as a full-width sunken well. */
+.interactive-open {
+  flex-basis: 100%;
+  align-self: flex-start;
+  margin-top: 2px;
+}
+.interactive-panel {
+  flex-basis: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+  padding: 10px;
+  background: var(--sunk);
+  border: 1px solid var(--keyline);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+.interactive-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.interactive-title {
+  font-family: var(--mono);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  color: var(--ink);
+}
+.interactive-live {
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 6px;
+  border-radius: 3px;
+  border: 1px solid var(--keyline);
+  color: var(--ink-muted);
+}
+.interactive-live.on {
+  background: var(--lcd-bg);
+  color: var(--lcd-seg);
+  border-color: var(--lcd-bg2);
+}
+.interactive-head .mini {
+  margin-left: auto;
+}
+.interactive-hint,
+.interactive-note {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+.interactive-error {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--accent-deep);
+  background: rgba(240, 67, 30, 0.08);
+  border: 1px solid rgba(240, 67, 30, 0.28);
+  border-radius: 4px;
+  padding: 5px 8px;
+}
+
+/* Detected selection prompt rendered as a radio list. */
+.prompt-card {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+  border-radius: 5px;
+}
+.prompt-q {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink);
+}
+.prompt-options {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.prompt-option {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 7px 9px;
+  font-family: var(--mono);
+  font-size: 12px;
+  text-align: left;
+  color: var(--ink);
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background 90ms var(--key-ease), border-color 90ms var(--key-ease);
+}
+.prompt-option:hover {
+  border-color: var(--accent);
+}
+.prompt-option.sel {
+  background: var(--lcd-bg);
+  border-color: var(--accent);
+  color: var(--lcd-seg);
+}
+.prompt-radio {
+  color: var(--accent);
+  font-size: 11px;
+}
+.prompt-num {
+  font-weight: 600;
+  color: var(--ink-muted);
+  min-width: 12px;
+}
+.prompt-option.sel .prompt-num {
+  color: var(--lcd-seg);
+}
+.prompt-label {
+  flex: 1;
+}
+.prompt-help {
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--ink-muted);
+}
+
+/* Manual key + text controls (always available as a fallback). */
+.interactive-keys {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+.interactive-input {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.interactive-rawtoggle {
+  align-self: flex-start;
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  text-decoration: underline;
+}
+.interactive-screen {
+  margin: 0;
+  padding: 8px;
+  max-height: 320px;
+  overflow: auto;
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--lcd-seg);
+  background: var(--lcd-bg);
+  border: 1px solid var(--lcd-bg2);
+  border-radius: 4px;
+  white-space: pre;
+}
+
+/* ── Group live view: embedded terminal + screen-derived summary ───────
+   A group's `claude` shown as a real terminal (xterm.js on the raw PTY
+   stream) plus a compact status readout, all driven by the global prompt
+   bar via @mention. No session log, no persistence. EP-133 tokens only. */
+.group-live {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  background: var(--sunk);
+  border: 1px solid var(--keyline);
+  border-radius: 6px;
+  box-shadow: inset 0 1px 0 var(--edge-hi);
+}
+.group-live-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.group-live-title {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--ink);
+}
+.group-live-target {
+  font-family: var(--mono);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent-deep);
+}
+/* The embedded xterm.js host — a fixed-height dark well matching the PTY
+   background so the terminal reads as its own surface inside the card. */
+.group-term {
+  height: 300px;
+  padding: 6px;
+  background: #0b0e14;
+  border: 1px solid var(--lcd-bg2, #1a1f2b);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.group-term .xterm,
+.group-term .xterm-viewport {
+  height: 100% !important;
+}
+
+/* ── Prompt bar mention autocomplete ───────────────────────────────────
+   The single bottom prompt controls every group; typing `@` opens a
+   group-name picker that rewrites the leading token into `@Name `. */
+.console-hint {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  color: var(--ink-muted);
+}
+.console-hint strong {
+  color: var(--accent-deep);
+  font-weight: 700;
+}
+.console-hint code {
+  font-family: var(--mono);
+  color: var(--ink);
+  background: var(--sunk);
+  border: 1px solid var(--keyline);
+  border-radius: 3px;
+  padding: 0 4px;
+}
+.prompt-input-wrap {
+  position: relative;
+  flex: 1;
+  display: flex;
+}
+.mention-menu {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  right: 0;
+  max-height: 200px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+  border-radius: 6px;
+  box-shadow: 0 6px 18px var(--shadow, rgba(0, 0, 0, 0.18));
+  z-index: 20;
+}
+.mention-item {
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+  padding: 6px 8px;
+  border: none;
+  background: transparent;
+  border-radius: 4px;
+  text-align: left;
+  cursor: pointer;
+  color: var(--ink);
+}
+.mention-item:hover,
+.mention-item.active {
+  background: var(--sunk);
+}
+.mention-item > span:first-child {
+  font-family: var(--grotesk);
+  font-size: 13px;
+  font-weight: 600;
+}
+.mention-sub {
+  font-family: var(--mono);
+  font-size: 10px;
+  color: var(--ink-muted);
+}
+
+/* The "보낼 내용" preview inside the new-session folder modal — one clamped line
+   so a long prompt doesn't stretch the dialog. */
+.modal-note.pending-text {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--ink);
+  background: var(--sunk);
+  border: 1px solid var(--keyline);
+  border-radius: 4px;
+  padding: 6px 8px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
