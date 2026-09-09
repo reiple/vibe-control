@@ -30,6 +30,7 @@ import {
   startNewInteractive,
   submitInteractiveLine,
   interactiveScreen,
+  stopInteractiveSession,
   // ── Restored (#15 dropped the App.tsx wiring; backend + api.ts intact) ──
   // Left-panel per-tab/per-window enumeration, drag-registration, and exact
   // activation of saved tabs/windows. Windows uses listBrowserTabs (tabs) +
@@ -585,6 +586,9 @@ export default function App() {
   const [newGroupName, setNewGroupName] = useState("");
   const [showGroupModal, setShowGroupModal] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  // Two-step confirm for killing+removing a group's live claude session (the
+  // terminal): first click arms, second click deletes. Keyed by bundle id.
+  const [confirmKillId, setConfirmKillId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedApp = useRef<RunningApp | null>(null);
   // Per-row drag payloads: a browser tab, an OS window, or a macOS child. Exactly
@@ -1227,8 +1231,9 @@ export default function App() {
       setPendingPrompt(null);
       setSessionCwd("");
       // Submit the first prompt once the freshly-booted REPL is ready (async;
-      // the terminal is already live so the user sees it type + send).
-      void submitWhenReady(sessionId, text);
+      // the terminal is already live so the user sees it type + send). Skipped
+      // when created with no prompt (the "New session" button just opens a REPL).
+      if (text) void submitWhenReady(sessionId, text);
     } catch (e) {
       setPromptError(errText(e));
     } finally {
@@ -1239,6 +1244,40 @@ export default function App() {
   const cancelPendingPrompt = () => {
     setPendingPrompt(null);
     setSessionCwd("");
+  };
+
+  // Delete a group's claude session(s): kill the live PTY (best-effort — a
+  // never-run/already-dead session just no-ops), drop the CodingSession
+  // resource(s) from the group, and collapse the terminal view. The group then
+  // has no session, so the "New session" affordance below lets it be recreated.
+  const handleDeleteSession = async (bundleId: string) => {
+    setConfirmKillId(null);
+    setPromptError(null);
+    const target = bundles.find((b) => b.id === bundleId);
+    if (!target) return;
+    const sessions = target.resources.filter((r) => r.kind === "CodingSession");
+    try {
+      let latest = bundles;
+      for (const s of sessions) {
+        // Kill first so the process doesn't linger after its resource is gone.
+        await stopInteractiveSession(s.identity.descriptor).catch(() => {});
+        latest = await removeResource(bundleId, s.id);
+      }
+      setBundles(latest);
+      closeGroupTerminal(bundleId);
+    } catch (e) {
+      setPromptError(errText(e));
+    }
+  };
+
+  // Open the folder picker to (re)create a session for a group WITHOUT sending a
+  // prompt — the empty text makes createSessionAndSend just start the REPL. This
+  // is the counterpart to handleDeleteSession so a terminal can be freely
+  // deleted and made again.
+  const openNewSession = (bundleId: string) => {
+    setPromptError(null);
+    setSessionCwd("");
+    setPendingPrompt({ bundleId, text: "" });
   };
 
   // Live @mention autocomplete: when the caret is on a trailing `@partial`, show
@@ -1776,7 +1815,24 @@ export default function App() {
 
               {(() => {
                 const ref = groupSessionRef(b);
-                if (!ref) return null;
+                if (!ref) {
+                  // No session yet (never created, or just deleted) — offer to
+                  // start one so a terminal can be (re)created from the card.
+                  return (
+                    <div className="group-live">
+                      <div className="group-live-bar">
+                        <span className="group-live-title">Terminal</span>
+                        <button
+                          className="mini"
+                          onClick={() => openNewSession(b.id)}
+                          title="이 그룹에 새 claude 세션(터미널)을 만듭니다"
+                        >
+                          New session
+                        </button>
+                      </div>
+                    </div>
+                  );
+                }
                 const open = openTerms.has(b.id);
                 // Every Claude Code session in this group, for the read-only Log
                 // viewer. The live terminal drives only the first (groupSessionRef),
@@ -1819,6 +1875,31 @@ export default function App() {
                           {multiSession ? `Log · ${s.display_name}` : "Log"}
                         </button>
                       ))}
+                      {confirmKillId === b.id ? (
+                        <>
+                          <button
+                            className="mini danger"
+                            onClick={() => handleDeleteSession(b.id)}
+                            title="세션을 종료하고 그룹에서 삭제합니다"
+                          >
+                            정말 삭제
+                          </button>
+                          <button
+                            className="mini"
+                            onClick={() => setConfirmKillId(null)}
+                          >
+                            취소
+                          </button>
+                        </>
+                      ) : (
+                        <button
+                          className="mini danger"
+                          onClick={() => setConfirmKillId(b.id)}
+                          title="이 세션(터미널)을 종료하고 삭제 — 이후 다시 만들 수 있습니다"
+                        >
+                          Delete
+                        </button>
+                      )}
                       {promptTarget === b.id && (
                         <span className="group-live-target" title="프롬프트 바 기본 대상">
                           ◀ 프롬프트 대상
@@ -2038,9 +2119,9 @@ export default function App() {
               >
                 <h3 className="modal-title">새 claude 세션</h3>
                 <p className="modal-note">
-                  ‘{bundle?.name}’ 그룹에 아직 claude 세션이 없습니다. 작업 폴더를
-                  지정하면 그 폴더에서 새 세션(터미널)을 시작하고 아래 내용을
-                  보냅니다.
+                  ‘{bundle?.name}’ 그룹의 작업 폴더를 지정하면 그 폴더에서 새
+                  세션(터미널)을 시작합니다
+                  {pendingPrompt.text ? " · 아래 내용을 첫 메시지로 보냅니다." : "."}
                 </p>
                 <input
                   autoFocus
@@ -2054,9 +2135,14 @@ export default function App() {
                   }}
                   disabled={creatingSession}
                 />
-                <p className="modal-note pending-text" title={pendingPrompt.text}>
-                  보낼 내용: {pendingPrompt.text}
-                </p>
+                {pendingPrompt.text && (
+                  <p
+                    className="modal-note pending-text"
+                    title={pendingPrompt.text}
+                  >
+                    보낼 내용: {pendingPrompt.text}
+                  </p>
+                )}
                 <div className="modal-actions">
                   <button
                     className="ghost"
@@ -2069,7 +2155,11 @@ export default function App() {
                     onClick={createSessionAndSend}
                     disabled={creatingSession || !sessionCwd.trim()}
                   >
-                    {creatingSession ? "시작 중…" : "시작하고 보내기"}
+                    {creatingSession
+                      ? "시작 중…"
+                      : pendingPrompt.text
+                        ? "시작하고 보내기"
+                        : "세션 시작"}
                   </button>
                 </div>
               </div>
