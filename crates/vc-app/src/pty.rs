@@ -238,8 +238,7 @@ fn spawn_into_registry(
                         if buf[..n].windows(8).any(|w| w == b"\x1b[?2004h") {
                             bp_bg.store(true, Ordering::SeqCst);
                         }
-                        // Feed the vt100 parser (drives `screen()`/summary) AND
-                        // stream the raw bytes to the frontend terminal (xterm.js).
+                        let has_dsr = buf[..n].windows(4).any(|w| w == b"\x1b[6n");
                         if let Ok(mut p) = parser_bg.lock() {
                             p.process(&buf[..n]);
                             // Answer a DSR cursor-position query (ESC[6n) inline:
@@ -250,7 +249,7 @@ fn spawn_into_registry(
                             // correct. Handled here (not just the frontend) so the
                             // handshake completes immediately, independent of the
                             // event→xterm→invoke round-trip.
-                            if buf[..n].windows(4).any(|w| w == b"\x1b[6n") {
+                            if has_dsr {
                                 let (row, col) = p.screen().cursor_position();
                                 let reply = format!("\x1b[{};{}R", row + 1, col + 1);
                                 if let Ok(mut w) = writer_bg.lock() {
@@ -260,11 +259,22 @@ fn spawn_into_registry(
                             }
                         }
                         if let Some(h) = app_handle().get() {
+                            // Stream the raw bytes to the frontend terminal (xterm.js),
+                            // but STRIP the DSR query (ESC[6n): the backend already
+                            // answered it above, and if xterm.js answers too, claude
+                            // misreads the duplicate cursor report as a stray "C"
+                            // keystroke in its input box at startup. (Verified against
+                            // claude 2.1.266.) Fast path avoids a copy when absent.
+                            let bytes = if has_dsr {
+                                strip_dsr(&buf[..n])
+                            } else {
+                                buf[..n].to_vec()
+                            };
                             let _ = h.emit(
                                 PTY_OUTPUT_EVENT,
                                 PtyChunk {
                                     id: sref.clone(),
-                                    bytes: buf[..n].to_vec(),
+                                    bytes,
                                 },
                             );
                         }
@@ -371,6 +381,26 @@ pub fn resize(id: &str, rows: u16, cols: u16) -> Result<(), String> {
         p.screen_mut().set_size(rows, cols);
     }
     Ok(())
+}
+
+/// Remove DSR cursor-position queries (`ESC[6n`) from a PTY output chunk before it
+/// reaches the frontend terminal. The backend answers DSR authoritatively in the
+/// reader thread; if xterm.js sees the query and answers too, claude receives a
+/// duplicate cursor report and misreads it as a stray "C" keystroke in its input
+/// box at startup. Stripping the query at the source keeps xterm from replying.
+fn strip_dsr(bytes: &[u8]) -> Vec<u8> {
+    const Q: &[u8] = b"\x1b[6n";
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(Q) {
+            i += Q.len();
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Write raw bytes to the PTY (typing into the REPL / answering a prompt).
