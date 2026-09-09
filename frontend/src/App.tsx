@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   WorkBundle,
   Resource,
@@ -98,6 +99,60 @@ function parseMention(
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+// Detect macOS so the frameless-window custom controls (below) render on
+// Windows ONLY — macOS keeps its native traffic lights (FR-8.11 / AC-22).
+const IS_MACOS =
+  /Mac|iP(hone|ad|od)/.test(navigator.platform) ||
+  /Macintosh|Mac OS X/.test(navigator.userAgent);
+
+// Windows has no native title bar (decorations are stripped in vc-app so the
+// window is frameless like macOS's Overlay — FR-8.11). macOS still draws its
+// native traffic lights, so these custom controls render on Windows ONLY and
+// deliberately mimic the macOS traffic lights (same top-left spot, same
+// red/amber/green dots) so both platforms read as the same screen (AC-22).
+// They sit outside any `data-tauri-drag-region`, so clicks activate the button
+// instead of starting a window drag.
+function WindowControls() {
+  const win = getCurrentWindow();
+  return (
+    <div className="wc-bar" role="group" aria-label="Window controls">
+      <button
+        type="button"
+        className="wc-dot wc-close"
+        aria-label="Close"
+        title="Close"
+        onClick={() => void win.close()}
+      >
+        <svg className="wc-glyph" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3.5 3.5 L8.5 8.5 M8.5 3.5 L3.5 8.5" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className="wc-dot wc-min"
+        aria-label="Minimize"
+        title="Minimize"
+        onClick={() => void win.minimize()}
+      >
+        <svg className="wc-glyph" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3 6 L9 6" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className="wc-dot wc-max"
+        aria-label="Maximize"
+        title="Maximize"
+        onClick={() => void win.toggleMaximize()}
+      >
+        <svg className="wc-glyph" viewBox="0 0 12 12" aria-hidden="true">
+          <rect x="3.4" y="3.4" width="5.2" height="5.2" rx="0.6" />
+        </svg>
+      </button>
+    </div>
+  );
+}
 
 /** A freshly-spawned `claude` TUI isn't ready for input the instant it starts —
  *  text lands in the box but an immediate Enter is swallowed during boot (so the
@@ -759,7 +814,8 @@ export default function App() {
     bundles.find((b) => b.id === promptTarget)?.name ?? null;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${IS_MACOS ? "" : " wc-chrome"}`}>
+    {!IS_MACOS && <WindowControls />}
     {booting && <Splash hiding={splashOut} />}
     <div className="app">
       <aside className="sidebar">
