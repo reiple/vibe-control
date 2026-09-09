@@ -149,19 +149,23 @@ body { margin: 0; background: var(--body); }
   height: 0;
 }
 
-/* The centred control grid of tool pads (0-size, at the centre anchor). Held
-   faded via low opacity — the requirement's "흐릿하게": the pads stay an
-   atmospheric backdrop and never compete with the central logo. */
+/* The centred control grid of tool pads (0-size, at the centre anchor). It
+   starts clearly visible while the activation ripple plays, then dims down to a
+   faded backdrop as the logo resolves — so the pads hand focus to the logo
+   (the requirement's "흐릿하게"), never competing with it. */
 .intro-field {
   position: absolute;
   left: 0;
   top: 0;
-  opacity: 0.24;
-  animation: intro-field-in 1s ease both;
+  opacity: 0.24; /* resting/end state (also used under reduced-motion) */
+  animation: intro-field-dim 4s ease both;
 }
-@keyframes intro-field-in {
-  from { opacity: 0; }
-  to { opacity: 0.24; }
+@keyframes intro-field-dim {
+  0% { opacity: 0; }
+  12% { opacity: 0.62; }  /* fade in bright — pads clear during activation */
+  52% { opacity: 0.62; }  /* hold through the ripple */
+  80% { opacity: 0.24; }  /* dim as the logo mark + wordmark resolve */
+  100% { opacity: 0.24; }
 }
 
 /* A charcoal "rubber pad" holding a tool glyph, placed at a fixed cell in the
