@@ -3,6 +3,8 @@
 단계: CONSTRUCTION — U6, Functional Design · 소급 생성
 > ⚠ **소급 생성 문서 (2026-09-08)** — 이 산출물은 원 워크플로에서 `aidlc-state.md`에 "(auto)"로 완료 표시되었으나 **실물이 존재하지 않았다**(`drift-analysis.md#D-26`). 사용자 결정 **Q5=B**에 따라 **현행 코드(커밋 `d1e0f2f`)를 근거로 소급 작성**한다. 즉 이 문서는 *사전 설계*가 아니라 **구현된 사실의 설계 기술(as-built)** 이며, 원 설계 의도와의 차이는 `known-deviations.md`에 남아 있다.
 > 별도 문서: 앱 내 Claude 콘솔은 `../claude-console/design.md` 참조.
+>
+> 🔗 **정합화 노트 (2026-09-09 · Integration Drift Audit, vc-integration 기준)** — 아래 §1·§3의 "18개 커맨드" 표는 커밋 `d1e0f2f` 기준의 **역사적 as-built 스냅샷이며 수정하지 않는다**. 그 이후 origin/main 병합으로 세션 제어 커맨드군(Context Control·인앱 터미널/PTY·CloudWatch 사용량)과 창/탭·권한 커맨드가 추가되어 현재 커맨드 수는 **53개**(현행 `lib.rs`의 `generate_handler!` 등록 직접 카운트)로 늘었다. 세션 제어 신규 커맨드군의 설계·목록·추적·검증은 `../session-control/design.md`에, 현행 커맨드 인벤토리 수치는 `aidlc-state.md` 통합 감사 섹션과 `known-deviations.md#A2`에 둔다. 본 문서는 병합 이전 스냅샷으로 보존한다.
 
 ## 1. 책임
 
