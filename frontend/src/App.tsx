@@ -1,4 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useRef, useState } from "react";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   WorkBundle,
   Resource,
@@ -172,6 +173,58 @@ function parseMention(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// `IS_MACOS` (defined above for the left-panel OS-specific models) is reused
+// here so the frameless-window custom controls (below) render on Windows ONLY —
+// macOS keeps its native traffic lights (FR-8.11 / AC-22).
+
+// Windows has no native title bar (decorations are stripped in vc-app so the
+// window is frameless like macOS's Overlay — FR-8.11). macOS still draws its
+// native traffic lights, so these custom controls render on Windows ONLY and
+// deliberately mimic the macOS traffic lights (same top-left spot, same
+// red/amber/green dots) so both platforms read as the same screen (AC-22).
+// They sit outside any `data-tauri-drag-region`, so clicks activate the button
+// instead of starting a window drag.
+function WindowControls() {
+  const win = getCurrentWindow();
+  return (
+    <div className="wc-bar" role="group" aria-label="Window controls">
+      <button
+        type="button"
+        className="wc-dot wc-close"
+        aria-label="Close"
+        title="Close"
+        onClick={() => void win.close()}
+      >
+        <svg className="wc-glyph" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3.5 3.5 L8.5 8.5 M8.5 3.5 L3.5 8.5" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className="wc-dot wc-min"
+        aria-label="Minimize"
+        title="Minimize"
+        onClick={() => void win.minimize()}
+      >
+        <svg className="wc-glyph" viewBox="0 0 12 12" aria-hidden="true">
+          <path d="M3 6 L9 6" />
+        </svg>
+      </button>
+      <button
+        type="button"
+        className="wc-dot wc-max"
+        aria-label="Maximize"
+        title="Maximize"
+        onClick={() => void win.toggleMaximize()}
+      >
+        <svg className="wc-glyph" viewBox="0 0 12 12" aria-hidden="true">
+          <rect x="3.4" y="3.4" width="5.2" height="5.2" rx="0.6" />
+        </svg>
+      </button>
+    </div>
+  );
+}
+
 /** A freshly-spawned `claude` TUI isn't ready for input the instant it starts —
  *  text lands in the box but an immediate Enter is swallowed during boot (so the
  *  first prompt sits unsent). Poll the rendered screen until the REPL shows its
@@ -260,87 +313,85 @@ function AppIcon({
   );
 }
 
-// Faint tool glyphs tucked into a few of the larger scattered tiles, so the
-// field reads as real applications being gathered — terminal, browser, folder,
-// code, settings — rather than abstract squares. Kept low-contrast and softly
-// blurred (see .intro-icon-glyph) so they stay atmospheric, not literal.
-const TOOL_GLYPHS: React.ReactElement[] = [
-  // terminal prompt
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 7l4 4-4 4" /><path d="M12 16h7" /></svg>,
-  // browser / globe
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8" /><path d="M4 12h16" /><path d="M12 4c2.6 2.6 2.6 13.4 0 16" /><path d="M12 4c-2.6 2.6-2.6 13.4 0 16" /></svg>,
-  // folder
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h5l2 2h9v9H4z" /></svg>,
-  // code brackets
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 8l-4 4 4 4" /><path d="M15 8l4 4-4 4" /></svg>,
-  // settings gear
-  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /></svg>,
-];
-
-// Full-viewport boot splash / intro animation. Rendered by React (not static
-// index.html markup) so it paints at the correct DPI on Windows/WebView2, and
-// it blocks all input underneath until the app has finished its first load.
-// `hiding` fades it out just before it unmounts.
+// Full-viewport boot splash / intro animation. The intro is ported verbatim
+// from the `intro-animation` example (frontend/public/intro/{loader.js,
+// loader.css} + the vendored GSAP/EasePack): a "fake loading" counter runs
+// 000 → 100 %, morphs into "DEV", then the hero grid scrambles and decodes the
+// letters into the VIBE-CONTROL wordmark — the spasoje.dev loading-animation
+// language. React mounts this overlay on boot (blocking all input underneath)
+// and fades it out via `hiding` once the app's first load has finished.
 //
-// The choreography tells the product's story (intro-animation.md) in the KO-II
-// hardware sampler's motion language — tactile pads, step-sequencer timing,
-// pulse feedback (NOT a music UI). The tool pads are laid out as a calm,
-// organised 5-row control grid centred on screen (NOT randomly scattered): a
-// central activation pulse ripples outward, lighting the pads row-by-ring in
-// rhythm, then the "vibe control" logo resolves in the exact centre as the
-// unifying core the pads are arranged around. The grid is held faded (low
-// opacity) so it reads as an atmospheric control surface and never competes
-// with the logo — the logo is always the clear focal point. Pad glyphs and the
-// shuffled tie-break are generated once on mount; the motion is CSS-keyframe
-// driven.
-const SWEEP_S = 2.6; // total time the activation ripple takes to cross the grid
-const GRID_ROWS = 5; // requirement: five centred rows
-const CELL_PX = 40; // pad size
-const GAP_PX = 16; // gap between pads
-// Harmonious accent hues for the pad-press flash (driven via --hue in the
-// activation keyframe). Anchored on the brand orange and spread across warm →
-// magenta → violet → blue → teal so the field lights up in varied but
-// coordinated colour rather than a single orange.
-const FLASH_HUES = [16, 34, 350, 320, 275, 210, 172, 150];
+// The example ships as a self-contained IIFE that queries the loader markup by
+// id/class, auto-plays on `document.fonts.ready`, and registers
+// `window.spasojeLoader`. So we render its exact markup (dangerouslySetInnerHTML,
+// straight from the example's demo.html body) and, on mount, inject its
+// stylesheet + the vendored scripts. The stylesheet is scoped to the splash's
+// lifetime — removed on unmount — so the example's global resets never leak
+// into the app.
+const INTRO_HTML = `<main id="hero" class="hero" hidden><div class="hero-top">SP●DEV</div><div class="hero-grid"></div></main><div class="loader-loader" id="loader" role="status" aria-label="Loading"><div class="loader-wrapper"><div class="loader-empty loader-empty1"><p>S</p></div><div class="loader-empty loader-empty2"><p>P</p></div><div class="loader-text"><h2>Fake loading...</h2></div><div class="loader-slash"><p>/</p></div><div class="loader-number loader-number1"><p>0</p></div><div class="loader-number loader-number2"><p>0</p></div><div class="loader-number loader-number3"><p>0</p></div><div class="loader-percent"><p>%</p></div><div class="loader-logo"><svg width="45" height="10" viewBox="0 0 45 10" fill="none" xmlns="http://www.w3.org/2000/svg"><g clip-path="url(#clip0_517_15380)"><path d="M30.0915 4.98203C30.0915 6.13403 29.9835 7.20203 29.5035 7.97003C29.0235 8.75003 28.1235 9.25403 26.7915 9.25403H24.2595V0.746033H26.7915C28.1235 0.746033 29.0355 1.28603 29.5155 2.06603C29.9955 2.83403 30.0915 3.83003 30.0915 4.98203ZM28.9995 4.98203C28.9995 3.89003 28.9515 2.89403 28.3635 2.29403C28.0395 1.95803 27.5235 1.73003 26.7915 1.73003H25.3275V8.27003H26.7915C27.5595 8.27003 28.0755 8.01803 28.3995 7.67003C28.9635 7.05803 28.9995 6.03803 28.9995 4.98203Z" fill="#1A1A1A"></path><path d="M37.2569 9.25403H31.6289V0.746033H37.2569V1.73003H32.6969V4.32203H36.1409V5.33003H32.6969V8.27003H37.2569V9.25403Z" fill="#1A1A1A"></path><path d="M44.6263 0.746033L41.9863 9.25403H40.7143L38.0743 0.746033H39.2143L41.3743 8.01803L43.4983 0.746033H44.6263Z" fill="#1A1A1A"></path><rect x="16.2595" y="0.746033" width="6" height="6" rx="3" fill="#1A1A1A"></rect><path d="M6.78178 6.91403C6.78178 7.62203 6.49378 8.16203 6.07378 8.57003C5.48578 9.14603 4.58578 9.41003 3.67378 9.41003C2.64178 9.41003 1.83778 9.13403 1.26178 8.60603C0.721779 8.10203 0.373779 7.37003 0.373779 6.56603H1.48978C1.48978 7.07003 1.72978 7.57403 2.07778 7.91003C2.46178 8.28203 3.07378 8.42603 3.67378 8.42603C4.32178 8.42603 4.84978 8.29403 5.23378 7.93403C5.49778 7.69403 5.66578 7.39403 5.66578 6.93803C5.66578 6.27803 5.26978 5.72603 4.26178 5.57003C3.79378 5.49803 3.40978 5.43803 2.95378 5.36603C1.68178 5.17403 0.709779 4.46603 0.709779 3.11003C0.709779 2.47403 0.973779 1.86203 1.42978 1.43003C2.01778 0.878027 2.73778 0.590027 3.62578 0.590027C4.45378 0.590027 5.24578 0.842027 5.80978 1.38203C6.32578 1.87403 6.58978 2.49803 6.61378 3.21803H5.49778C5.47378 2.79803 5.32978 2.45003 5.08978 2.17403C4.76578 1.80203 4.27378 1.57403 3.61378 1.57403C3.00178 1.57403 2.50978 1.75403 2.13778 2.17403C1.92178 2.42603 1.81378 2.70203 1.81378 3.08603C1.81378 3.85403 2.42578 4.20203 3.06178 4.28603C3.54178 4.34603 3.97378 4.43003 4.44178 4.50203C5.85778 4.70603 6.78178 5.57003 6.78178 6.91403Z" fill="#1A1A1A"></path><path d="M14.2592 3.31403C14.2592 4.14203 13.9952 4.75403 13.5392 5.21003C13.0832 5.66603 12.2792 5.95403 11.3432 5.95403H9.33919V9.25403H8.27119V0.746027H11.3312C12.3272 0.746027 13.1432 1.05803 13.5992 1.55003C14.0072 1.99403 14.2592 2.57003 14.2592 3.31403ZM13.1552 3.31403C13.1552 2.23403 12.3632 1.71803 11.3072 1.71803H9.33919V4.98203H11.3192C12.4592 4.98203 13.1552 4.45403 13.1552 3.31403Z" fill="#1A1A1A"></path></g><defs><clipPath id="clip0_517_15380"><rect width="45" height="10" fill="white"></rect></clipPath></defs></svg></div><div class="loader-arrow loader-arrow1"><p>&gt;</p></div></div></div><button class="replay" id="replay" hidden>다시 재생 ↗</button>`;
 
 function Splash({ hiding }: { hiding: boolean }) {
-  const pads = useMemo(() => {
-    const rows = GRID_ROWS;
-    const stride = CELL_PX + GAP_PX;
-    // Fill the viewport width: enough columns so the five rows span edge to
-    // edge (with a small side margin), then centre the whole grid on the
-    // anchor so it stays symmetric. Computed once on mount.
-    const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
-    const cols = Math.max(7, Math.floor((vw - GAP_PX) / stride));
-    const N = cols * rows;
-    const originX = ((cols - 1) / 2) * stride;
-    const originY = ((rows - 1) / 2) * stride;
-    const cx = (cols - 1) / 2;
-    const cy = (rows - 1) / 2;
+  useEffect(() => {
+    // Vite emits public/ assets at the app root; a relative base resolves them
+    // under both the dev server and Tauri's custom protocol.
+    const base = "./";
 
-    const cells = Array.from({ length: N }, (_, i) => {
-      const col = i % cols;
-      const row = Math.floor(i / cols);
-      // Activation order ripples out from the centre (where the logo lights
-      // up), with a small random tie-break so same-distance pads feel tactile
-      // rather than mechanically simultaneous.
-      const dist = Math.hypot(col - cx, row - cy) + Math.random() * 0.35;
-      return {
-        id: i,
-        glyph: i % TOOL_GLYPHS.length,
-        x: `${(col * stride - originX).toFixed(1)}px`,
-        y: `${(row * stride - originY).toFixed(1)}px`,
-        hue: FLASH_HUES[Math.floor(Math.random() * FLASH_HUES.length)],
-        dist,
-      };
-    });
-    // Rank by ripple distance, then normalise so the sweep lasts SWEEP_S no
-    // matter how many columns the viewport fits.
-    const byDist = [...cells].sort((a, b) => a.dist - b.dist);
-    const delay = new Map(
-      byDist.map((c, rank) => [c.id, 0.6 + (rank / Math.max(1, N - 1)) * SWEEP_S]),
-    );
-    return cells.map((c) => ({ ...c, delay: delay.get(c.id) ?? 0.6 }));
+    // Inject the example's stylesheet only while the splash is mounted, so its
+    // global resets (`* { margin: 0 }`, body background/font) can't leak into
+    // the app once the splash unmounts.
+    const link = document.createElement("link");
+    link.rel = "stylesheet";
+    link.dataset.introStyle = "1";
+    link.href = base + "intro/loader.css";
+    document.head.appendChild(link);
+
+    let cancelled = false;
+    const loadScript = (src: string) =>
+      new Promise<void>((resolve, reject) => {
+        // De-dupe: the vendored/loader scripts define their globals once, and
+        // React StrictMode remounts this effect in development.
+        const existing = document.querySelector(
+          `script[data-intro-src="${src}"]`,
+        );
+        if (existing) {
+          resolve();
+          return;
+        }
+        const s = document.createElement("script");
+        s.src = src;
+        s.dataset.introSrc = src;
+        s.onload = () => resolve();
+        s.onerror = () => reject(new Error(`failed to load ${src}`));
+        document.body.appendChild(s);
+      });
+
+    (async () => {
+      try {
+        await loadScript(base + "intro/vendor/gsap.min.js");
+        await loadScript(base + "intro/vendor/EasePack.min.js");
+        const w = window as unknown as {
+          spasojeLoader?: { play: () => void; destroy: () => void };
+        };
+        // loader.js is an IIFE that auto-plays on load and registers
+        // window.spasojeLoader. If it already ran (StrictMode remount), replay
+        // it against the freshly-rendered markup instead of loading it again.
+        if (w.spasojeLoader) {
+          if (!cancelled) w.spasojeLoader.play();
+        } else {
+          await loadScript(base + "intro/loader.js");
+        }
+      } catch {
+        // If GSAP fails to load, the splash simply holds its background and the
+        // boot timer still lifts it — no hard failure, no stranded UI.
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+      const w = window as unknown as { spasojeLoader?: { destroy: () => void } };
+      w.spasojeLoader?.destroy?.();
+      link.remove();
+    };
   }, []);
 
   return (
@@ -349,51 +400,9 @@ function Splash({ hiding }: { hiding: boolean }) {
       role="progressbar"
       aria-label="Loading vibe-control"
       aria-busy="true"
-    >
-      <div className="intro">
-        {/* Faded control grid: five centred rows of tool pads, held quietly
-            behind the logo (low opacity) so they never out-shout it. */}
-        <div className="intro-field" aria-hidden>
-          {pads.map((p) => (
-            <span
-              key={p.id}
-              className="intro-pad"
-              style={
-                {
-                  "--x": p.x,
-                  "--y": p.y,
-                  "--size": `${CELL_PX}px`,
-                } as React.CSSProperties
-              }
-            >
-              <span
-                className="intro-pad-face"
-                // Each pad snaps "on" at its step in the outward ripple, in its
-                // own accent hue.
-                style={
-                  {
-                    animationDelay: `${p.delay.toFixed(2)}s`,
-                    "--hue": p.hue,
-                  } as React.CSSProperties
-                }
-              >
-                <span className="intro-pad-glyph">{TOOL_GLYPHS[p.glyph]}</span>
-              </span>
-            </span>
-          ))}
-        </div>
-
-        {/* The logo — the clear focal point. A soft spotlight lifts it off the
-            faded grid, then the record-dot mark + wordmark resolve. */}
-        <div className="intro-logo">
-          <span className="intro-logo-mark" aria-hidden />
-          <div className="intro-logo-word">vibe control</div>
-        </div>
-
-        {/* Final confirmation pulse — "centralised control" locked in. */}
-        <span className="intro-confirm" aria-hidden />
-      </div>
-    </div>
+      // Exact loader/hero markup from the intro-animation example (demo.html).
+      dangerouslySetInnerHTML={{ __html: INTRO_HTML }}
+    />
   );
 }
 
@@ -590,13 +599,13 @@ export default function App() {
     let cancelled = false;
     let finished = false;
     const startedAt = performance.now();
-    // Floor the visible time to the length of the intro choreography so the
-    // full sequence (activation ripple across the grid → logo mark → wordmark →
-    // confirmation) plays before the fade, rather than being cut short the instant the
-    // (usually faster) boot data lands. The hard cap still guarantees the
-    // splash lifts if boot stalls.
-    const MIN_SPLASH_MS = 5800;
-    const MAX_SPLASH_MS = 9000;
+    // Floor the visible time to the length of the ported intro animation so the
+    // full sequence (fake-loading counter → "DEV" morph → hero letters decoding
+    // into the wordmark, ~4.9s at the sped-up timing) plays before the fade,
+    // rather than being cut short the instant the (usually faster) boot data
+    // lands. The hard cap still guarantees the splash lifts if boot stalls.
+    const MIN_SPLASH_MS = 5100;
+    const MAX_SPLASH_MS = 8000;
     const FADE_MS = 500; // must match the .splash opacity transition
 
     // Fade the splash out, then unmount it. Idempotent: whichever of the boot
@@ -1222,7 +1231,8 @@ export default function App() {
     bundles.find((b) => b.id === promptTarget)?.name ?? null;
 
   return (
-    <div className="app-shell">
+    <div className={`app-shell${IS_MACOS ? "" : " wc-chrome"}`}>
+    {!IS_MACOS && <WindowControls />}
     {booting && <Splash hiding={splashOut} />}
     <div className="app">
       <aside className="sidebar" ref={sidebarRef}>
@@ -1485,16 +1495,19 @@ export default function App() {
           //   unconfigured → no Bedrock key ("connect" guidance)
           //   error        → last fetch failed / no data ("—" + reason)
           //   ready        → real numbers (a genuine 0 shows as "0")
-          const meterState =
-            usage && usage.configured
-              ? "ready"
+          // State priority (highest first): loading → error → unconfigured →
+          // ready. A fetch in flight wins; then a failed/empty fetch shows
+          // "—"+reason (never a stale or zero value); then no-key guidance;
+          // finally real numbers (a genuine 0 shows as "0").
+          const meterState = usageLoading
+            ? "loading"
+            : usageErr
+              ? "error"
               : usage && !usage.configured
                 ? "unconfigured"
-                : usageLoading
-                  ? "loading"
-                  : usageErr
-                    ? "error"
-                    : "loading";
+                : usage && usage.configured
+                  ? "ready"
+                  : "loading";
           const ready = meterState === "ready" && usage != null;
           const ledOn = usage?.configured ?? claude?.configured ?? false;
           const model = modelLabel(

@@ -2555,6 +2555,21 @@ pub fn run() {
             // raw output to the frontend terminal (xterm.js) via `pty://output`.
             pty::set_app_handle(app.handle().clone());
             restore_window_rect(app.handle(), &layout);
+            // Windows: strip the native title bar so the window is frameless,
+            // matching the macOS Overlay style (FR-8.11 — identical screen on
+            // both OSes). Tauri's `titleBarStyle: Overlay` in tauri.conf.json is
+            // macOS-only; on Windows `decorations` defaults to true, so the OS
+            // caption bar would otherwise show. macOS keeps its Overlay traffic
+            // lights from config and needs no override. Dragging still works via
+            // the `data-tauri-drag-region` headers; best-effort (a failed call
+            // just leaves the frame in place).
+            #[cfg(target_os = "windows")]
+            {
+                use tauri::Manager;
+                if let Some(win) = app.get_webview_window("main") {
+                    let _ = win.set_decorations(false);
+                }
+            }
             // Surface the Accessibility prompt at launch so per-instance window
             // listing works without the user having to hunt through Settings.
             // Unscriptable to grant; only prompts when not already trusted.

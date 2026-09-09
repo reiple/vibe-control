@@ -218,6 +218,31 @@ vc-os-windows `list_tabs`에서 UIA `Name`이 빈 문자열인 탭을 `(제목 �
 
 ---
 
+## I. 보완 Bolt — 크로스플랫폼 무(無)프레임 창 (윈도우 제목표시줄 제거) (2026-09-09) — FR-8.11 신설
+
+**요구**: 윈도우 버전에서도 맥과 동일하게 OS 기본 제목표시줄을 표시하지 않고, 두 OS가 동일한 화면을 렌더링한다.
+
+**진단**: `tauri.conf.json`의 창 설정은 `titleBarStyle: "Overlay"` + `hiddenTitle: true`. `titleBarStyle`은 **Tauri v2에서 macOS 전용**이라 윈도우에서는 무시되고, `decorations`가 기본 `true`이므로 윈도우는 OS 캡션 바(제목·최소화/최대화/닫기)를 그대로 표시했다. 맥은 Overlay(투명 제목표시줄 + 콘텐츠 위 네이티브 신호등)로 이미 무프레임. 프론트엔드는 두 헤더에 `data-tauri-drag-region`과 신호등을 피하는 34px 상단 여백을 이미 갖고 있었다.
+
+**구현(U6 vc-app)**: `crates/vc-app/src/lib.rs`의 `run()` `setup` 훅에 `#[cfg(target_os = "windows")]` 블록 추가 — `get_webview_window("main")` 후 `set_decorations(false)`로 윈도우에서만 장식을 제거. 맥은 config의 Overlay를 유지하므로 런타임 오버라이드 불필요. 창 config(`tauri.conf.json`)는 크로스플랫폼 단일이라 컴파일타임 분기를 코드에 두는 방식이 가장 국소적. 창 이동은 기존 드래그 영역으로 유지, 크기 조절은 tao의 무장식 창 히트테스트로 유지(엣지 리사이즈). best-effort — 호출 실패 시 프레임이 남을 뿐 크래시 없음.
+
+**프론트(U7) — 맥 신호등 모사 커스텀 창 컨트롤(개정 2026-09-09)**: 무장식 윈도우 창은 네이티브 최소/최대/닫기 버튼이 사라지므로, 맥 네이티브 신호등을 **모사한 커스텀 컨트롤**을 **윈도우에서만** 추가(`!IS_MACOS` 게이팅 — 맥은 네이티브 신호등 유지). `WindowControls` 컴포넌트가 좌상단 동일 위치에 빨강(닫기)/노랑(최소화)/초록(최대화 토글) 점 3개(12px — 해커톤 요청으로 최종 12px)를 렌더 → `@tauri-apps/api/window`의 `getCurrentWindow().close()/minimize()/toggleMaximize()` 호출. `app-shell` 내부에 절대배치(z 900 — 부팅 스플래시 1000 아래, 헤더 위)이며 드래그 영역(`data-tauri-drag-region`) 밖의 별도 요소라 클릭이 창 이동이 아닌 버튼으로 간다. **각 점에 구분용 심볼을 SVG 스트로크로 항상 표시**(닫기 ×, 최소화 −, 최대화 □) — 폰트 글리프는 작은 크기에서 베이스라인 때문에 어긋나 SVG로 픽셀 정중앙·크리스프 보장(사용자 피드백 "심볼 추가·정렬·크기" 반영, 점 12→16px·심볼 SVG화). macOS는 34px 상단 여백이 작은 네이티브 신호등을 덮으나, 윈도우의 30px 커스텀 컨트롤은 더 커서 헤더와 겹치므로 `app-shell`에 `wc-chrome` 클래스(`!IS_MACOS`)를 붙여 **윈도우에서만** `.sidebar-header`/`.main-header` 상단 여백을 54px로 키워 정리(맥은 34px 유지). 결과적으로 맥/윈도우가 **좌상단 신호등 포함 동일한 무프레임 화면**.
+
+> **버그 근본원인(2026-09-09, 해결)**: 초기 컨트롤 클래스명을 `.win-dot`으로 지었는데, 이 리포에는 **이미 무관한 `.win-dot`(7px 상태 점)** 규칙이 styles.css 뒤쪽에 존재. 동일 특정성에서 뒤 규칙이 이겨 내 컨트롤이 항상 **7px로 축소**됐다(12→16→30px 변경이 전부 무시됨 — 사용자가 "16px보다 훨씬 작다"고 관측한 원인). 컨트롤 클래스 전체를 고유 접두사 **`wc-`** (`wc-bar`/`wc-dot`/`wc-close`/`wc-min`/`wc-max`/`wc-glyph`/`wc-chrome`)로 개명해 해결. **교훈**: 신규 클래스는 기존 클래스명과의 충돌을 확인할 것.
+
+**권한(U6 capabilities)**: `crates/vc-app/capabilities/default.json`에 `core:window:allow-minimize`·`core:window:allow-close` 추가(기존 start-dragging/toggle-maximize/maximize/unmaximize에 더함) — Tauri v2에서 JS 창 조작은 capability 허용 필요.
+
+- **유형**: [문서반영](신규 기능, 코드가 최종 형태) · **연관**: FR-8.11, AC-22, `REQUIREMENTS.ko §13.7`
+- **검증(실 Windows, 2026-09-09)**:
+  - `cargo build -p vc-app`(debug+release) 성공, 프론트 `tsc && vite build` 성공. `gen/schemas/capabilities.json`에 allow-close/minimize/maximize/toggle-maximize/unmaximize/start-dragging 6개 모두 임베드 확인.
+  - **제목표시줄 부재**: 스크린샷으로 확인 — 좌측 패널/헤더가 창 최상단 가장자리까지, OS 캡션 바 없음.
+  - **신호등 표시**: 좌상단 빨강/노랑/초록 3점, 맥 위치·색상과 일치(확대 캡처 확인). 초기에 전역 `button` 그라디언트가 색을 덮어 회색으로 나와 `.win-dot.win-close` 등 이중 클래스 + `background-image:none`으로 특정성 상향해 해결.
+  - **닫기 버튼 동작**: 빨강 점 실제 클릭 → 프로세스 종료 확인(라이브 검증 완료).
+  - **최소화/최대화**: 닫기와 **동일 코드 경로**(`getCurrentWindow().minimize()/toggleMaximize()`) + 권한 임베드 확인. 합성 클릭(12px 표적)으로의 반복 자동화가 창 상태를 교란해 라이브 개별 확인은 불안정 — 닫기 라이브 성공 + 경로/권한 동일성으로 동작 판정. (사용자 수동 클릭으로 최종 확인 권장)
+  - ⚠ 로컬 exe(debug·release 공통)는 `#port-1420-devserver-hijack`로 devUrl(:1420)을 로드하므로, 검증 시 **이 리포의 vite dev 서버를 :1420에 띄워** 임베드 프론트 대신 이 리포 프론트를 확인. `tauri build` 산출물은 임베드 자산이라 무관.
+
+---
+
 ## H. 빌드/실행 도구 이탈 — `tauri dev` 개발 실행이 문서대로 동작하지 않음
 
 `build-instructions.md`의 개발 실행 절차(`cd crates/vc-app && cargo tauri dev`)가 **그대로는 실패**했다. 사용자 요청("실행 시 프론트엔드와 Rust 앱을 동시에 실행")을 처리하던 중 확인됨.
