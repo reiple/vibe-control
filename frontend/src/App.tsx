@@ -201,19 +201,26 @@ const TOOL_GLYPHS: React.ReactElement[] = [
 // with the logo — the logo is always the clear focal point. Pad glyphs and the
 // shuffled tie-break are generated once on mount; the motion is CSS-keyframe
 // driven.
-const STEP_S = 0.08; // seconds between sequencer steps (pad activation rings)
-const GRID_COLS = 7; // odd, so the grid has a true centre the logo sits on
+const SWEEP_S = 2.6; // total time the activation ripple takes to cross the grid
 const GRID_ROWS = 5; // requirement: five centred rows
 const CELL_PX = 40; // pad size
 const GAP_PX = 16; // gap between pads
+// Harmonious accent hues for the pad-press flash (driven via --hue in the
+// activation keyframe). Anchored on the brand orange and spread across warm →
+// magenta → violet → blue → teal so the field lights up in varied but
+// coordinated colour rather than a single orange.
+const FLASH_HUES = [16, 34, 350, 320, 275, 210, 172, 150];
 
 function Splash({ hiding }: { hiding: boolean }) {
   const pads = useMemo(() => {
-    const cols = GRID_COLS;
     const rows = GRID_ROWS;
-    const N = cols * rows;
     const stride = CELL_PX + GAP_PX;
-    // Centre the whole grid on the anchor: offsets run symmetrically around 0.
+    // Fill the viewport width: enough columns so the five rows span edge to
+    // edge (with a small side margin), then centre the whole grid on the
+    // anchor so it stays symmetric. Computed once on mount.
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
+    const cols = Math.max(7, Math.floor((vw - GAP_PX) / stride));
+    const N = cols * rows;
     const originX = ((cols - 1) / 2) * stride;
     const originY = ((rows - 1) / 2) * stride;
     const cx = (cols - 1) / 2;
@@ -231,13 +238,17 @@ function Splash({ hiding }: { hiding: boolean }) {
         glyph: i % TOOL_GLYPHS.length,
         x: `${(col * stride - originX).toFixed(1)}px`,
         y: `${(row * stride - originY).toFixed(1)}px`,
+        hue: FLASH_HUES[Math.floor(Math.random() * FLASH_HUES.length)],
         dist,
       };
     });
-    // Rank by ripple distance → this pad's step in the activation rhythm.
+    // Rank by ripple distance, then normalise so the sweep lasts SWEEP_S no
+    // matter how many columns the viewport fits.
     const byDist = [...cells].sort((a, b) => a.dist - b.dist);
-    const ord = new Map(byDist.map((c, rank) => [c.id, rank]));
-    return cells.map((c) => ({ ...c, ord: ord.get(c.id) ?? 0 }));
+    const delay = new Map(
+      byDist.map((c, rank) => [c.id, 0.6 + (rank / Math.max(1, N - 1)) * SWEEP_S]),
+    );
+    return cells.map((c) => ({ ...c, delay: delay.get(c.id) ?? 0.6 }));
   }, []);
 
   return (
@@ -265,8 +276,14 @@ function Splash({ hiding }: { hiding: boolean }) {
             >
               <span
                 className="intro-pad-face"
-                // Each pad snaps "on" at its step in the outward ripple.
-                style={{ animationDelay: `${(0.6 + p.ord * STEP_S).toFixed(2)}s` }}
+                // Each pad snaps "on" at its step in the outward ripple, in its
+                // own accent hue.
+                style={
+                  {
+                    animationDelay: `${p.delay.toFixed(2)}s`,
+                    "--hue": p.hue,
+                  } as React.CSSProperties
+                }
               >
                 <span className="intro-pad-glyph">{TOOL_GLYPHS[p.glyph]}</span>
               </span>

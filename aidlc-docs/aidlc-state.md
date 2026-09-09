@@ -238,4 +238,5 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - [x] `frontend/src/styles.css` — `.intro-field` **opacity 0.24**(흐릿하게, 로고 미강조) · `intro-pad-converge`/`intro-hub`/`intro-steps`/`intro-title` 제거 · `.intro-logo(+::before 스포트라이트)`/`.intro-logo-mark`/`.intro-logo-word` 추가 · reduced-motion 종료 상태 갱신
 - [x] **사용자 중간 요청 반영** — "동그란 원 scale 되는 애니메이션 제거" → 원형 스케일 `.intro-pulse` 링 삭제(JSX+CSS+reduced-motion)
 - [x] **검증**: `npx tsc --noEmit` 통과 · `npx vite build` 성공(CSS 25.00 kB / JS 166.20 kB) · `cargo build -p vc-app` — vc-app 컴파일 성공(마지막 단계만 실행 중 `vibe-control.exe` 파일 잠금 `os error 5`로 교체 실패 — 코드 오류 아님)
-- [ ] **실 OS 시각 확인 (AC-21 E2E)** — Windows 실행하여 5줄 그리드·중앙 로고·흐릿한 패드·~5.8s 코레오그래피 육안 확인 필요(이 환경에서 GUI 확인 불가)
+- [x] **추가 조정 (2026-09-09)** — (1) 블럭이 **뷰포트 가로 폭을 가득 채우도록** 열 개수를 `window.innerWidth` 기준으로 계산(고정 7열 → 반응형), 리플 스윕 시간은 패드 수와 무관하게 `SWEEP_S=2.6s`로 정규화. (2) 원형 스케일 `.intro-pulse` 제거(이전 요청). (3) 패드 활성 플래시를 **조화로운 다중 색상**으로 — `FLASH_HUES` 팔레트(오렌지·앰버·코랄·마젠타·바이올렛·블루·틸·그린)를 패드별 `--hue`로 부여, `intro-pad-activate` 키프레임이 `hsl(var(--hue) …)`로 발광. 재검증: `tsc` 통과 · `vite build` 성공
+- [ ] **실 OS 시각 확인 (AC-21 E2E)** — Windows 실행하여 가로 꽉 찬 5줄 그리드·중앙 로고·흐릿한 패드·다중 색상 플래시·~5.8s 코레오그래피 육안 확인 필요(이 환경에서 GUI 확인 불가)

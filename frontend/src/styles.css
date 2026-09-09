@@ -189,6 +189,7 @@ body { margin: 0; background: var(--body); }
   background: linear-gradient(180deg, var(--pad-hi) 0%, var(--pad) 62%,
     var(--pad-edge) 100%);
   color: rgba(255, 255, 255, 0.28);
+  --hue: 16; /* per-pad accent hue for the flash, overridden inline */
   will-change: transform, box-shadow, color;
   /* Held at its "off" state until the pad's step arrives (per-pad delay set
      inline), then snaps on. `both` keeps it dim before the delay. */
@@ -206,8 +207,9 @@ body { margin: 0; background: var(--body); }
   height: 50%;
 }
 
-/* Tactile step activation: dim → a snappy over-scaled orange flash (pad press)
-   → settles to a lit, "on" state. */
+/* Tactile step activation: dim → a snappy over-scaled flash (pad press) in the
+   pad's own accent hue (--hue) → settles to a lit, "on" state. The varied hues
+   read as a coordinated, harmonious field rather than a single orange. */
 @keyframes intro-pad-activate {
   0% {
     color: rgba(255, 255, 255, 0.26);
@@ -217,27 +219,27 @@ body { margin: 0; background: var(--body); }
       0 6px 16px rgba(0, 0, 0, 0.5);
   }
   12% {
-    color: #ffd9cc;
+    color: hsl(var(--hue) 100% 88%);
     transform: scale(1.16);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.2),
-      0 0 20px 4px rgba(240, 67, 30, 0.6),
+      0 0 20px 4px hsl(var(--hue) 90% 55% / 0.6),
       0 6px 16px rgba(0, 0, 0, 0.5);
   }
   36% {
-    color: rgba(255, 178, 150, 0.92);
+    color: hsl(var(--hue) 85% 80% / 0.92);
     transform: scale(1);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.12),
-      0 0 10px 1px rgba(240, 67, 30, 0.3),
+      0 0 10px 1px hsl(var(--hue) 85% 55% / 0.35),
       0 6px 16px rgba(0, 0, 0, 0.5);
   }
   100% {
-    color: rgba(255, 158, 128, 0.78);
+    color: hsl(var(--hue) 78% 76% / 0.8);
     transform: scale(1);
     box-shadow:
       inset 0 1px 0 rgba(255, 255, 255, 0.1),
-      0 0 7px rgba(240, 67, 30, 0.22),
+      0 0 7px hsl(var(--hue) 80% 55% / 0.25),
       0 6px 16px rgba(0, 0, 0, 0.5);
   }
 }
