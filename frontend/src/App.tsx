@@ -1254,8 +1254,8 @@ export default function App() {
     {booting && <Splash hiding={splashOut} />}
     <div className="app">
       <aside className="sidebar" ref={sidebarRef}>
-        <header className="sidebar-header">
-          <h1>Running Apps</h1>
+        <header className="sidebar-header" data-tauri-drag-region>
+          <h1 data-tauri-drag-region>Running Apps</h1>
         </header>
         <input
           className="search"
@@ -1488,8 +1488,8 @@ export default function App() {
       </aside>
 
       <main className="main">
-        <header className="main-header">
-          <h2>vibe-control</h2>
+        <header className="main-header" data-tauri-drag-region>
+          <h2 data-tauri-drag-region>vibe-control</h2>
           <div className="header-actions">
             <button className="rec add-group" onClick={openGroupModal}>
               Add Group
