@@ -3,7 +3,7 @@
 ## Project Information
 - **Project Type**: Greenfield (built out; now in brownfield doc-reconciliation)
 - **Start Date**: 2026-09-07T07:32:51Z
-- **Current Stage**: CONSTRUCTION built + post-construction fixes/features landed → Documentation Reconciliation FINALIZED (2026-09-08) → **NEW FEATURE in INCEPTION doc-reflection (2026-09-08): per-window expansion UX** — realign running-apps panel to the already-designed per-window model (app-grouped list, click-to-expand window/tab sub-list, exact-window activation) + new expand/collapse affordance. Units: U7/U6/U4/U3 primary, U1 supporting; U5/U2 out of scope. Requirements/design docs updated (FR-2.8, AC-20, REQUIREMENTS.ko §13.1/13.4/13.6, known-deviations G1–G3, new vc-os-windows functional-design). **G1/G2/G3 all implemented + verified on real Windows (G1 enumeration replaced with `EnumWindows` native FFI, 2026-09-09) — feature complete.** **Supplement Bolt (2026-09-09): Windows browser TABS live view + exact-tab activation via UI Automation (`#B3` live portion) — implemented + verified on real Windows.** **Supplement Bolt 2 (2026-09-09): live tabs registerable as INDIVIDUAL bundle resources (new focus-only `ResourceKind::BrowserTabLive`, title-based, no URL per FR-9.7) — drag-to-add, per-tab exact activation, full-hint dedup; implemented + verified on real Windows (`#B3`/`#H2`).** Only capture-time tab URL persistence remains (needs DevTools protocol). **Supplement Bolt I (2026-09-09): cross-platform frameless window — strip the native Windows title bar so Windows matches macOS's Overlay (FR-8.11 / AC-22 / REQUIREMENTS.ko §13.7). `titleBarStyle: Overlay` is macOS-only in Tauri v2, so Windows kept the OS caption bar; fixed by `set_decorations(false)` guarded by `#[cfg(target_os = "windows")]` in vc-app `run()` setup. macOS untouched. `cargo build -p vc-app` OK; real-Windows visual verification via run-app.** Operations still placeholder.
+- **Current Stage**: CONSTRUCTION built + post-construction fixes/features landed → Documentation Reconciliation FINALIZED (2026-09-08) → **NEW FEATURE in INCEPTION doc-reflection (2026-09-08): per-window expansion UX** — realign running-apps panel to the already-designed per-window model (app-grouped list, click-to-expand window/tab sub-list, exact-window activation) + new expand/collapse affordance. Units: U7/U6/U4/U3 primary, U1 supporting; U5/U2 out of scope. Requirements/design docs updated (FR-2.8, AC-20, REQUIREMENTS.ko §13.1/13.4/13.6, known-deviations G1–G3, new vc-os-windows functional-design). **G1/G2/G3 all implemented + verified on real Windows (G1 enumeration replaced with `EnumWindows` native FFI, 2026-09-09) — feature complete.** **Supplement Bolt (2026-09-09): Windows browser TABS live view + exact-tab activation via UI Automation (`#B3` live portion) — implemented + verified on real Windows.** **Supplement Bolt 2 (2026-09-09): live tabs registerable as INDIVIDUAL bundle resources (new focus-only `ResourceKind::BrowserTabLive`, title-based, no URL per FR-9.7) — drag-to-add, per-tab exact activation, full-hint dedup; implemented + verified on real Windows (`#B3`/`#H2`).** Only capture-time tab URL persistence remains (needs DevTools protocol). **Supplement Bolt I (2026-09-09): cross-platform frameless window — strip the native Windows title bar so Windows matches macOS's Overlay (FR-8.11 / AC-22 / REQUIREMENTS.ko §13.7). `titleBarStyle: Overlay` is macOS-only in Tauri v2, so Windows kept the OS caption bar; fixed by `set_decorations(false)` guarded by `#[cfg(target_os = "windows")]` in vc-app `run()` setup. macOS untouched. `cargo build -p vc-app` OK; real-Windows visual verification via run-app.** Operations still placeholder. **Integration Drift Audit (2026-09-09, vc-integration 기준): origin/main 병합 세션 제어 클러스터(Context Control·인앱 터미널/PTY·CloudWatch 사용량)를 요구/설계에 편입 — requirements v1.5(FR-15/16/17·NFR-S4·AC-24/25/26) + `construction/vc-app/session-control/design.md` 신설. 현행 커맨드 인벤토리 53. 상세·배선(WIRED/PARTIAL/ORPHANED)·실제 검증은 아래 「🔎 Integration Drift Audit」 전용 섹션 참조. 코드 무수정.**
 - **Project Name**: vibe-control (작업 맥락 전환 데스크톱 앱)
 
 ## Workspace State
@@ -340,3 +340,51 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **Windows 실패 원인(진단 완료)**: 워크스페이스는 **컴파일 성공**(10분, `vibe-control.exe` 생성, dead_code 경고 1건뿐)했으나 **WiX/MSI 번들링에서 `failed to bundle project: Couldn't find a .ico icon`**. 근본 원인 = `crates/vc-app/tauri.conf.json`의 `bundle.icon`이 `["icons/icon.png"]` 하나만 참조 → Windows 번들러가 `.ico`를 못 찾음. **`icons/icon.ico`(유효한 6크기 MS 아이콘)는 리포에 이미 존재·추적**되는데 config 목록에 누락돼 있었을 뿐.
 - **수정**: `bundle.icon`을 표준 Tauri 목록으로 확장 — `32x32.png`/`128x128.png`/`128x128@2x.png`/`icon.icns`/`icon.ico`(전부 존재). macOS(.icns)·Windows(.ico) 모두 커버. (브랜치 `fix/windows-ico-icon` → PR → main, `v0.1.0` 태그 재지정 후 재실행.)
 - **결론(윈도우 배포 가능 여부)**: 코드/컴파일은 Windows에서 정상 — 유일한 블로커는 아이콘 config 누락이었고 수정됨. 재실행으로 `.msi`+`-setup.exe` 산출 확인 예정.
+
+---
+
+## 🔎 Integration Drift Audit (2026-09-09) — origin/main 병합 세션 제어 클러스터 델타 정합화
+
+> **성격**: 전체 Reverse Engineering **재실행이 아니다**. origin/main 병합(커밋 `f4540b9`·`4bca8d1`·`3cd305f`) 후 **코드에 존재하나 요구/설계 문서에 없던 델타만** 감사·편입한 **Integration Drift Audit + delta 정합화**다. 기준 워크트리 = **vc-integration**(`bolt/tab-window-integration`). 이미 정합성이 확인된 창/탭·persistence·OS 어댑터 등 기존 영역은 손대지 않았다. 과거 Bolt의 커맨드/테스트 수 등 historical 기록은 보존한다. **코드 무수정.**
+
+### 병합 기능군 (감사 범위)
+1. **Claude Code Context Control** — 세션 실행 상태 5-상태 판별(`derive_run_state`), 출처(Provenance) 표기 작업 요약(Bedrock, 동의 게이트 `should_dispatch`), 명령 전달 결정 코어(`select_delivery_target`, busy-protection). 커밋 `f4540b9`.
+2. **인앱 세션 터미널 / 대화형 PTY** — claude-CLI를 앱 내부 PTY로 구동(`pty.rs`, `portable_pty`+`vt100`), 외부 PowerShell 터미널(`term.rs`), xterm.js 렌더(`GroupTerminal.tsx`). 커밋 `4bca8d1`.
+3. **계정 CloudWatch 사용량** — 당일 계정 전체 Bedrock 토큰 사용량 조회(`usage_cw.rs`, `GetMetricData` SEARCH, 8초 타임아웃). 커밋 `3cd305f`.
+
+### Requirement → Design → Code → Validation 매핑
+| 기능군 | 요구 | 설계 | 코드 | 검증(정본=`session-control/design.md` §6) |
+|---|---|---|---|---|
+| Context Control | FR-15 / NFR-S4 · AC-24 | `session-control/design.md` §3·§5 | `vc-core/{claude_status,summarize,deliver}.rs`, `vc-app/status_query.rs` | 단위 ✅ / UI **ORPHANED** ❌ |
+| 인앱 터미널·PTY | FR-16 · AC-25 | `session-control/design.md` §2·§4 | `vc-app/{pty,term}.rs`, `GroupTerminal.tsx` | 대화형 PTY 배선 ✅ / 외부 터미널·세션 생성삭제 **ORPHANED** ❌ → **PARTIALLY WIRED** |
+| CloudWatch 사용량 | FR-17 · AC-26 | `session-control/design.md` §2·§5 | `vc-app/usage_cw.rs`, `App.tsx` 미터 | 배선 **WIRED** ✅ (단위 테스트는 I/O 경계라 없음) |
+
+### 현재 배선 상태 (vc-integration `App.tsx`·`GroupTerminal.tsx` 실측 invoke 기준)
+- **FR-15 Context Control → ORPHANED**: `getContextClaudeStatus`/`sendCommandToContextClaude`/`sendCommandToSession`/`get·setSummarizationConsent` 모두 0회 참조.
+- **FR-16 인앱 터미널/PTY → PARTIALLY WIRED**: 대화형 PTY(`startInteractiveSession`·`interactiveScreen`·`submitInteractiveLine`·`sendInteractiveText`·`startNewInteractive`·`resizeInteractive`·`onPtyOutput`) **WIRED**; 외부 세션 터미널(term.rs 6종) **ORPHANED**; `startNewCodingSession`/`deleteCodingSession` **ORPHANED**. (미사용 래퍼 `sendInteractiveKey`/`stopInteractiveSession`도 0회.)
+- **FR-17 CloudWatch 사용량 → WIRED**: `claudeUsage` 3회 참조 + 사용량 미터 상시 렌더.
+- 관련 이탈: `known-deviations.md#E4`(orphaned 래퍼)·`#F2`(요약 Bedrock 외부 전송, 동의 게이트 의도적 이탈)·`#A2`(커맨드 인벤토리).
+
+### 현행 커맨드 인벤토리
+- **53개** — `crates/vc-app/src/lib.rs`의 `generate_handler!` 등록 항목 직접 카운트(2026-09-09 실측). 종전 표기 18/22/24/32는 각 시점 기준 역사적 값으로 보존(`known-deviations.md#A2`). 신규 목록: `session-control/design.md` §4.
+
+### 실제 실행한 검증 (grep 아님 — 실행 결과 기준)
+- `cargo test --workspace` (vc-integration) → **120 passed / 0 failed**. 내역: vc-app 18 · vc-core 77 · vc-os-windows 5 · vc-sessions 12 · vc-store 8. vc-os-macos는 Windows에서 0(macOS 전용, 미실행).
+- 프론트엔드 `tsc` **EXIT 0** + `vite build` **EXIT 0** — `dist/assets/index-Dll3aGdj.js` 488.42 kB(gzip 135.31 kB), 43 modules.
+- 검증하지 않은 항목(Context Control·외부 터미널·세션 생성삭제의 end-to-end, CloudWatch 실 계정 경로)은 **PASS로 기록하지 않음**.
+
+### 사람이 결정한 정합화 사항 (Decision / Integration)
+- **D-INT-1**: 채택된 세 기능군을 **정식 요구로 편입**(known-deviations 등록이 아니라). "기존 설계에 없었다"는 이유만으로 이탈 등록하지 않음.
+- **D-INT-2**: 실제 **의도적 이탈만** 이탈로 남김 → 요약의 Bedrock 외부 전송(`#F2`, NFR-S1 예외, 동의 게이트)이 유일.
+- **D-INT-3**: requirements는 **요구·인수 기준만** 두고, WIRED/PARTIAL/ORPHANED·검증 상태는 `session-control/design.md`·`known-deviations.md`·본 섹션에 배치.
+- **D-INT-4**: 정합화 기준 워크트리를 **vc-integration**으로 확정(vibe-control 초안을 포팅하며 vc-integration 실코드 기준으로 wiring 판정 정정 — 특히 CloudWatch 사용량은 vibe-control 초안의 ORPHANED 판정을 **WIRED로 정정**).
+- **D-INT-5**: 요구 번호 충돌 회피 — vc-integration이 이미 쓰는 FR-14(배포)·rev 1.4·AC-22/23와 겹치지 않게 **FR-15/16/17·rev 1.5·AC-24/25/26**으로 부여.
+- **D-INT-6 (보고 대상)**: `lib.rs` `RunEvent::Exit` 주석 `PTY path is unused by the current UI`는 현행 코드와 **불일치하는 stale comment**(대화형 PTY는 실제 배선됨). 문서 정합화 범위이므로 주석은 수정하지 않고 명시만 함.
+
+### 변경한 문서 (이번 정합화)
+- `inception/requirements/requirements.md` — rev 1.5 행, FR-15/16/17, NFR-S4, AC-24/25/26 (요구·인수만).
+- `construction/vc-app/session-control/design.md` — **신설**(배선·검증 정본).
+- `construction/vc-app/functional-design/orchestration.md` — 정합화 배너(18→현행 53 포인터, historical 스냅샷 보존).
+- `known-deviations.md` — A2(→53), E4(orphaned 래퍼), F2(요약 외부 전송).
+- `aidlc-state.md` — Current Stage 요약 클로즈 + 본 전용 섹션.
+- `audit.md` — 정합화 로그 append.

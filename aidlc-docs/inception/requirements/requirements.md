@@ -17,6 +17,7 @@
 | **1.2** | **2026-09-08** | **확장(Extension) 구성 하향** — SECURITY-04(CSP)·SECURITY-13(강화 조항) 명시적 예외, PBT Partial(차단) → Advisory(권고). §1 확장 표 · §6 보안 매핑 · §7 PBT · §9 완료 기준 반영 | 사용자 결정 **Q3=C (D-50~D-57 전부 면제)** · waiver 기록: `known-deviations.md#H-5` |
 | **1.3** | **2026-09-09** | **FR-13.8 신설(인트로 시각 구성)** — 도구 패드를 중앙 정렬 5줄 그리드로 배치, 중앙에 로고를 초점으로, 패드는 저불투명도로 흐릿하게 유지(로고 미강조). AC-21에 구성 확인 절 추가 | 사용자 요청 — 인트로 애니메이션 디자인 변경(랜덤 산포 → 조직화된 그리드 + 중앙 로고). U7 프론트엔드 신규 Bolt |
 | **1.4** | **2026-09-09** | **FR-14 신설(배포 & 설치) + AC-23 신설**. 배포 채널을 **GitHub Releases**로 정식화하고 **macOS/Windows 명령어 한 줄 설치**(install.sh / install.ps1)를 제공한다. §5 "범위 제외"의 "앱 장터 배포"를 유지하되 "GitHub Releases 배포는 범위 내"로 정합화. SECURITY-10 waiver의 "CI 도입 시 해제" 조건 트리거 반영 | 사용자 요청 — "배포 방법 수정: GitHub release 페이지에 배포 파일 업로드 + Windows/macOS 명령어 설치". Operations/Delivery **신규 Bolt R1** |
+| **1.5** | **2026-09-09** | **Integration Drift Audit + delta 정합화로 편입** — ① FR-15 신설(Claude Code Context Control: 5-상태 실행 상태 + 동의 게이트 작업 요약 + 명령 전달 결정 코어). ② FR-16 신설(인앱 세션 터미널 + 대화형 PTY 세션). ③ FR-17 신설(계정 CloudWatch 토큰 사용량 미터). ④ NFR-S4 신설(요약의 Bedrock 외부 전송을 NFR-S1 예외로 명시 — 동의 게이트). AC-24/25/26 신설. | **전체 RE 재실행이 아님**: origin/main 병합 후 코드에 존재하나 요구/설계에 없던 델타만 감사·편입(커밋 `f4540b9`·`4bca8d1`·`3cd305f`). 구현 현황·검증·orphaned 여부는 `aidlc-state.md`·`known-deviations.md`·`construction/vc-app/session-control/design.md`에 기록 |
 
 > **개정 원칙 (1.1)**: 코드에 맞춰 요구사항을 사후 합리화하지 않는다. 각 개정 항목은 **① 축소(scope-down)** / **② 연기(deferred — 백로그 유지)** / **③ 범위 제외(out of scope)** 중 하나로 명시하고, 되돌릴 근거를 남긴다. 연기 항목은 삭제가 아니며 `known-deviations.md` 백로그와 1:1 대응한다.
 
@@ -209,6 +210,31 @@
 - **FR-14.5** 현행 빌드는 **서명/공증되지 않음**(핵애톤 결정, `#H-5`·`production-readiness-checklist.md`). 따라서 macOS 스크립트는 설치 후 **Gatekeeper 격리 속성(`com.apple.quarantine`)을 해제**하고, 첫 실행 시 Automation/Accessibility 권한 안내를 출력한다. Windows 스크립트는 **SmartScreen "알 수 없는 게시자"** 경고 가능성을 안내한다. 배포 서명은 별도 백로그(`release-packaging.md §2`).
 - **FR-14.6** 자동 업데이트(in-app updater)와 앱 장터 등록은 여전히 **범위 밖**이다(§5). 사용자는 새 릴리스가 나오면 같은 설치 명령을 다시 실행해 갱신한다.
 
+### FR-15 Claude Code 컨텍스트 제어 (Context Control) — **[1.5 신설]**
+> **정합화 유래**: 이 요구는 처음부터 계획된 것이 아니라, origin/main 병합 후 **Integration Drift Audit(2026-09-09)**에서 코드에 존재하지만 요구/설계에 없던 기능으로 검출되어(커밋 `f4540b9`) **정식 요구로 편입**된 것이다. FR-12.3/12.4(마지막 질문·2-상태 완료여부)를 확장한다. 구현 현황·검증 결과·미배선(orphaned) 여부는 요구 문서가 아니라 `aidlc-state.md`(통합 감사 섹션)·`known-deviations.md`·`construction/vc-app/session-control/design.md`(§검증)에 기록한다.
+
+- **FR-15.1** 세션 실행 상태를 **5-상태**로 판별한다: `Working`(진행 중) · `WaitingForUser`(사용자 입력 대기) · `Idle`(30초 이상 무활동) · `Inactive`(프로세스 없음) · `Unknown`(판별 불가). FR-12.4의 2-상태(대기/대기없음)를 세분화한 것이며, 판별 불가 시 임의 단정하지 않는다(→ FR-12.4 원칙 유지). 순수 도메인 함수 `derive_run_state`로 결정한다(`vc-core/src/claude_status.rs`).
+- **FR-15.2** 세션의 최근/현재 작업을 **작업 요약(Work Summary)**으로 제시하되, 각 항목에 **출처(Provenance)**를 `Fact`(로그에 직접 근거) 또는 `Inferred`(해석)로 구분해 표기한다. 근거 없는 작업을 지어내지 않는다(cf. FR-9.7·FR-12.7). 현재 작업은 `Working` 상태에서만 노출한다.
+- **FR-15.3** 작업 요약은 **AWS Bedrock**로 세션 대화 발췌(최신 최대 40턴 + 직전 요약)를 전송해 생성한다. 전송은 **① 사용자 명시 동의 · ② Bedrock 키 존재 · ③ 30초 스로틀·신규 콘텐츠 있음 · ④ 중복 미실행**의 4개 가드를 모두 통과할 때만 이뤄진다(순수 결정 함수 `should_dispatch` — 단일 프라이버시 초크 포인트). 동의 없거나 콘텐츠 불변이면 외부 호출은 0건이다. (→ NFR-S4, 동의 게이트)
+- **FR-15.4** 요약 실패·전송 오류·파싱 불가 응답은 모두 "정보 부족(Insufficient)"으로 강등하며 앱은 중단되지 않는다(fail-safe, → NFR-R1). 부분 추측을 하지 않는다.
+- **FR-15.5** 사용자는 요약 동의를 **설정으로 켜고 끌 수 있어야** 한다(`get/set_summarization_consent`, 기본 비동의). 동의 상태는 로컬 설정에만 저장한다.
+- **FR-15.6** 식별된 대상 세션으로 **명령을 전달**할 수 있다. 전달 대상 결정(`select_delivery_target`)은 순수 결정 코어이며, **모호하거나·외부(foreign)·`Working` 중인 세션에는 절대 전달하지 않는다**(busy-protection). (구현: `vc-core/src/deliver.rs`)
+
+### FR-16 인앱 세션 터미널 · 대화형 세션 (In-app Session Terminal / Interactive PTY) — **[1.5 신설]**
+> **정합화 유래**: Integration Drift Audit(2026-09-09)에서 편입된 요구(커밋 `4bca8d1`). FR-12.8("연결 터미널 최전면")을 **앱 내부 터미널**로 확장한다. 구현 현황·검증은 `aidlc-state.md`·`construction/vc-app/session-control/design.md`(§검증)에 기록한다.
+
+- **FR-16.1** 세션을 **앱 내부 터미널**로 열어 claude-CLI와 상호작용할 수 있다. 대화형 세션은 **PTY**(`portable_pty` + `vt100` 에뮬레이터)로 구동하며 화면을 앱에 렌더한다(`ROWS=45`, `COLS=120`). (구현: `vc-app/src/pty.rs`)
+- **FR-16.2** 대화형 세션에 **라인 제출·키 입력·텍스트 전송·리사이즈·중지**를 할 수 있고, 현재 화면(screen)을 조회할 수 있다. claude-CLI의 **선택 프롬프트를 감지**(`DetectedPrompt`)해 표면화한다.
+- **FR-16.3** 외부 PowerShell 터미널도 열 수 있으며(`vc-app/src/term.rs`), **세션 == 터미널**로 PID 추적한다. 여러 세션 터미널의 개폐·목록·전송을 지원한다.
+- **FR-16.4** 앱이 담당하는 **세션 터미널·PTY 제어와 입출력 전달은 전부 로컬**이다 — 앱은 세션 데이터를 Bedrock 등 외부로 전송하지 않는다(§12 / NFR-S1 유지). 단 PTY 안에서 실행되는 **claude-CLI 자체의 외부 통신(모델 호출·인증)은 CLI의 실행·인증 정책을 따르며 앱의 관할 밖**이다 — 이는 앱의 자동 외부 전송(NFR-S1)이나 요약의 동의 게이트 전송(NFR-S4)과 구분된다. 새 코딩 세션 생성·삭제(`start_new_coding_session`/`delete_coding_session`)도 로컬 파일 조작이다.
+
+### FR-17 계정 토큰 사용량 미터 (Account CloudWatch Usage) — **[1.5 신설]**
+> **정합화 유래**: Integration Drift Audit(2026-09-09)에서 편입된 요구(커밋 `3cd305f`). 구현 현황·검증 여부는 `aidlc-state.md`·`construction/vc-app/session-control/design.md`(§검증)에 기록한다.
+
+- **FR-17.1** 당일(로컬 자정~현재) **계정 전체 Bedrock 토큰 사용량**(입력·출력 토큰, 호출 수)을 표시한다. 앱 내 콘솔 호출뿐 아니라 계정 전체가 대상이다.
+- **FR-17.2** 사용량은 **Amazon CloudWatch** `AWS/Bedrock` 지표(`InputTokenCount`/`OutputTokenCount`/`Invocations`)를 `GetMetricData` SEARCH로 모델 전체 합산해 조회한다. **표준 AWS 자격증명**(`cloudwatch:GetMetricData`)이 필요하며(Bedrock invoke 키로는 불가), 없으면 **로컬 집계로 폴백**한다.
+- **FR-17.3** 조회는 **8초 타임아웃**으로 제한해 자격증명 부재·IMDS 프로브가 UI를 지연시키지 않게 한다(→ NFR-Pf1/NFR-R1). **정수 토큰 수만 반환**되며 자격증명·프롬프트·응답은 넘어오지 않는다.
+
 ---
 
 ## 4. 비기능 요구사항 (Non-Functional Requirements)
@@ -232,6 +258,8 @@
 - **NFR-S1** (개정 2026-09-08) 앱은 사용자의 문서 내용·작업 묶음·코딩 세션 **데이터**를 자동으로 외부 서버로 전송하지 않는다. 코딩 세션 열람(FR-12)은 로컬 파일만 읽으며 네트워크 호출이 없다. **예외**: 사용자가 명시적으로 입력하는 앱 내 Claude 콘솔 프롬프트는 NFR-S3의 규정에 따라 외부 전송된다(작업 묶음/세션 데이터의 자동 전송은 여전히 금지).
 - **NFR-S2** 파일 경로·웹 주소는 문자열 명령 조합이 아니라 OS 실행 기능의 **인자로 전달**한다. (→ SECURITY-05 injection prevention)
 - **NFR-S3** (신설 2026-09-08 — 앱 내 Claude 프롬프트 콘솔) 콘솔은 **사용자가 명시적으로 입력한 프롬프트만** AWS Bedrock 런타임으로 **HTTPS 전송**한다. 인증 토큰(Bedrock API 키)은 하드코딩·로그·UI 노출 금지이며 로컬 설정(OS config 디렉터리, 리포 밖)에만 저장한다. 작업 묶음·세션 대화·문서 내용을 자동 첨부하지 않는다. 상세: `construction/vc-app/claude-console/design.md`. (→ SECURITY-01 transit, SECURITY-12 자격증명)
+
+- **NFR-S4** (신설 2026-09-09 — Context Control 작업 요약) FR-15.3의 작업 요약은 **세션 대화 발췌를 Bedrock로 HTTPS 전송**하므로 NFR-S1("세션 데이터 자동 외부 전송 금지")의 **명시적 예외**다. 이 전송은 **NFR-S1의 '자동' 전송이 아니라** ① 사용자 명시 동의(`should_dispatch`의 필수 가드) 없이는 **0건**이며, ② 동의 시에도 최소 발췌(최신 40턴+직전 요약)만, ③ 정수 토큰·요약 JSON만 회수한다. 동의 게이트가 유일한 프라이버시 초크 포인트다. 이는 원래 설계에 없던 **의도적 이탈**로 `known-deviations.md#F2`에 기록한다. Bedrock 토큰 취급은 NFR-S3와 동일(로그·UI 미노출, 로컬 설정 저장). 상세: `construction/vc-app/session-control/design.md`. (→ SECURITY-01 transit, SECURITY-12 자격증명, FR-15.3/15.5)
 
 ### NFR-사용성/문서
 - **NFR-U1** 데이터 저장 위치·권한 설정 방법·기본 사용법을 사용자 문서로 제공한다. (→ 완료 기준)
@@ -317,6 +345,9 @@ macOS·Windows 실제 환경에서 확인한다.
 - **AC-20** 창이 여러 개인 앱을 클릭하면 창/탭 목록이 펼쳐지고, 특정 창/탭을 선택하면 정확히 그 창만 최전면으로 온다(다른 창을 대신 보여주지 않음); 창이 하나인 앱도 동일 상호작용으로 그 창을 활성화하며, 닫힌 창은 갱신 후 목록에서 사라진다 (FR-2.8, FR-2.2/2.4/2.6, FR-4.1/4.2)
 - **AC-22** **[1.3 신설 2026-09-09]** 윈도우 버전을 실행하면 OS 기본 **제목표시줄이 표시되지 않고**, 맥 버전과 **동일한 화면**(좌측 실행앱 패널 + 우측 카드, 상단 여백 포함)이 나온다. 상단 영역 드래그로 창 이동이 되고 창 크기 조절이 가능하다. **좌상단에 맥 신호등을 모사한 닫기/최소화/최대화 버튼이 있고, 각 버튼에 구분용 심볼(× / − / □)이 표시되며 각각 실제로 창을 닫기/최소화/최대화한다** (FR-8.11, FR-8.6)
 - **AC-23** **[1.4 신설 2026-09-09]** 버전 태그(`v*`)를 푸시하면 GitHub Releases 페이지에 **macOS 유니버설 .dmg + Windows .msi/`-setup.exe`** 자산이 게시되고, 모든 자산 업로드 후 릴리스가 published(latest)로 전환된다. 새 macOS/Windows 머신에서 문서의 **한 줄 설치 명령**을 실행하면 최신 릴리스가 내려받아져 설치되고 앱이 실행된다(macOS는 격리 해제 후 실행) (FR-14.1~14.5). *검증*: CI 성공(각 OS 러너 그린) + 실제 릴리스 자산 존재 + 두 OS에서 설치 명령 E2E 1회.
+- **AC-24** **[1.5 신설]** 사용자 동의가 없으면 작업 요약을 위한 Bedrock 외부 호출이 **0건**이고, 콘텐츠가 불변이면 재요약이 스로틀되며, 실행 상태는 5-상태로 판별되고 판별 불가는 `Unknown`으로 남는다 (FR-15.1/15.3/15.4). *(검증 범위·현황은 `construction/vc-app/session-control/design.md` §검증 참조)*
+- **AC-25** **[1.5 신설]** 세션을 앱 내부 터미널로 열어 claude-CLI와 상호작용할 수 있고(라인/키/텍스트/리사이즈/중지), 선택 프롬프트가 감지·표면화되며, **앱이 담당하는 PTY 제어·세션 입출력 전달은 전부 로컬**이라 앱이 세션 데이터를 외부로 전송하지 않는다(claude-CLI 자체의 외부 통신은 CLI의 실행·인증 정책을 따르며 앱의 관할 밖) (FR-16.1~16.4). *(경로별 배선 상태는 `session-control/design.md` §검증 참조)*
+- **AC-26** **[1.5 신설]** 표준 AWS 자격증명이 있으면 당일 계정 Bedrock 토큰 사용량이 CloudWatch로 조회되고, 없거나 8초 초과 시 로컬 집계로 폴백하며 UI가 지연되지 않는다 (FR-17.1~17.3).
 
 ---
 
