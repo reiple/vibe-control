@@ -172,30 +172,60 @@ fn resolve_claude_program() -> std::ffi::OsString {
     "claude".into()
 }
 
-/// Ask the user's login shell where `claude` is, so profile-managed PATHs
-/// (nvm/asdf/volta) are honoured. Interactive+login so both `.zprofile` and
-/// `.zshrc` style PATH exports are loaded; stdin nulled so it can't block on a
-/// tty. Takes the last non-empty output line (skips any rc-file banner noise).
+/// The user's LOGIN-SHELL environment, captured once and cached. A
+/// Finder-launched `.app` inherits only LaunchServices' minimal env — none of
+/// the user's PATH additions and, critically, none of the auth vars their
+/// profile exports (`AWS_BEARER_TOKEN_BEDROCK` / `CLAUDE_CODE_USE_BEDROCK` /
+/// `ANTHROPIC_API_KEY`…). So a PTY `claude` runs "Not logged in" even though the
+/// user's own terminal is authed. Sourcing an interactive+login shell replays
+/// the same `.zprofile`/`.zshrc` their terminal loads, so the spawned `claude`
+/// authenticates identically. Cached for the process lifetime (profile env is
+/// stable) — one shell spawn, not one per session start. stdin nulled so the
+/// shell can't block on a tty; a sentinel line separates any rc banner from the
+/// `env` dump.
+#[cfg(unix)]
+fn login_shell_env() -> &'static [(String, String)] {
+    static CACHE: OnceLock<Vec<(String, String)>> = OnceLock::new();
+    CACHE.get_or_init(|| {
+        use std::process::{Command, Stdio};
+        const SENTINEL: &str = "__VC_ENV__";
+        let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+        let out = match Command::new(shell)
+            .args(["-ilc", "printf '%s\\n' __VC_ENV__; env"])
+            .stdin(Stdio::null())
+            .output()
+        {
+            Ok(o) if o.status.success() => o,
+            _ => return Vec::new(),
+        };
+        let text = String::from_utf8_lossy(&out.stdout);
+        // Everything after the sentinel is the `env` dump; anything before it is
+        // rc-file banner noise we discard.
+        let body = match text.split_once(&format!("{SENTINEL}\n")) {
+            Some((_, rest)) => rest,
+            None => return Vec::new(),
+        };
+        body.lines()
+            .filter_map(|line| line.split_once('='))
+            .filter(|(k, _)| !k.is_empty())
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    })
+}
+
+/// Where `claude` is on the user's PATH (profile-managed installs: nvm/asdf/
+/// volta). Reuses the cached login-shell env — no extra shell spawn.
 #[cfg(unix)]
 fn login_shell_claude() -> Option<String> {
-    use std::process::{Command, Stdio};
-    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
-    let out = Command::new(shell)
-        .args(["-ilc", "command -v claude"])
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    if !out.status.success() {
-        return None;
-    }
-    let path = String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .map(str::trim)
-        .filter(|l| !l.is_empty())
-        .next_back()
-        .unwrap_or("")
-        .to_string();
-    (!path.is_empty() && std::path::Path::new(&path).is_file()).then_some(path)
+    let path = login_shell_env()
+        .iter()
+        .find(|(k, _)| k == "PATH")
+        .map(|(_, v)| v.as_str())?;
+    path.split(':')
+        .filter(|d| !d.is_empty())
+        .map(|d| std::path::Path::new(d).join("claude"))
+        .find(|c| c.is_file())
+        .and_then(|c| c.to_str().map(str::to_string))
 }
 
 #[cfg(not(unix))]
@@ -203,26 +233,46 @@ fn resolve_claude_program() -> std::ffi::OsString {
     "claude".into()
 }
 
-/// PATH for the child, with the well-known bin dirs prepended (unix only). A
-/// no-op elsewhere so Windows keeps its inherited environment untouched.
+/// Overlay the user's login-shell environment onto the child (unix only), then
+/// set PATH to the well-known bin dirs + the shell's PATH (deduped). This is
+/// what lets a Finder-launched bundle's `claude` both resolve its tools AND
+/// authenticate (see `login_shell_env`). Called AFTER the app-env copy so the
+/// profile values win. A no-op elsewhere so Windows keeps its inherited env.
 #[cfg(unix)]
-fn apply_child_path(builder: &mut CommandBuilder) {
+fn augment_child_env(builder: &mut CommandBuilder) {
+    // Overlay every profile var except ones that would fight the child's own
+    // process/tty identity (PWD/OLDPWD are set from cwd; TERM we set explicitly;
+    // SHLVL/_ are shell bookkeeping). PATH is merged separately below.
+    let mut shell_path: Option<&str> = None;
+    for (k, v) in login_shell_env() {
+        match k.as_str() {
+            "PATH" => shell_path = Some(v),
+            "PWD" | "OLDPWD" | "SHLVL" | "TERM" | "_" => {}
+            _ => {
+                builder.env(k, v);
+            }
+        }
+    }
+    // PATH = well-known bin dirs first, then the shell's PATH (or, if the shell
+    // capture failed, the inherited PATH), skipping duplicates.
     let mut parts: Vec<String> = extra_bin_dirs()
         .into_iter()
         .map(|p| p.to_string_lossy().into_owned())
         .collect();
-    if let Ok(existing) = std::env::var("PATH") {
-        for p in existing.split(':') {
-            if !p.is_empty() && !parts.iter().any(|x| x == p) {
-                parts.push(p.to_string());
-            }
+    let base = shell_path
+        .map(str::to_string)
+        .or_else(|| std::env::var("PATH").ok())
+        .unwrap_or_default();
+    for p in base.split(':') {
+        if !p.is_empty() && !parts.iter().any(|x| x == p) {
+            parts.push(p.to_string());
         }
     }
     builder.env("PATH", parts.join(":"));
 }
 
 #[cfg(not(unix))]
-fn apply_child_path(_builder: &mut CommandBuilder) {}
+fn augment_child_env(_builder: &mut CommandBuilder) {}
 
 /// Start (or reuse) an interactive PTY-backed `claude` for `session_ref`.
 /// Normally resumes the existing transcript (`--resume <id>` in its recorded
@@ -322,11 +372,13 @@ fn spawn_into_registry(
     for (k, v) in std::env::vars() {
         builder.env(k, v);
     }
+    // Overlay the user's login-shell env (PATH + profile-exported auth vars) so
+    // a Finder-launched bundle's `claude` resolves its tools AND authenticates
+    // instead of reporting "Not logged in". Runs AFTER the app-env copy so the
+    // profile values win; PATH is merged with the well-known bin dirs inside.
+    augment_child_env(&mut builder);
+    // TERM last so nothing the profile exported clobbers our PTY type.
     builder.env("TERM", "xterm-256color");
-    // A Finder-launched bundle inherits a minimal PATH; prepend the dirs where
-    // `claude` and its child tools live so the PTY child resolves them (this is
-    // set AFTER the env copy above so it overrides the inherited PATH).
-    apply_child_path(&mut builder);
 
     let child = pair
         .slave
