@@ -1087,10 +1087,13 @@ export default function App() {
                       onMouseEnter={() => setMentionActive(i)}
                       onClick={() => applyMention(b)}
                     >
-                      @{b.name}
-                      <span className="mention-sub">
-                        {groupSessionRef(b) ? "세션 있음" : "세션 없음"}
-                      </span>
+                      <span
+                        className={`mention-dot ${
+                          groupSessionRef(b) ? "live" : ""
+                        }`}
+                        title={groupSessionRef(b) ? "세션 있음" : "세션 없음"}
+                      />
+                      <span className="mention-name">@{b.name}</span>
                     </button>
                   </li>
                 ))}
@@ -1106,14 +1109,16 @@ export default function App() {
                 // While the mention menu is open, arrows move the highlight and
                 // Enter/Tab pick it (Esc dismisses) — so those keys don't send.
                 if (showMentions) {
-                  if (e.key === "ArrowDown") {
+                  // The menu now flows left-to-right, so Right/Down advance and
+                  // Left/Up go back (both directions kept for muscle memory).
+                  if (e.key === "ArrowRight" || e.key === "ArrowDown") {
                     e.preventDefault();
                     setMentionActive(
                       (i) => (i + 1) % mentionSuggestions.length
                     );
                     return;
                   }
-                  if (e.key === "ArrowUp") {
+                  if (e.key === "ArrowLeft" || e.key === "ArrowUp") {
                     e.preventDefault();
                     setMentionActive(
                       (i) =>
