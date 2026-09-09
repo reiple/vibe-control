@@ -220,3 +220,22 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **면제 항목 재검토 트리거**: 저장 파일 외부 유입 → SECURITY-13 / 원격 콘텐츠·배포 서명 빌드 → CSP / CI 도입 → PBT-08·SECURITY-10 (`known-deviations.md#H-5`)
 
 ### ✅ 정합화 재실행 #2 — **완료 (2026-09-08)**
+
+---
+
+## 🆕 New Bolt (U7 frontend) — Intro animation redesign (2026-09-09)
+트리거: 사용자 요청 — "블럭을 랜덤 정렬이 아닌 화면 중앙 가로 정렬로 5줄로 하고 가운데에는 로고를 배치하며 블럭에 걸린 디자인은 유지하되 … 로고보다 강조되서는 안되며 이를 위해 opacity같이 흐릿하게 한다."
+
+**분류**: 브라운필드, 프론트엔드 전용 시각 변경. **새 Unit 불필요** — 기존 U7(frontend)의 부팅 스플래시(FR-13)에 대한 **신규 Bolt**. Application Design / 신규 컴포넌트 없음(적응형 워크플로우 — 해당 스테이지 스킵).
+
+### INCEPTION 문서 반영
+- [x] `requirements.md` v1.3 — **FR-13.8 신설**(인트로 시각 구성: 중앙 5줄 그리드 · 중앙 로고 초점 · 패드 저불투명도 유지) + 개정 이력 · AC-21 보강
+- [x] `stories.md` US-13.1 — "인트로 구성" 시나리오 신설(FR-13.8)
+- [x] `intro-animation.md` — 스토리보드 재작성(scattered→converge → 조직화된 중앙 그리드 + 중앙 로고, 패드 흐릿)
+
+### CONSTRUCTION (U7 Code Generation)
+- [x] `frontend/src/App.tsx` `Splash` — 패드를 **중앙 정렬 5×7 그리드**(`GRID_ROWS=5`, 고정 셀 오프셋, 랜덤 산포 제거)로 배치, 활성화는 **중앙→바깥 리플** 순서. 수렴 허브+타이틀 종료를 **중앙 `.intro-logo`**(오렌지 레코드-닷 마크 + `vibe control` 워드마크)로 교체
+- [x] `frontend/src/styles.css` — `.intro-field` **opacity 0.24**(흐릿하게, 로고 미강조) · `intro-pad-converge`/`intro-hub`/`intro-steps`/`intro-title` 제거 · `.intro-logo(+::before 스포트라이트)`/`.intro-logo-mark`/`.intro-logo-word` 추가 · reduced-motion 종료 상태 갱신
+- [x] **사용자 중간 요청 반영** — "동그란 원 scale 되는 애니메이션 제거" → 원형 스케일 `.intro-pulse` 링 삭제(JSX+CSS+reduced-motion)
+- [x] **검증**: `npx tsc --noEmit` 통과 · `npx vite build` 성공(CSS 25.00 kB / JS 166.20 kB) · `cargo build -p vc-app` — vc-app 컴파일 성공(마지막 단계만 실행 중 `vibe-control.exe` 파일 잠금 `os error 5`로 교체 실패 — 코드 오류 아님)
+- [ ] **실 OS 시각 확인 (AC-21 E2E)** — Windows 실행하여 5줄 그리드·중앙 로고·흐릿한 패드·~5.8s 코레오그래피 육안 확인 필요(이 환경에서 GUI 확인 불가)
