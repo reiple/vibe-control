@@ -619,6 +619,73 @@ fn add_app_resource(
     Ok(app.get_bundles().to_vec())
 }
 
+/// Find an 8-4-4-4-12 hex UUID token anywhere in a terminal window title.
+/// Claude Code resumes launched by this app show `claude --resume <uuid>` in
+/// the title, so this exactly identifies the session when present.
+#[cfg(target_os = "macos")]
+fn session_id_from_title(title: &str) -> Option<String> {
+    fn is_uuid(tok: &str) -> bool {
+        let b = tok.as_bytes();
+        if b.len() != 36 {
+            return false;
+        }
+        b.iter().enumerate().all(|(i, &c)| match i {
+            8 | 13 | 18 | 23 => c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
+    }
+    title
+        .split(|c: char| c.is_whitespace())
+        .find(|tok| is_uuid(tok))
+        .map(str::to_string)
+}
+
+/// If a dragged window is actually an open Claude Code terminal, resolve it to
+/// its session transcript so it can register as a live coding session (with a
+/// conversation preview + 대화 보기) instead of a bare window ref. Returns the
+/// session's `(label, session_ref)`. Best-effort — `None` when the window isn't
+/// a recognizable coding session, so the caller falls back to a plain window.
+///
+/// Two join keys, most precise first: (1) a session id embedded in the terminal
+/// title (how our own resumes launch), (2) the terminal's working directory
+/// matched to the most-recently-active session started there.
+#[cfg(target_os = "macos")]
+fn resolve_terminal_session(handle: &str, title: &str) -> Option<(String, String)> {
+    let mut parts = handle.split('\u{1f}');
+    let app = parts.next().unwrap_or("");
+    let _title = parts.next();
+    let idx: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    // discover() returns sessions most-recently-modified first, so the first
+    // match on either key is the active session for that terminal.
+    let sessions = ClaudeCodeSessionProvider.discover().unwrap_or_default();
+
+    // (1) Exact: session id in the title.
+    if let Some(id) = session_id_from_title(title) {
+        let needle = format!("{id}.jsonl");
+        if let Some(s) = sessions.iter().find(|s| s.session_ref.ends_with(&needle)) {
+            return Some((s.label.clone(), s.session_ref.clone()));
+        }
+    }
+
+    // (2) Robust: match the terminal's cwd to a session's cwd.
+    let cwd = vc_os_macos::terminal_window_cwd(app, title, idx)?;
+    let cwd_canon = std::fs::canonicalize(&cwd).ok();
+    for s in &sessions {
+        let Some(scwd) = ClaudeCodeSessionProvider::session_cwd(&s.session_ref) else {
+            continue;
+        };
+        let same = match (&cwd_canon, std::fs::canonicalize(&scwd).ok()) {
+            (Some(a), Some(b)) => *a == b,
+            _ => scwd == cwd,
+        };
+        if same {
+            return Some((s.label.clone(), s.session_ref.clone()));
+        }
+    }
+    None
+}
+
 /// Add a specific app child (a browser tab, a Finder folder, or a single app
 /// window) dragged from an expanded group into a context group (FR-2.2 / §13.3).
 /// `kind` selects the resource kind: "tab" → browser tab (target = URL), "folder"
@@ -634,31 +701,48 @@ fn add_child_resource(
     target: String,
     handle: String,
 ) -> std::result::Result<Vec<WorkBundle>, CommandError> {
-    let rkind = match kind.as_str() {
-        "tab" => ResourceKind::BrowserTab,
-        "folder" => ResourceKind::Folder,
-        _ => ResourceKind::WindowRef,
-    };
-    // The child handle carries identity the bare target lacks: `app\u{1f}url` for a
-    // browser tab (WHICH browser to drive so activation selects the exact tab) and
-    // `Finder\u{1f}name` for a path-less Finder window (Recents / saved search,
-    // raised by name). Pick the descriptor (dedup + display) and the reopen hint
-    // (drives activation) per kind so clicking the registered item lands on it.
-    let handle_or_target = if handle.is_empty() {
-        target.as_str()
-    } else {
-        handle.as_str()
-    };
-    let (descriptor, reopen): (&str, &str) = match rkind {
-        // URL identifies the tab for dedup; the `app\u{1f}url` handle drives it.
-        ResourceKind::BrowserTab => (target.as_str(), handle_or_target),
-        // POSIX path when present; else fall back to the `Finder\u{1f}name` handle
-        // so a path-less window is still uniquely identified and re-raisable.
-        ResourceKind::Folder if target.is_empty() => (handle.as_str(), handle.as_str()),
-        ResourceKind::Folder => (target.as_str(), target.as_str()),
-        // A window ref's target already IS its opaque handle.
-        _ => (target.as_str(), handle_or_target),
-    };
+    // A dragged window that is actually an open Claude Code terminal registers
+    // as a live CodingSession (conversation preview + 대화 보기) — the same kind
+    // "Capture current" produces — rather than a bare window ref. Best-effort;
+    // falls through to the normal kind mapping when it isn't a coding session.
+    #[cfg(target_os = "macos")]
+    let session = (kind != "tab" && kind != "folder")
+        .then(|| resolve_terminal_session(&handle, &name))
+        .flatten();
+    #[cfg(not(target_os = "macos"))]
+    let session: Option<(String, String)> = None;
+
+    // (display_name, kind, descriptor, reopen). For a coding session the label
+    // and .jsonl path come from the session, matching capture_current so the two
+    // paths dedup together. Otherwise the child handle carries identity the bare
+    // target lacks: `app\u{1f}url` for a browser tab (WHICH browser to drive) and
+    // `Finder\u{1f}name` for a path-less Finder window (raised by name).
+    let (display_name, rkind, descriptor, reopen): (String, ResourceKind, String, String) =
+        if let Some((label, session_ref)) = session {
+            (label, ResourceKind::CodingSession, session_ref.clone(), session_ref)
+        } else {
+            let rkind = match kind.as_str() {
+                "tab" => ResourceKind::BrowserTab,
+                "folder" => ResourceKind::Folder,
+                _ => ResourceKind::WindowRef,
+            };
+            let handle_or_target = if handle.is_empty() {
+                target.as_str()
+            } else {
+                handle.as_str()
+            };
+            let (descriptor, reopen): (&str, &str) = match rkind {
+                // URL identifies the tab for dedup; the `app\u{1f}url` handle drives it.
+                ResourceKind::BrowserTab => (target.as_str(), handle_or_target),
+                // POSIX path when present; else fall back to the `Finder\u{1f}name`
+                // handle so a path-less window is uniquely identified and re-raisable.
+                ResourceKind::Folder if target.is_empty() => (handle.as_str(), handle.as_str()),
+                ResourceKind::Folder => (target.as_str(), target.as_str()),
+                // A window ref's target already IS its opaque handle.
+                _ => (target.as_str(), handle_or_target),
+            };
+            (name.clone(), rkind, descriptor.to_string(), reopen.to_string())
+        };
 
     let mut app = state.lock().map_err(|_| CommandError {
         message: "state lock poisoned".into(),
@@ -677,7 +761,7 @@ fn add_child_resource(
         .iter()
         .any(|r| r.kind == rkind && r.identity.descriptor == descriptor);
     if !already {
-        bundle.add_resource(make_resource(&name, rkind, descriptor, Some(reopen)));
+        bundle.add_resource(make_resource(&display_name, rkind, &descriptor, Some(&reopen)));
     }
 
     app.set_bundles(bundles)?;

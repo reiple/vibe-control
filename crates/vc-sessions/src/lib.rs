@@ -92,6 +92,26 @@ impl ClaudeCodeSessionProvider {
         None
     }
 
+    /// The working directory a session was started in, read cheaply by
+    /// streaming only the first lines that could carry `cwd` (transcripts can be
+    /// many MB, so we never load the whole file just for this). Used to match an
+    /// already-open terminal to the session running in it. `None` if the ref
+    /// can't be resolved or no cwd line is found near the top.
+    pub fn session_cwd(session_ref: &str) -> Option<String> {
+        use std::io::{BufRead, BufReader};
+        let path = Self::resolve_path(session_ref)?;
+        let file = fs::File::open(&path).ok()?;
+        for line in BufReader::new(file).lines().take(400).map_while(|l| l.ok()) {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if let Some(c) = v.get("cwd").and_then(Value::as_str) {
+                return Some(c.to_string());
+            }
+        }
+        None
+    }
+
     /// (cwd, session_id) needed to resume a session with `claude --resume`.
     /// cwd is read from the first log line that carries it.
     pub fn resume_info(session_ref: &str) -> Option<(String, String)> {
