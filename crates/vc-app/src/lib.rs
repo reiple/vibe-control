@@ -313,12 +313,38 @@ impl<E: std::fmt::Display> From<E> for CommandError {
     }
 }
 
+/// Return all saved bundles, freshly tagging each resource with its live status
+/// (FR-7.1/7.2): a resource whose descriptor matches a currently-running app
+/// name or window/tab title is `Active`, otherwise `Inactive`/`Unknown`. Status
+/// is recomputed on every call (never persisted — see `Resource.status`) so the
+/// UI reflects the real world; the frontend dims inactive resources (FR-7.3).
 #[tauri::command]
-fn get_bundles(state: State<SharedState>) -> std::result::Result<Vec<WorkBundle>, CommandError> {
-    let app = state.lock().map_err(|_| CommandError {
-        message: "state lock poisoned".into(),
-    })?;
-    Ok(app.get_bundles().to_vec())
+async fn get_bundles(
+    state: State<'_, SharedState>,
+) -> std::result::Result<Vec<WorkBundle>, CommandError> {
+    // Snapshot running window/tab + app titles first (same fast enumeration
+    // list_running_apps uses), outside the state lock. App-level enumeration
+    // needs no OS permission, so evaluation runs with has_permission=true;
+    // per-window/session PermissionRequired reflection stays deferred (FR-12.7/B6).
+    let running_titles = running_titles_snapshot();
+
+    let mut bundles = {
+        let app = state.lock().map_err(|_| CommandError {
+            message: "state lock poisoned".into(),
+        })?;
+        app.get_bundles().to_vec()
+    };
+
+    for b in &mut bundles {
+        let snaps = vc_core::evaluate::evaluate(&b.resources, &running_titles, true);
+        let by_id: HashMap<_, _> = snaps.iter().map(|s| (s.resource_id, s.status)).collect();
+        for res in &mut b.resources {
+            if let Some(&st) = by_id.get(&res.id) {
+                res.status = st;
+            }
+        }
+    }
+    Ok(bundles)
 }
 
 #[tauri::command]
@@ -2484,6 +2510,29 @@ fn enumerate_running_windows() -> Vec<AppWindows> {
     }
 }
 
+/// Collect the tokens that mark a saved resource as "running" for status
+/// evaluation (FR-7.1). `evaluate` compares each resource's `descriptor` for
+/// exact equality, and a dragged resource stores whatever launch target it was
+/// registered with, so we gather every token a descriptor could equal: the live
+/// app's name AND its stable launch id (`bundle_id` — what an AppLaunch resource
+/// actually stores), plus each window/tab's title and opaque handle. Window
+/// handles are non-persistent, so a saved WindowRef rarely matches by handle
+/// (degrades to Inactive — best-effort, expected).
+fn running_titles_snapshot() -> Vec<String> {
+    let mut titles = Vec::new();
+    for (name, bundle_id, windows) in enumerate_running_windows() {
+        titles.push(name);
+        if let Some(bid) = bundle_id {
+            titles.push(bid);
+        }
+        for (handle, title, _focused) in windows {
+            titles.push(title);
+            titles.push(handle);
+        }
+    }
+    titles
+}
+
 /// Restore the saved window position/size (E2 / FR-8.10 / AC-14) before the
 /// window is shown, so it reopens where the user left it. Physical pixels are
 /// stored and restored as-is (consistent round-trip on the same display).
@@ -2493,12 +2542,64 @@ fn restore_window_rect(app: &tauri::AppHandle, layout: &LayoutSettings) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
-    if let (Some(w), Some(h)) = (layout.window_width, layout.window_height) {
-        let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
-    }
+    // Only restore a *sane* size. A collapsed rect (e.g. width 0, or a height
+    // below the configured minimum) is corrupt — usually captured while the
+    // window was minimized — and restoring it would open an invisible window.
+    const MIN_W: u32 = 200;
+    const MIN_H: u32 = 200;
+    let size_ok = match (layout.window_width, layout.window_height) {
+        (Some(w), Some(h)) if w >= MIN_W && h >= MIN_H => {
+            let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
+            true
+        }
+        _ => false,
+    };
+    // Only restore a position that lands on a currently-connected monitor.
+    // Windows reports a minimized window at ~(-32000, -32000); a stale rect can
+    // also point at a monitor that's since been disconnected. Either way the
+    // window would be off-screen with only a taskbar entry, so we skip the
+    // position (Tauri then centers it) unless it visibly overlaps a monitor.
     if let (Some(x), Some(y)) = (layout.window_x, layout.window_y) {
-        let _ = win.set_position(LogicalPosition::new(x as f64, y as f64));
+        let w = if size_ok { layout.window_width.unwrap() as i32 } else { 700 };
+        let h = if size_ok { layout.window_height.unwrap() as i32 } else { 500 };
+        if window_visible_on_monitor(&win, x, y, w, h) {
+            let _ = win.set_position(LogicalPosition::new(x as f64, y as f64));
+        }
     }
+}
+
+/// True when a window placed at logical (x, y) with size (w, h) would be at
+/// least partially visible on some connected monitor — i.e. a graspable strip
+/// (≥ MARGIN px) of its title area overlaps a monitor's work area. Guards
+/// against restoring an off-screen or minimized-sentinel position. Falls back
+/// to `true` when monitor info is unavailable (don't over-block).
+fn window_visible_on_monitor(
+    win: &tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> bool {
+    const MARGIN: i32 = 50;
+    let Ok(monitors) = win.available_monitors() else {
+        return true;
+    };
+    if monitors.is_empty() {
+        return true;
+    }
+    monitors.iter().any(|m| {
+        let scale = m.scale_factor();
+        let mp = m.position().to_logical::<f64>(scale);
+        let ms = m.size().to_logical::<f64>(scale);
+        let (mx, my) = (mp.x as i32, mp.y as i32);
+        let (mw, mh) = (ms.width as i32, ms.height as i32);
+        // A visible sliver overlaps horizontally and vertically, and the top
+        // edge (drag area) is within the monitor's vertical span.
+        x + w > mx + MARGIN
+            && x < mx + mw - MARGIN
+            && y + h > my + MARGIN
+            && y < my + mh - MARGIN
+    })
 }
 
 /// One expandable child of an app: `(kind, handle, title, target, is_focused)`.
@@ -2582,10 +2683,25 @@ pub fn run() {
             // disk I/O — these fire many times per drag), then flush once when
             // the window is closing so the next launch reopens in place.
             let stash = |window: &tauri::Window| {
+                // Never persist a minimized window's geometry: Windows reports
+                // its position as ~(-32000, -32000) and a collapsed size, which
+                // would reopen the window off-screen and invisible next launch.
+                if matches!(window.is_minimized(), Ok(true)) {
+                    return;
+                }
                 if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
                     let scale = window.scale_factor().unwrap_or(1.0);
                     let logical_pos = pos.to_logical::<f64>(scale);
                     let logical_size = size.to_logical::<f64>(scale);
+                    // Belt-and-suspenders: drop obviously off-screen / degenerate
+                    // rects even if is_minimized() didn't report true.
+                    if logical_pos.x <= -30000.0
+                        || logical_pos.y <= -30000.0
+                        || logical_size.width < 200.0
+                        || logical_size.height < 200.0
+                    {
+                        return;
+                    }
                     if let Some(state) = window.try_state::<SharedState>() {
                         if let Ok(mut app) = state.lock() {
                             app.stash_window_rect(
