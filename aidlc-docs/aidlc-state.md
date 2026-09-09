@@ -240,3 +240,14 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **Verified (real Windows + Chrome)**: harness composed vc-app hint `chrome\u{1f}525722\u{1f}1` from 9 enumerated tabs, split back to exact token, activated idx 1 (active flag moved) → restored idx 0 — exact-tab only (FR-4.2); distinct idx = distinct hint = individually registerable + dedup-able. `cargo build/clippy -p vc-core -p vc-os-windows -p vc-app --all-targets` 0 warnings; `cargo test` vc-core 24/24, vc-os-windows 5/5, vc-app 2/2; frontend `tsc --noEmit` clean. Pure additive → existing app registration / DnD / bundle mgmt / restore unchanged. Harness deleted after verification.
 - **Docs**: `requirements.md` (FR-9 보완 정합화 노트 — title-based registration, no URL), `domain-entities.md` (ResourceKind + ResourceIdentity row), `window-enumeration.md` §6.7 + AC 매핑 보완 2, `known-deviations.md` §H2 + `#B3`/§D count(7)/backlog updated, this state, `audit.md` appended.
 - [x] Reviewed current implementation + Inception/Construction artifacts → [x] Inception artifact update (domain-entities, requirements) → [x] Construction (U1→U6→U7 code + design §6.7) → [x] tests added → [x] build/clippy/tsc/live verification (individual registration, dedup, exact-tab activation, regression), all green.
+
+### 🔧 Supplement Bolt H3 (2026-09-09): 저장된 탭 활성화 정확도 보완 + 빈 제목 표시 개선
+**트리거**: 사용자 요청 — (1) 탭 순서 변경·닫기 후 저장된 탭 활성화 시 잘못된 탭이 선택되는 문제, (2) Edge 탭 일부가 `(제목 없음)`으로만 표시되어 어느 탭인지 파악 불가.
+- **확인된 원인 1**: `activate_live_tab`(vc-app)이 저장된 위치 인덱스로 `focus_tab`을 먼저 호출 → PowerShell 스크립트가 인덱스 범위 내라면 다른 탭을 활성화해도 `OK` 반환 → 제목 기반 fallback이 실행되지 않음(FR-4.2 위반).
+- **확인된 원인 2**: UIA `TabItem.Name` 빈 문자열 반환 시 `(제목 없음)` 고정 표시 — 위치 정보 없어 어느 탭인지 불명. 빈 제목의 주 원인은 Chromium 지연 접근성 트리(배경 창 warm-up 불완전); live 검증 없어 Edge 특정 원인 단정 보류.
+- **U6 vc-app**: `activate_live_tab` — `focus_tab` 전에 `enumerate_browser_tab_sessions`로 live tab 열거 → 저장 핸들이 기대 제목을 가리키는지 검증 → 일치 시 fast-path, 불일치 시 제목 기반 검색. vc-os-windows 어댑터 무변경.
+- **U4 vc-os-windows**: 빈 제목 fallback을 `(탭 N번 — 제목 없음)` (N=1기준 위치) 형식으로 변경. vc-app·프론트 계약 무변경(제목 문자열 내용만 변화).
+- **빌드·테스트**: `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고; `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2 통과.
+- **미완료(live 검증)**: 탭 순서 변경 후 saved tab 활성화 정확도는 실제 브라우저 필요 — 이 환경에서 실행 불가; 완료로 기록하지 않음.
+- **문서**: `known-deviations.md` §H3, `window-enumeration.md` §6.2 갱신 + §6.8 추가, `aidlc-state.md`, `audit.md` 추가.
+- [x] 분석(확인된 원인 vs 추정 원인 구분) → [x] Construction Code Generation(U4·U6 코드 수정) → [x] build/clippy/test 통과 → [ ] live 검증(탭 순서 변경 후 활성화·Edge 빈 제목 변경 확인 — 수동 필요)

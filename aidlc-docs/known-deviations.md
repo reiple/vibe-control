@@ -173,6 +173,26 @@ G1(창 단위)에 이어 사용자 요청("지원 브라우저의 열린 탭을 
 - **설계 문서**: `construction/vc-os-windows/functional-design/window-enumeration.md` §6.7, `construction/vc-core/functional-design/domain-entities.md`(ResourceKind·ResourceIdentity), `inception/requirements/requirements.md`(FR-9 보완 정합화 노트).
 - **잔여**: capture용 `read_tabs`(제목+**URL**)만 — DevTools 프로토콜 별개 작업. 라이브 탭의 등록/복원은 본 §H2에서 URL 없이 해소.
 
+### H3. 저장된 탭 활성화 정확도 보완 + 빈 제목 표시 개선 (보완 Bolt H3, 2026-09-09)
+
+**문제 1 — 저장 탭 활성화 시 잘못된 탭 선택 (버그 수정)**
+
+§H2에서 구현한 `activate_live_tab`(vc-app)이 저장된 토큰으로 `focus_tab`을 직접 호출했고, 내부 PowerShell 스크립트는 위치 인덱스로만 `SelectionItemPattern.Select`를 수행했다. 탭을 추가·닫기·순서 변경하면 저장된 `<hwnd>\u{1f}<idx>`의 `idx`가 다른 탭을 가리켜도 스크립트는 `OK`를 반환해 **잘못된 탭을 활성화하면서 에러가 발생하지 않는** 상황이 발생했다 — FR-4.2("앱만 최전면화는 성공 아님")의 정신 위반.
+
+- **수정(vc-app/src/lib.rs `activate_live_tab`)**: `focus_tab` 호출 전에 `enumerate_browser_tab_sessions`로 live tab 목록을 먼저 가져와, 저장된 핸들(`handle`)이 기대 제목(`title`)을 가진 탭을 실제로 가리키는지 확인. 일치 시 빠른 경로로 `focus_tab`; 불일치 시 제목 기반 검색으로 직행.
+- **잔여 한계(수용)**: 같은 창에 제목이 동일한 탭이 여러 개이면 첫 번째 매칭을 선택 — URL 없이는 구분 불가(FR-9.7).
+- **테스트**: `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2. 탭 순서 변경 후 saved tab 활성화 정확도는 수동 검증 필요(이 환경에서 실행 불가 — 미완료로 기록).
+
+**문제 2 — Edge 탭 빈 제목 표시 개선**
+
+vc-os-windows `list_tabs`에서 UIA `Name`이 빈 문자열인 탭을 `(제목 없음)`으로 표시했다. 사용자가 몇 번째 탭인지 알 수 없고, 실제 제목 없는 탭과 읽기 실패를 구분하기 어려웠다.
+
+**확인된 읽기 실패 원인(추정)**: Chromium 지연 접근성 트리 — 배경 창은 350ms warm-up 후에도 UIA `TabItem.Name`이 빈 문자열로 반환될 수 있음. Edge의 sleeping tab 등 브라우저 특정 상태도 기여 가능(live 실행 없어 단정 불가).
+
+- **수정(vc-os-windows/src/lib.rs)**: `(제목 없음)` → `(탭 N번 — 제목 없음)` (N=1기준 현재 위치). 사용자가 어느 탭인지 위치로 파악 가능하고, "진짜 빈 제목"이 아닌 읽기 실패임을 암시.
+- **부수 효과(의도된)**: 저장 후 제목 기반 fallback 활성화 시 위치 번호가 달라지면 매칭 실패 → 잘못된 탭 활성화 방지(FR-4.2 일치).
+- **한계**: "진짜 빈 제목" vs "읽기 실패" 구분 불가(UIA는 둘 다 빈 문자열). 탭 warm-up 시간(350ms) 증가는 live 검증 없이 적용 보류.
+
 ---
 
 ## H. 빌드/실행 도구 이탈 — `tauri dev` 개발 실행이 문서대로 동작하지 않음

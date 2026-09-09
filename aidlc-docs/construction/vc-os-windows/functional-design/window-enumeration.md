@@ -99,7 +99,7 @@ RunningWindow  { handle: String, title: String, is_focused: bool }
 ### 6.2 열거 — `WinBrowserTabReader::list_tabs(process) -> Vec<(handle_token, title, is_active)>`
 - 모든 최상위 `Window`를 순회하며 대상 프로세스명(`chrome`/`msedge`/…)의 창에서 `Tab` 스트립을 찾고 `TabItem`들을 방출. 워밍업(먼저 `FindFirst(Tab)`) + 350ms 대기로 Chromium 지연 트리 생성을 유도.
 - 출력: `<hwnd>\t<index>\t<selected 0|1>\t<name>` TSV → Rust가 파싱. **handle_token = `<hwnd>\u{1f}<index>`** (단위 구분자 `\u{1f}`) — 10진 HWND(창 활성화용)와 구분되고, macOS `name\u{1f}title` 관례와 대칭.
-- **제목 정리**: Chromium 메모리 세이버 주석(`… - 메모리 사용량 - 348MB` / `… - Memory usage - 120 MB`)을 `clean_tab_title`이 제거(숫자 없는 짧은 라벨 세그먼트만 안전하게 절단 — 실제 " - " 포함 제목은 보존). 빈 제목은 `(제목 없음)`.
+- **제목 정리**: Chromium 메모리 세이버 주석(`… - 메모리 사용량 - 348MB` / `… - Memory usage - 120 MB`)을 `clean_tab_title`이 제거(숫자 없는 짧은 라벨 세그먼트만 안전하게 절단 — 실제 " - " 포함 제목은 보존). 빈 제목은 `(탭 N번 — 제목 없음)` (N=1기준 위치 — 사용자가 몇 번째 탭인지 파악 가능, §6.8 참조).
 - **한계(수용)**: URL 미제공(FR-9.1의 주소 부분은 라이브 탭 불가; FR-9.7에 따라 추측 금지) → 표시·활성화 전용. Chromium 지연 접근성으로 **최전면/관여 창의 탭만** 안정적으로 읽힘 → 백그라운드 전용 창은 빈 결과. 실패·빈 결과는 `Ok(vec![])`로 degrade(caller가 OS 창 목록으로 폴백).
 
 ### 6.3 활성화 — `WinBrowserTabReader::activate_tab(handle_token) -> Result<()>`
@@ -136,7 +136,28 @@ RunningWindow  { handle: String, title: String, is_focused: bool }
 - **AC-20 추가 확장**: 브라우저 탭을 그룹으로 드래그 → 개별 탭 리소스 등록 → 같은 창 여러 탭 각각 등록 → 저장 탭 더블클릭 시 정확한 탭 활성화 → 같은 탭 중복 방지.
 - 회귀 방지: **AC-3/AC-4**(드래그 1회 등록·같은 앱/창 다른 탭 개별 등록), **AC-2**(정확한 탭 최전면), FR-9.7(URL 미추측).
 
+## 6.8 저장된 탭 활성화 정확도 보완 + 빈 제목 표시 개선 (보완 Bolt H3, 2026-09-09)
+
+§6.7(개별 탭 등록)에 이어 두 가지 보완을 추가한다.
+
+**문제 1: 탭 순서 변경 후 잘못된 탭 활성화**
+
+`activate_live_tab`(vc-app)이 저장된 토큰(`<hwnd>\u{1f}<idx>`)으로 `focus_tab`을 직접 호출했고, ACTIVATE_TAB_SCRIPT는 위치 인덱스로만 탭을 선택했다. 탭 순서 변경·닫기 후 인덱스가 다른 탭을 가리켜도 `SelectionItemPattern.Select`가 `OK`를 반환하여 **제목 검증 없이 잘못된 탭이 활성화**되는 문제(FR-4.2 위반).
+
+- **수정**: `activate_live_tab`이 `focus_tab` 호출 전에 live tab을 열거(`enumerate_browser_tab_sessions`)하여 저장된 핸들이 기대 제목을 가진 탭을 가리키는지 검증. 불일치면 제목 기반 검색으로 직행.
+- **잔여 한계(수용)**: 같은 창에 동일 제목 탭 2개 이상이면 첫 번째 매칭 선택 — URL 없이는 구분 불가(FR-9.7).
+
+**문제 2: Edge 빈 제목 표시**
+
+Chromium 지연 접근성 트리(배경 창 `Name` 미생성)로 탭 제목이 빈 문자열로 반환될 때, 기존 `(제목 없음)` 표시만으로는 어떤 탭인지 파악 불가.
+
+- **수정**: `(제목 없음)` → `(탭 N번 — 제목 없음)` (N=1기준 탭 위치) — 사용자가 몇 번째 탭인지 파악 가능하고 실제 제목 없는 탭이 아닌 읽기 실패임을 암시.
+- **한계**: "진짜 빈 제목"과 "읽기 실패"는 UIA 반환값으로 구분 불가. 위치 번호가 탭 순서 변경 후에는 달라질 수 있어 저장 후 제목 기반 활성화 불가(오히려 잘못된 탭 활성화를 막음 — FR-4.2 일치).
+
+**검증**: `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2 통과. live 탭 순서 변경 후 saved tab 활성화 검증은 수동 필요(이 환경에서 실행 불가 — 완료로 기록하지 않음).
+
 ## 미해결/후속
 - 탭 **URL 수집**(캡처 경로 `read_tabs`, FR-9.1의 주소 부분·DevTools 프로토콜)만 잔존 — 라이브 탭의 **작업 묶음 등록/복원은 §6.7에서 제목 기반 포커스 전용으로 해소**(URL 불필요).
 - macOS 라이브 탭 세션(현재 앱 창 폴백) — AX 기반 탭 열거는 후속.
+- 동일 제목 탭 다수 구분 — URL 없이는 불가(FR-9.7 수용된 한계).
 - U1 `matching/window.rs` L2 매처(`app_id|role|title`)는 저장 리소스↔실행 창 재추적(FR-4.4)에 사용 가능하나 본 기능 범위는 실행 목록 표시·활성화에 한정.

@@ -794,14 +794,19 @@ fn split_tab_hint(hint: &str) -> Option<(&str, &str)> {
 fn activate_live_tab(hint: &str, title: &str) -> std::result::Result<(), String> {
     let (browser, handle) =
         split_tab_hint(hint).ok_or_else(|| "invalid saved tab handle".to_string())?;
-    // 1) Try the stored window+index token as-is (the common, still-open case).
-    if focus_tab(handle).is_ok() {
-        return Ok(());
+    // Enumerate live tabs first so the stored position can be verified before
+    // committing. Calling focus_tab blindly on a stale index silently activates
+    // the wrong tab (the script returns OK as long as the index is in range,
+    // regardless of whether the title matches — FR-4.2).
+    let live_tabs = enumerate_browser_tab_sessions(browser);
+    // 1) Fast path: stored position still points to the expected tab.
+    if live_tabs.iter().any(|(h, t, _)| h == handle && t == title) {
+        return focus_tab(handle);
     }
-    // 2) Stale token: re-enumerate this browser's live tabs and match by title.
-    for (h, t, _active) in enumerate_browser_tab_sessions(browser) {
+    // 2) Position is stale — find the tab by title (handles reorder/close).
+    for (h, t, _active) in &live_tabs {
         if t == title {
-            return focus_tab(&h);
+            return focus_tab(h);
         }
     }
     Err(format!("tab no longer open: {title}"))

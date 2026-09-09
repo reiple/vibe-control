@@ -667,7 +667,12 @@ impl WinBrowserTabReader {
             }
             let title = clean_tab_title(name);
             let title = if title.is_empty() {
-                "(제목 없음)".to_string()
+                // Include the 1-based tab position so the user can identify
+                // which tab this is — an empty UIA Name always means the title
+                // could not be read (lazy accessibility tree / browser-internal
+                // tab), not that the page has no title.
+                let n: usize = idx.parse().unwrap_or(0);
+                format!("(탭 {}번 — 제목 없음)", n + 1)
             } else {
                 title
             };

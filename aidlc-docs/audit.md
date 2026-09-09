@@ -555,3 +555,10 @@ Important:
 **Context**: CONSTRUCTION — supplement Bolt COMPLETE (U1 vc-core → U6 vc-app → U7 frontend), continuing §H/§H2. New focus-only ResourceKind::BrowserTabLive; individual tab registration + full-hint dedup + exact-tab activation + focus-only restore, all title-based (no URL — FR-9.7). Verified on real Windows; purely additive (regression guard). AUTO MODE: analyzed + implemented + tested + built + live-verified + documented in one pass.
 
 ---
+## CONSTRUCTION — Supplement Bolt H3 (탭 활성화 정확도 보완 + 빈 제목 표시 개선)
+**Timestamp**: 2026-09-09T08:00:00Z
+**User Input**: "기존 AI-DLC 워크플로우를 이어서 진행한다. [...] 1. 개별 탭 드래그 등록 및 활성화 [...] 왼쪽 탭 목록에서 오른쪽 컨텍스트 그룹으로 특정 탭을 드래그했을 때, 원하는 탭이 하나씩 정확하게 등록되지 않는 경우가 있다. [...] 2. Edge 탭 제목 표시 [...] Edge에서 이전에 열어 두었던 탭 중 일부가 '(제목 없음)'으로 표시된다."
+**AI Response**: "Supplement Bolt H3 — 분석 + 구현 완료. (1) activate_live_tab 버그: 저장된 위치 인덱스로 focus_tab을 직접 호출하면 탭 순서 변경 후 잘못된 탭이 활성화되어도 OK가 반환됨. 수정: focus_tab 전에 enumerate_browser_tab_sessions로 live tab 목록을 열거해 저장된 핸들이 기대 제목을 가리키는지 검증; 불일치 시 제목 기반 검색으로 직행. (2) 빈 제목 표시: (제목 없음) → (탭 N번 — 제목 없음) 형식으로 변경해 위치로 식별 가능. 빈 제목의 주 원인은 Chromium 지연 접근성 트리(수용된 한계, #B3)로 추정; live 검증 없어 Edge 특정 원인 단정 보류. 빌드·테스트: cargo build -p vc-app·clippy 0 경고, cargo test vc-core 24/24·vc-os-windows 5/5·vc-app 2/2. live 검증(탭 순서 변경 후 저장 탭 활성화 정확도)은 수동 필요 — 미완료로 기록. 범위: vc-app/src/lib.rs activate_live_tab, vc-os-windows/src/lib.rs list_tabs 빈 제목 fallback. 기존 DnD·등록·복원·아이콘·capture 무변경(순수 수정)."
+**Context**: CONSTRUCTION — Supplement Bolt H3, §H/§H2 보완. U4(빈 제목 표시) + U6(activate_live_tab 검증 로직). 기존 기능 무변경. AUTO MODE.
+
+---
