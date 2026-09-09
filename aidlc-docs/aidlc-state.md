@@ -332,4 +332,11 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **검증(이 환경)**: `bash -n install.sh` 통과, 워크플로우 YAML 탭 없음·구조 확인(로컬에 pyyaml/actionlint 부재로 정식 파서 검증은 생략, 수동 리뷰). `pwsh` 부재로 install.ps1 정적 파싱 불가 — 신중 작성. **`.bin/tauri`는 `@tauri-apps/cli` 표준 bin**(CI `npm ci` 후 생성).
 - **⏳ 미검증(외부·비가역이라 이 Bolt에서 미실행)**: 실제 `v*` 태그 push / CI 실행 / 릴리스 발행 / 두 OS 설치 E2E(AC-23). 사용자가 태그를 밀면 동작하도록 준비만 완료. **push/태그/릴리스 미실행, 코드(U1~U7) 무수정.**
 - **브랜치**: `feature/release-github-distribution`(main 직접 커밋 회피, 로컬 커밋만 — push 안 함).
-- [x] 분석 → [x] Inception 정합화(requirements v1.4 FR-14/AC-23) → [x] Construction Bolt R1(workflow + 설치 스크립트 2종) → [x] 로컬 정적 검증(bash -n, YAML 구조) → [x] Operations 문서 갱신 → [ ] 실 CI/릴리스/설치 E2E(사용자 태그 push 후).
+- [x] 분석 → [x] Inception 정합화(requirements v1.4 FR-14/AC-23) → [x] Construction Bolt R1(workflow + 설치 스크립트 2종) → [x] 로컬 정적 검증(bash -n, YAML 구조) → [x] Operations 문서 갱신 → [x] 실 CI 실행(사용자 승인 후 push+태그).
+
+#### CI 첫 실행 결과 + Windows 배포 블로커 수정 (2026-09-09)
+사용자 승인 후 `feature/release-github-distribution` push → PR #22(origin/main 병합, audit union 충돌 해소) → main 병합 → **`v0.1.0` 태그 push로 릴리스 워크플로우 첫 실행**(run 34317217160).
+- **결과**: `create-release` ✅(draft + 설치 스크립트 첨부) · `build-macos` ✅(유니버설 .dmg 업로드) · **`build-windows` ❌** · `publish` ⏭(windows 실패로 skip).
+- **Windows 실패 원인(진단 완료)**: 워크스페이스는 **컴파일 성공**(10분, `vibe-control.exe` 생성, dead_code 경고 1건뿐)했으나 **WiX/MSI 번들링에서 `failed to bundle project: Couldn't find a .ico icon`**. 근본 원인 = `crates/vc-app/tauri.conf.json`의 `bundle.icon`이 `["icons/icon.png"]` 하나만 참조 → Windows 번들러가 `.ico`를 못 찾음. **`icons/icon.ico`(유효한 6크기 MS 아이콘)는 리포에 이미 존재·추적**되는데 config 목록에 누락돼 있었을 뿐.
+- **수정**: `bundle.icon`을 표준 Tauri 목록으로 확장 — `32x32.png`/`128x128.png`/`128x128@2x.png`/`icon.icns`/`icon.ico`(전부 존재). macOS(.icns)·Windows(.ico) 모두 커버. (브랜치 `fix/windows-ico-icon` → PR → main, `v0.1.0` 태그 재지정 후 재실행.)
+- **결론(윈도우 배포 가능 여부)**: 코드/컴파일은 Windows에서 정상 — 유일한 블로커는 아이콘 config 누락이었고 수정됨. 재실행으로 `.msi`+`-setup.exe` 산출 확인 예정.
