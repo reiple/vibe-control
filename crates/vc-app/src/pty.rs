@@ -38,11 +38,17 @@ struct PtySession {
     /// Kept alive for the lifetime of the session so the cloned reader stays
     /// valid; never touched after setup except to drop on stop.
     _master: Mutex<Box<dyn MasterPty + Send>>,
-    writer: Mutex<Box<dyn Write + Send>>,
+    /// Shared with the reader thread so it can answer terminal handshake queries
+    /// (DSR cursor-position) inline, not just the UI-driven `write_input` path.
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     child: Mutex<Box<dyn Child + Send + Sync>>,
     parser: Arc<Mutex<vt100::Parser>>,
     /// Flipped to false when the reader hits EOF (the `claude` process exited).
     alive: Arc<AtomicBool>,
+    /// Set once `claude` enables bracketed paste (`ESC[?2004h`) at startup. When
+    /// set, [`submit_line`] delivers the line as an atomic bracketed paste so a
+    /// fast multi-byte burst can't be truncated to its first char.
+    bracketed_paste: Arc<AtomicBool>,
 }
 
 impl Drop for PtySession {
@@ -201,10 +207,11 @@ fn spawn_into_registry(
         .map_err(|e| format!("claude 실행 실패: {e}"))?;
     drop(pair.slave);
 
-    let writer = pair
-        .master
-        .take_writer()
-        .map_err(|e| format!("PTY 입력 스트림 실패: {e}"))?;
+    let writer = Arc::new(Mutex::new(
+        pair.master
+            .take_writer()
+            .map_err(|e| format!("PTY 입력 스트림 실패: {e}"))?,
+    ));
     let reader = pair
         .master
         .try_clone_reader()
@@ -212,9 +219,12 @@ fn spawn_into_registry(
 
     let parser = Arc::new(Mutex::new(vt100::Parser::new(ROWS, COLS, 2000)));
     let alive = Arc::new(AtomicBool::new(true));
+    let bracketed_paste = Arc::new(AtomicBool::new(false));
     {
         let parser_bg = parser.clone();
         let alive_bg = alive.clone();
+        let writer_bg = writer.clone();
+        let bp_bg = bracketed_paste.clone();
         let sref = session_ref.to_string();
         let mut reader = reader;
         thread::spawn(move || {
@@ -223,17 +233,48 @@ fn spawn_into_registry(
                 match reader.read(&mut buf) {
                     Ok(0) => break,
                     Ok(n) => {
-                        // Feed the vt100 parser (drives `screen()`/summary) AND
-                        // stream the raw bytes to the frontend terminal (xterm.js).
+                        // Note whether claude enabled bracketed paste (ESC[?2004h);
+                        // `submit_line` uses this to inject full lines atomically.
+                        if buf[..n].windows(8).any(|w| w == b"\x1b[?2004h") {
+                            bp_bg.store(true, Ordering::SeqCst);
+                        }
+                        let has_dsr = buf[..n].windows(4).any(|w| w == b"\x1b[6n");
                         if let Ok(mut p) = parser_bg.lock() {
                             p.process(&buf[..n]);
+                            // Answer a DSR cursor-position query (ESC[6n) inline:
+                            // modern `claude` blocks on startup until the terminal
+                            // reports its cursor, so without a prompt reply the TUI
+                            // never renders (blank terminal). Reply with the parser's
+                            // real cursor position so claude's own positioning stays
+                            // correct. Handled here (not just the frontend) so the
+                            // handshake completes immediately, independent of the
+                            // event→xterm→invoke round-trip.
+                            if has_dsr {
+                                let (row, col) = p.screen().cursor_position();
+                                let reply = format!("\x1b[{};{}R", row + 1, col + 1);
+                                if let Ok(mut w) = writer_bg.lock() {
+                                    let _ = w.write_all(reply.as_bytes());
+                                    let _ = w.flush();
+                                }
+                            }
                         }
                         if let Some(h) = app_handle().get() {
+                            // Stream the raw bytes to the frontend terminal (xterm.js),
+                            // but STRIP the DSR query (ESC[6n): the backend already
+                            // answered it above, and if xterm.js answers too, claude
+                            // misreads the duplicate cursor report as a stray "C"
+                            // keystroke in its input box at startup. (Verified against
+                            // claude 2.1.266.) Fast path avoids a copy when absent.
+                            let bytes = if has_dsr {
+                                strip_dsr(&buf[..n])
+                            } else {
+                                buf[..n].to_vec()
+                            };
                             let _ = h.emit(
                                 PTY_OUTPUT_EVENT,
                                 PtyChunk {
                                     id: sref.clone(),
-                                    bytes: buf[..n].to_vec(),
+                                    bytes,
                                 },
                             );
                         }
@@ -247,10 +288,11 @@ fn spawn_into_registry(
 
     let session = Arc::new(PtySession {
         _master: Mutex::new(pair.master),
-        writer: Mutex::new(writer),
+        writer,
         child: Mutex::new(child),
         parser,
         alive,
+        bracketed_paste,
     });
     registry()
         .lock()
@@ -267,10 +309,33 @@ fn spawn_into_registry(
     Ok(session_ref.to_string())
 }
 
-/// Type a full line into the REPL and submit it (text + Enter) in one call, so the
-/// UI's send box reliably lands a turn without two racing round-trips.
+/// Type a full line into the REPL and submit it. Modern `claude`'s TUI is
+/// bracketed-paste aware and coalesces input bursts: writing `text` and `\r` in
+/// one burst drops the Enter (the line sits in the box unsubmitted) and a fast
+/// multi-byte write can even be truncated to its first char. So we (1) deliver the
+/// text as an atomic bracketed paste when claude enabled it, (2) let claude render
+/// it into the input box, then (3) send Enter as a *separate* keystroke so it's
+/// treated as a real submit. Verified against claude 2.1.266.
 pub fn submit_line(id: &str, text: &str) -> Result<(), String> {
-    write_input(id, text.as_bytes())?;
+    let session = get_arc(id)?;
+    let bracketed = session.bracketed_paste.load(Ordering::SeqCst);
+    {
+        let mut w = session
+            .writer
+            .lock()
+            .map_err(|_| "입력 스트림 잠금 실패".to_string())?;
+        if bracketed {
+            w.write_all(b"\x1b[200~").map_err(|e| format!("입력 전송 실패: {e}"))?;
+            w.write_all(text.as_bytes()).map_err(|e| format!("입력 전송 실패: {e}"))?;
+            w.write_all(b"\x1b[201~").map_err(|e| format!("입력 전송 실패: {e}"))?;
+        } else {
+            w.write_all(text.as_bytes()).map_err(|e| format!("입력 전송 실패: {e}"))?;
+        }
+        w.flush().map_err(|e| format!("입력 flush 실패: {e}"))?;
+    }
+    // Settle: let the pasted line land in claude's input box before Enter, so the
+    // \r isn't swallowed as part of the paste burst. (Lock dropped above first.)
+    thread::sleep(std::time::Duration::from_millis(200));
     write_input(id, b"\r")
 }
 
@@ -316,6 +381,26 @@ pub fn resize(id: &str, rows: u16, cols: u16) -> Result<(), String> {
         p.screen_mut().set_size(rows, cols);
     }
     Ok(())
+}
+
+/// Remove DSR cursor-position queries (`ESC[6n`) from a PTY output chunk before it
+/// reaches the frontend terminal. The backend answers DSR authoritatively in the
+/// reader thread; if xterm.js sees the query and answers too, claude receives a
+/// duplicate cursor report and misreads it as a stray "C" keystroke in its input
+/// box at startup. Stripping the query at the source keeps xterm from replying.
+fn strip_dsr(bytes: &[u8]) -> Vec<u8> {
+    const Q: &[u8] = b"\x1b[6n";
+    let mut out = Vec::with_capacity(bytes.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i..].starts_with(Q) {
+            i += Q.len();
+        } else {
+            out.push(bytes[i]);
+            i += 1;
+        }
+    }
+    out
 }
 
 /// Write raw bytes to the PTY (typing into the REPL / answering a prompt).
