@@ -202,9 +202,10 @@
       .eyebrow { display: inline-flex; align-items: center; gap: 9px; margin-bottom: 20px; }
       h1.head {
         font-family: var(--display); font-weight: 700;
-        font-size: clamp(38px, 5.6vw, 62px); line-height: 1.02;
-        letter-spacing: -0.055em; margin: 0 0 20px;
+        font-size: clamp(34px, 4.7vw, 54px); line-height: 1.06;
+        letter-spacing: -0.055em; margin: 0 0 20px; word-break: keep-all;
       }
+      h1.head .nw { white-space: nowrap; }
       h1.head .glow { color: var(--accent); }
       .sub { font-size: clamp(16px, 1.7vw, 19px); color: var(--ink-muted); max-width: 30em; margin: 0 0 30px; }
       .cta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
@@ -372,7 +373,7 @@
             <span class="rec-dot"></span>
             <span class="mono">macOS + Windows</span>
           </div>
-          <h1 class="head">바이브 코딩의 병목은<br /><span class="glow">당신</span>입니다.</h1>
+          <h1 class="head"><span class="nw">바이브 코딩의 병목은</span><br /><span class="nw"><span class="glow">당신</span>입니다.</span></h1>
           <p class="sub">
             AI 일꾼은 무한히 늘릴 수 있습니다. 하지만 사람이 동시에 붙잡을 수 있는 프로젝트는 몇 개뿐입니다.
             병목은 모델이 아니라 <b>컨텍스트 스위칭</b>입니다. 프로젝트 하나에 VS Code, Claude Code,
