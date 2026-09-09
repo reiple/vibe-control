@@ -392,6 +392,74 @@ body { margin: 0; background: var(--body); }
   position: relative; /* containing block for the boot splash overlay */
 }
 
+/* Custom window controls — Windows only (macOS draws native traffic lights).
+   Deliberately mimic the macOS traffic lights: same top-left corner, same
+   red/amber/green dots, so both platforms present the same screen (FR-8.11).
+   Sits above the header (which is a drag region) but below the boot splash
+   (z 1000). Rendered inside the top padding that both headers already reserve. */
+/* NB: classes are `wc-*` (window-control), NOT `win-*` — the app already has an
+   unrelated `.win-dot` (7px status dot) later in this file that would otherwise
+   override the size at equal specificity. */
+.wc-bar {
+  position: absolute;
+  top: 13px;
+  left: 14px;
+  z-index: 900;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.wc-dot {
+  width: 12px;
+  height: 12px;
+  min-width: 0;
+  padding: 2px; /* inset the symbol from the dot edge */
+  border-radius: 50%;
+  border: none;
+  cursor: pointer;
+  -webkit-app-region: no-drag; /* clicks act on the button, never drag the window */
+  /* Neutralise the global charcoal `button` pad look (gradient + 3D shadow);
+     these are flat coloured dots, so keep only a thin dark ring. */
+  background-image: none;
+  box-shadow: inset 0 0 0 0.5px rgba(0, 0, 0, 0.3);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0;
+  transition: filter 0.12s ease;
+}
+.wc-dot:hover { filter: brightness(1.08); }
+.wc-dot:active { filter: brightness(0.9); transform: none; }
+/* Minimize/maximize/close symbols (SVG so they are pixel-centred and crisp at
+   any size) — always visible so the dots are distinguishable, macOS-style. */
+.wc-glyph {
+  display: block;
+  width: 100%;
+  height: 100%;
+  pointer-events: none; /* clicks always land on the button, not the glyph */
+  fill: none;
+  stroke: rgba(0, 0, 0, 0.66); /* fallback; per-button darker shades below */
+  stroke-width: 1.4; /* in the 0 0 12 12 viewBox; ~1.4px at the 12px dot */
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  /* macOS-style: symbols only appear while hovering the traffic-light group. */
+  opacity: 0;
+  transition: opacity 0.1s ease;
+}
+.wc-bar:hover .wc-glyph { opacity: 1; }
+/* Symbol = a darker shade of each button's own colour. */
+.wc-close .wc-glyph { stroke: #7d160f; }
+.wc-min .wc-glyph { stroke: #7a5300; }
+.wc-max .wc-glyph { stroke: #0c5a1a; }
+
+/* On Windows the custom controls are larger than macOS's native lights, so the
+   two headers need extra top room to clear them (macOS keeps the 34px above). */
+.wc-chrome .sidebar-header { padding-top: 34px; }
+.wc-chrome .main-header { padding-top: 34px; }
+.wc-close { background: #ff5f57; }
+.wc-min { background: #febc2e; }
+.wc-max { background: #28c840; }
+
 /* Native title bar is a transparent Overlay: the sidebar (--sunk) and main
    (--body) each run to the very top edge keeping their own colour — no seam —
    and the traffic lights float over the sidebar header. The extra top padding
