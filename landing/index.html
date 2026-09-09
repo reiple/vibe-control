@@ -210,7 +210,14 @@
       .cta { display: flex; flex-wrap: wrap; gap: 14px; align-items: center; }
       .note { font-family: var(--mono); font-size: 10.5px; letter-spacing: 0.1em; color: var(--ink-muted); margin-top: 18px; }
 
-      /* Device mockup (the showpiece) -------------------------------- */
+      /* Real app screenshot (the showpiece) -------------------------- */
+      .shot { line-height: 0; }
+      .shot img {
+        width: 100%; height: auto; display: block;
+        filter: drop-shadow(0 24px 48px rgba(30, 26, 20, 0.28));
+      }
+
+      /* Device mockup (unused, kept for reference) -------------------- */
       .device { padding: 20px; border-radius: 22px; }
       .device .screws { display: flex; justify-content: space-between; margin-bottom: 14px; }
       .screw { width: 9px; height: 9px; border-radius: 50%;
@@ -382,27 +389,9 @@
           <p class="note">// Tauri · Rust + React · 완전 오프라인 동작 · 데이터는 내 기기에만</p>
         </div>
 
-        <!-- Device mockup -->
-        <div class="device panel">
-          <div class="screws"><i class="screw"></i><i class="screw"></i><i class="screw"></i></div>
-          <div class="lcd">
-            <div class="lcd-top">
-              <span class="led"></span>
-              <span class="lcd-total">128,940</span>
-              <span class="lcd-model">OPUS 4.8</span>
-            </div>
-            <div class="lcd-legend">
-              <span class="lcd-chip in"><em></em>IN 74.2K</span>
-              <span class="lcd-chip out"><em></em>OUT 54.7K</span>
-              <span class="lcd-chip"><em></em>312 CALLS</span>
-            </div>
-          </div>
-          <div class="pads">
-            <div class="pad"><span class="glyph">🗂️</span><span class="lbl">GROUP</span></div>
-            <div class="pad"><span class="glyph">🪟</span><span class="lbl">WINDOW</span></div>
-            <div class="pad"><span class="glyph">↻</span><span class="lbl">RESTORE</span></div>
-            <div class="pad rec"><span class="glyph">●</span><span class="lbl">CAPTURE</span></div>
-          </div>
+        <!-- Real app screenshot -->
+        <div class="shot">
+          <img src="assets/app-screenshot.png" alt="VIBE-CONTROL 앱 화면 — 실행 중인 앱 목록, 작업 묶음, 사용량 콘솔" />
         </div>
       </div>
     </div>
