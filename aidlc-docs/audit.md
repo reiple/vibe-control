@@ -701,3 +701,11 @@ Important:
 **Context**: CONSTRUCTION — 통합 보완 Bolt 2차(격리 worktree). 승인 항목이나 앞서 임의 제외했던 Log 뷰어·레이아웃/리사이저를 원래 승인대로 복구(App.tsx 단일, 타 파일·신규 기능 불필요). Log는 그룹 다중 세션 구분 지원. SessionStatus는 재승인 목록 밖·불필요로 계속 제외. 빌드 2종 PASS. 토큰 범위 안내 온스크린 표시 확인. 대화형 동작 UNVERIFIED. 미커밋.
 
 ---
+
+## Bolt: KO-II 토큰 미터 미표시 수정 (4상태 구분)
+**Timestamp**: 2026-09-09T19:05:00Z
+**User Input**: "미터 전체를 숨기는 조건을 제거하고, 원본처럼 항상 표시하는 방향으로 수정하는 것을 승인한다. 단, 다음 상태를 구분하라. - 조회 중: 로딩 표시 - 키 미설정: 연결 필요 안내 - 조회 실패 또는 데이터 없음: '—'와 사유 표시 - 정상 조회 결과가 0: 실제 숫자 0 표시. 조회되지 않은 값을 사용량 0으로 표시하지 마라. 승인한 모드별 집계 범위 안내도 유지하라. 기존 배치와 스타일을 최대한 재사용하고 다른 기능은 변경하지 마라. 수정 후 빌드 검증과 실제 화면 확인을 구분해서 보고하라. 추가 커밋·푸시·PR·병합은 아직 하지 마라."
+**AI Response**: "frontend/src/App.tsx만 수정. (1) `{usage?.configured && ...}` 가드 제거 — 원본처럼 항상 렌더. (2) 원본 KO-II 마크업(.ko-screen > .ko-screen-glass > .ko-usage/.ko-side/.ko-screen-glare) 복원 — 3px 슬라이버 붕괴 해소(88px LCD 페이스). (3) usageLoading·usageErr 상태 추가로 4상태 구분: 조회 중='조회 중…'/'—', 키 미설정='연결 필요'+연결 안내, 조회 실패/데이터 없음='—'+사유, 정상 결과 0=실제 '0'. 미조회 값을 0으로 표시하지 않음. (4) 승인한 모드별 집계 안내 유지 — app-local='이 앱 콘솔 사용량'+프롬프트 콘솔만 집계 note, account-wide='계정 전체 · region'+같은 Bedrock 계정이면 터미널 세션 포함 note. 기존 클래스 재사용, 다른 기능 무변경. 빌드 검증: tsc --noEmit 통과(에러 0), vite build 성공(40 modules). 실제 화면 확인: GUI 실행 필요 — 미검증. 커밋·푸시·PR·병합 미수행."
+**Context**: Construction / Code Generation — token meter visibility fix (App.tsx only)
+
+---

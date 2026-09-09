@@ -507,6 +507,12 @@ export default function App() {
   // the interactive `claude` terminals consume (those run on the user's own
   // Claude auth, outside this app's accounting) — the meter label says so.
   const [usage, setUsage] = useState<ClaudeUsage | null>(null);
+  // Distinguish the meter's four states so an un-fetched value is never shown as
+  // "0": `usageLoading` = a fetch is in flight and we have no data yet;
+  // `usageErr` = the last fetch failed (holds the reason). A successful fetch
+  // clears both; `usage.configured === false` is the "no key / connect" state.
+  const [usageLoading, setUsageLoading] = useState(true);
+  const [usageErr, setUsageErr] = useState<string | null>(null);
 
   // Persisted sidebar width (E2). Applied imperatively to the aside via a ref so
   // React never re-renders it and fights the CSS `resize` drag; a ResizeObserver
@@ -634,10 +640,17 @@ export default function App() {
           }),
         claudeUsage()
           .then((u) => {
-            if (!cancelled) setUsage(u);
+            if (cancelled) return;
+            setUsage(u);
+            setUsageErr(null);
           })
-          .catch(() => {
-            if (!cancelled) setUsage(null);
+          .catch((e) => {
+            // Keep any prior data; record the reason so the meter shows "—"
+            // with a cause rather than a misleading zero.
+            if (!cancelled) setUsageErr(errText(e));
+          })
+          .finally(() => {
+            if (!cancelled) setUsageLoading(false);
           }),
         // Trigger the one-time macOS Accessibility prompt at launch and record
         // whether it's granted, so per-instance window lists work without the
@@ -732,8 +745,11 @@ export default function App() {
   useEffect(() => {
     const id = window.setInterval(() => {
       claudeUsage()
-        .then(setUsage)
-        .catch(() => {});
+        .then((u) => {
+          setUsage(u);
+          setUsageErr(null);
+        })
+        .catch((e) => setUsageErr(errText(e)));
     }, 180_000);
     return () => window.clearInterval(id);
   }, []);
@@ -1461,42 +1477,111 @@ export default function App() {
           </div>
         </header>
 
-        {usage?.configured && (() => {
-          // Token meter scope (must not mislead): these totals are the app's own
-          // Bedrock usage — summarization/prompt-console calls (`claude_usage`) —
-          // and, when AWS creds are present, the whole account's CloudWatch total
-          // for this region. They do NOT include the interactive Claude Code
-          // terminal sessions embedded in each group (those run as a local PTY,
-          // untracked here). The label below states which scope is shown.
-          const ctx = usage.context_window || 0;
-          const pct =
-            ctx > 0 ? Math.min(100, Math.round((usage.last_total / ctx) * 100)) : 0;
+        {(() => {
+          // KO-II usage meter — always rendered (like the original) so the LCD
+          // face never collapses. Four distinct states, so an un-fetched value
+          // is never shown as a misleading "0":
+          //   loading      → a fetch is in flight, no data yet
+          //   unconfigured → no Bedrock key ("connect" guidance)
+          //   error        → last fetch failed / no data ("—" + reason)
+          //   ready        → real numbers (a genuine 0 shows as "0")
+          const meterState =
+            usage && usage.configured
+              ? "ready"
+              : usage && !usage.configured
+                ? "unconfigured"
+                : usageLoading
+                  ? "loading"
+                  : usageErr
+                    ? "error"
+                    : "loading";
+          const ready = meterState === "ready" && usage != null;
+          const ledOn = usage?.configured ?? claude?.configured ?? false;
+          const model = modelLabel(
+            usage?.model ?? claude?.model ?? DEFAULT_MODEL
+          );
+          // Mode-aware scope note (approved): app-local counts only this app's
+          // prompt-console calls; account-wide is the whole region's Bedrock
+          // usage and can include the group terminals' Claude Code sessions.
+          const note = ready
+            ? usage!.account
+              ? `※ ${usage!.region || "계정"} 계정 전체 Bedrock 사용량(모든 모델). 그룹 터미널의 Claude Code 세션이 같은 Bedrock 계정을 사용하면 이 수치에 포함됩니다.`
+              : "※ vibe-control 프롬프트 콘솔 호출만 집계 — 그룹 터미널의 Claude Code 세션은 포함되지 않습니다."
+            : meterState === "unconfigured"
+              ? "※ Claude 미연결 — 설정에서 Bedrock 키를 추가하면 사용량이 집계됩니다."
+              : meterState === "loading"
+                ? "※ 사용량을 불러오는 중입니다…"
+                : `※ 조회 실패: ${usageErr ?? "데이터 없음"}`;
           return (
-            <div className="ko-screen" title="vibe-control 자체 Bedrock 사용량 — 그룹 터미널의 Claude Code 세션은 포함되지 않습니다">
-              <div className="ko-usage">
-                <span className="ko-chip">{modelLabel(usage.model)}</span>
-                <span className="ko-legend">
-                  {usage.account
-                    ? `계정 전체 · ${usage.region}`
-                    : "이 앱 요약 사용량"}
-                </span>
-                <span className="ko-mini" title="누적 입력 토큰">
-                  in {fmtTokens(usage.input_tokens)}
-                </span>
-                <span className="ko-mini" title="누적 출력 토큰">
-                  out {fmtTokens(usage.output_tokens)}
-                </span>
-                <span className="ko-side" title={`총 ${fmtFull(usage.total_tokens)} 토큰 · ${fmtFull(usage.requests)} 요청`}>
-                  Σ {fmtTokens(usage.total_tokens)}
-                </span>
-                {ctx > 0 && (
-                  <span className="ko-last" title={`직전 호출 ${fmtFull(usage.last_total)} / 컨텍스트 ${fmtFull(ctx)}`}>
-                    ctx {pct}%
-                  </span>
-                )}
+            <div className="ko-screen">
+              <div className="ko-screen-glass">
+                <div className="ko-usage">
+                  <div className="ko-usage-total">
+                    <span
+                      className={`ko-led ${ledOn ? "on" : "off"}`}
+                      aria-hidden
+                    />
+                    <b>{ready ? fmtFull(usage!.total_tokens) : "—"}</b>
+                    <span className="ko-usage-model">{model}</span>
+                  </div>
+                  <div className="ko-legend">
+                    {ready ? (
+                      <>
+                        <span className="ko-chip in">
+                          <em />
+                          IN {fmtTokens(usage!.input_tokens)}
+                        </span>
+                        <span className="ko-chip out">
+                          <em />
+                          OUT {fmtTokens(usage!.output_tokens)}
+                        </span>
+                        <span className="ko-chip req">
+                          <em />
+                          {usage!.requests} CALLS
+                        </span>
+                        <span className="ko-chip">
+                          {usage!.account
+                            ? `계정 전체 · ${usage!.region}`
+                            : "이 앱 콘솔 사용량"}
+                        </span>
+                      </>
+                    ) : (
+                      <span className="ko-chip">
+                        {meterState === "loading"
+                          ? "조회 중…"
+                          : meterState === "unconfigured"
+                            ? "연결 필요"
+                            : "조회 실패"}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="ko-side">
+                  <div
+                    className="ko-last"
+                    title={
+                      ready
+                        ? `직전 호출 ${fmtFull(usage!.last_total)} 토큰`
+                        : undefined
+                    }
+                  >
+                    <b>{ready ? fmtTokens(usage!.last_total) : "—"}</b>
+                    <i>last call</i>
+                  </div>
+                  <div className="ko-mini">
+                    <span>
+                      <b>{String(bundles.length).padStart(2, "0")}</b>
+                      <i>GRP</i>
+                    </span>
+                    <span>
+                      <b>{String(runningApps.length).padStart(2, "0")}</b>
+                      <i>APP</i>
+                    </span>
+                  </div>
+                </div>
+                <span className="ko-screen-glare" aria-hidden />
               </div>
               <div
-                className="ko-note"
                 style={{
                   fontSize: "11px",
                   opacity: 0.7,
@@ -1504,7 +1589,7 @@ export default function App() {
                   lineHeight: 1.3,
                 }}
               >
-                ※ 그룹 내 Claude Code 터미널 사용량은 집계에 포함되지 않습니다.
+                {note}
               </div>
             </div>
           );
