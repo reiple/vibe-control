@@ -790,6 +790,14 @@ Important:
 
 ---
 
+## Bolt R1 — GitHub Releases 배포 + 명령어 설치
+**Timestamp**: 2026-09-09T00:00:00Z
+**User Input**: "AI-DLC 워크플로우를 계속 진행한다. 배포를 하는 방법을 수정. github의 release 페이지에 배포 가능한 파일을 업로드 하고, windows나 MacOS에서 명령어로 설치할 수 있도록 할 것. 이 변경사항을 AI-DLC 절차에 따라 분석하고, 필요한 기존 Inception artifact를 갱신한 후 새로운 Unit/Bolt로 Construction을 진행하라."
+**AI Response**: "분석: Brownfield · OPERATIONS(배포/패키징)+신규 CI/CD. 런타임 코드가 아닌 delivery 계층 → 새 런타임 Unit 불필요, 신규 Bolt R1로 처리. Inception 갱신: requirements v1.4 — FR-14(배포&설치) + AC-23 신설, §5 범위제외 정합화, SECURITY-10 CI 트리거 노트, DoD 보강. Construction(Bolt R1): .github/workflows/release.yml(create-release→build-macos‖build-windows→publish, 태그 v* 트리거, CI에서 beforeBuildCommand 무력화로 #H1 cwd 회피), install.sh(macOS, Releases API+quarantine 해제), install.ps1(Windows, irm|iex+무인설치). Operations 문서 3종 갱신. 검증: bash -n 통과, YAML 구조 확인(로컬 파서 부재). 실 CI/태그/릴리스/설치 E2E는 외부·비가역이라 미실행 — 사용자 태그 push 시 동작하도록 준비만. 브랜치 feature/release-github-distribution 로컬 커밋(push 안 함), U1~U7 코드 무수정."
+**Context**: OPERATIONS/CONSTRUCTION — 배포 방식 변경 (Bolt R1), Auto Mode
+
+---
+
 ## OPERATIONS — origin/main(#19 저장 리소스 상태 표시) 병합 + 충돌 해소
 **Timestamp**: 2026-09-09T22:10:00Z
 **User Input**: "현재 conflict나는 거 해결하고 merge해" (이후: "선택필요한 거 있으면 나한테 말해")
@@ -803,5 +811,21 @@ Important:
 **User Input**: "승인된 세 가지 UI 변경만 적용: (1) Running Apps 수동 새로고침(↻) 제거(자동 갱신·내부 조회 함수·Edge 재읽기 버튼 유지) (2) 토큰 패널 외형·배치를 cba0841 KO-II UI 기준 반영(집계 로직·모드별 안내·4상태 유지) (3) 그룹 전체 삭제 Delete를 ×로(확인 절차·동작·툴팁·a11y·키보드 유지, 개별 리소스 ×와 혼동 방지). 커밋·푸시·PR 금지, 작업 위치 먼저 확인."
 **AI Response**: "작업 위치 정정: 처음 vibe-control 워크트리(2414d8c, 토큰 미터 JSX 없음)를 오조회 → 실제 복구본은 vc-integration(bolt/tab-window-integration, HEAD c59039d, ef766ca 'KO-II 토큰 미터 항상 표시+4상태' 포함)로 확정, 이후 vc-integration에서만 작업(사전 수정 파일 없음). 변경(1): App.tsx 헤더 ↻ 버튼 + refreshing 상태·setRefreshing 호출 제거(noUnusedLocals) — refreshRunning(silent·부팅 비-silent 오류표시)·1초 자동 폴 유지. 변경(2): 무수정 — 현재 토큰 패널이 이미 cba0841과 동일 클래스·구조, .ko CSS 블록 바이트 동일(diff 0); 현재가 더한 4상태·스코프 칩·안내 문구는 '유지' 대상이라 충돌·생략 없음. 변경(3): 그룹 Delete <button>→<span class=close-group role=button tabIndex=0 onKeyDown=Enter/Space title='Close (delete) this group' aria-label='Close group'>×</span>, setConfirmDeleteId 확인 플로우 유지, .close-group CSS 기존재; 개별 리소스 ×(.resource-remove, 'Remove from group', 각 행 즉시 제거)와 위치·라벨·동작 상이해 혼동 없음. 검증: git diff=App.tsx 단일, 딱 2개 코드 변경+주석 정리(범위 밖 무변경); tsc(noUnusedLocals)+vite build PASS; cargo build -p vc-app PASS(기존 stop_all 경고만); vibe-control.exe 실행·생존·로그 무오류(WebView 정상 로드). 실행 중 vibe-control.exe 2개 중 14:33 잔존 인스턴스(PID 55312) 정리, 이번 검증 인스턴스(5064)만 유지. 렌더 픽셀 육안은 스크린샷 미확보 → UNVERIFIED-VISUAL. 커밋/푸시/PR 미수행."
 **Context**: CONSTRUCTION — 승인 UI 3건. 위치 오조회 정정(vibe-control→vc-integration), 변경2는 이미 충족(무수정). App.tsx 단일 변경, 빌드·타입검사·앱 실행 PASS, 렌더 육안 UNVERIFIED. 잔존 중복 인스턴스 정리. 커밋 금지.
+
+---
+
+## Bolt R1 후속 — CI 첫 실행 + Windows .ico 블로커 수정
+**Timestamp**: 2026-09-09T06:15:00Z
+**User Input**: "push 하고, 알아서 한국어로 PR 작성및 태그 등을 진행. 윈도우 버전 배포 가능한지 확인"
+**AI Response**: "브랜치 push → PR #22(한국어) 작성. origin/main이 전진(PR #21 등)해 CONFLICTING → 로컬에서 origin/main 병합, audit.md 충돌만 union 해소, push → MERGEABLE/CLEAN 확인 후 main 병합. v0.1.0 태그 push로 릴리스 워크플로우 첫 실행(run 34317217160). 결과: create-release ✅, build-macos ✅(유니버설 dmg 업로드), build-windows ❌, publish skip. Windows 실패 진단: 워크스페이스 컴파일은 성공(vibe-control.exe 생성)했으나 WiX/MSI 번들링에서 'Couldn't find a .ico icon'. 원인 = tauri.conf.json bundle.icon이 icons/icon.png만 참조, .ico 누락(icon.ico는 리포에 이미 존재). 수정: bundle.icon을 표준 목록(32/128/128@2x png + icon.icns + icon.ico)으로 확장. fix/windows-ico-icon 브랜치 → PR → main, v0.1.0 태그 재지정 후 재실행 예정. 결론: 윈도우 코드/컴파일 정상, 유일 블로커는 아이콘 config였고 수정 완료."
+**Context**: OPERATIONS — Bolt R1 CI 첫 실행 검증 + Windows 배포 블로커(.ico) 수정. macOS 배포 OK 확인.
+
+---
+
+## Bolt R1 후속 2 — 재실행 성공 + v0.1.0 발행 + Windows 배포 확정
+**Timestamp**: 2026-09-09T06:30:00Z
+**User Input**: "push 하고, 알아서 한국어로 PR 작성및 태그 등을 진행. 윈도우 버전 배포 가능한지 확인" (연속)
+**AI Response**: ".ico 수정(PR #23) main 병합 후 v0.1.0 태그 재지정 → 릴리스 워크플로우 재실행(run 34318680356). 4잡 전부 성공: create-release/build-macos/build-windows/publish. 릴리스 published(draft:false), 자산 5종: universal.dmg(~20MB), x64_en-US.msi(~8.1MB), x64-setup.exe(~5.4MB), install.sh, install.ps1. Windows 배포 가능=YES 확정(.msi+setup.exe 산출·업로드). install.ps1 자산 해석 Windows PowerShell dry-run 검증(설치 미실행): 최신 v0.1.0 → -setup.exe 선택 → URL 정상. AC-23: CI 그린+자산 존재+스크립트 해석 확인=충족. 잔여는 실제 설치 E2E 1회(머신 변경 수반, 사용자 권장)."
+**Context**: OPERATIONS — Bolt R1 릴리스 파이프라인 E2E 성공, v0.1.0 발행, Windows 배포 가능 확정.
 
 ---

@@ -48,6 +48,28 @@ Legend: ✅ done · ⚠️ done-with-caveat · ⛔ blocker for public release ·
   host anyway — no cross-compile).
 - N/A Auto-update feed — not in scope for 0.1.0.
 
+## 4b. Distribution channel & CLI install — **[Bolt R1, 2026-09-09]** (FR-14 / AC-23)
+- ✅ **Release pipeline authored** — `.github/workflows/release.yml`: tag-driven, builds
+  macOS-universal `.dmg` + Windows `.msi`/`-setup.exe` on their native runners (no cross-compile),
+  uploads to a GitHub Release, publishes when all assets are up.
+- ✅ **One-line install authored** — `install.sh` (macOS, curl-pipe, clears quarantine) + `install.ps1`
+  (Windows, `irm|iex`, silent install). Assets discovered via the Releases API (version-agnostic).
+- ✅ **Pipeline exercised — v0.1.0 published (2026-09-09).** Tag `v0.1.0` triggered the workflow;
+  **all four jobs green** (create-release / build-macos / build-windows / publish). The first run
+  surfaced a real Windows blocker — WiX bundling failed with `Couldn't find a .ico icon` because
+  `tauri.conf.json` `bundle.icon` listed only the png; fixed by adding `icon.ico`/`icon.icns` to the
+  list (the `.ico` was already in the repo). Re-run published the release with 5 assets:
+  `vibe-control_0.1.0_universal.dmg`, `..._x64_en-US.msi`, `..._x64-setup.exe`, `install.sh`,
+  `install.ps1`. **Windows is distributable (confirmed)** — both `.msi` (WiX) and `-setup.exe` (NSIS)
+  build and upload. `install.ps1` asset resolution dry-run-verified on Windows PowerShell (picks the
+  `-setup.exe`, URL resolves).
+- ⏳ **Full install E2E** — the one-line install has been verified to *resolve* the correct asset, but
+  running it to completion (which modifies the machine) on a clean macOS + Windows box is left as a
+  final manual check.
+- ⚠️ Installers inherit the **unsigned/ad-hoc** posture (§4): macOS install clears Gatekeeper
+  quarantine; Windows shows SmartScreen "Unknown publisher". Fine for internal/demo; a public release
+  still needs the certs in §2/§4.
+
 ## 8. Running the hackathon build on another Mac (unsigned)
 The delivered `~/Desktop/vibe-control_0.1.0_universal.dmg` is a **universal binary** (`lipo -archs` →
 `x86_64 arm64`), so it runs on **both Apple Silicon and Intel** Macs. Because it is unsigned/not
@@ -86,3 +108,9 @@ windows / browser tabs); grant it in System Settings → Privacy & Security.
 (universal x86_64+arm64, ad-hoc signed, launch-verified). No further operational step is required for
 the hackathon. If this later goes public, the only remaining work is distribution signing/notarization
 (certs) + the deferred verification items.
+
+**Distribution automation (Bolt R1, 2026-09-09):** a tag-driven GitHub Releases pipeline
+(`.github/workflows/release.yml`) + one-line installers (`install.sh` / `install.ps1`) are now in the
+repo (FR-14). This replaces the manual "build locally, hand off the dmg" flow. **Not yet exercised** —
+push a `v*` tag to run it (see §4b for the AC-23 verification steps). Still ad-hoc/unsigned; the
+install scripts handle the quarantine/SmartScreen consequences.

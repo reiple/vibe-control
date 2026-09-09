@@ -318,3 +318,35 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **브랜치**: `feature/backlog-resource-status`(main 직접 커밋 회피).
 - [x] 최신 반영 → [x] 백로그 대조(에이전트) → [x] Inception 정합화(requirements) → [x] Construction Code Generation(U1·U6·U7) → [x] 테스트 추가 → [x] build/clippy/test/tsc/vite + 실 Windows 실행 검증 → [x] 문서 갱신.
 - **남은 백로그**: P2(항목 편집 FR-6, 묶음 이름 변경 FR-1.1, 중복 식별 불변식 도메인화 D1, 사용자 문서), P3(트레이/전역 단축키 B5, macOS PermissionChecker B6, 헥사고날 리팩터 A1–A4 잔여, 스플래시 고DPI). 모두 v1.1에서 연기됐거나 하드닝/리팩터 성격.
+
+### ✅ DONE (2026-09-09): Bolt R1 — GitHub Releases 배포 파이프라인 + 명령어 설치 (FR-14 / AC-23)
+**트리거**: 사용자 요청 — "배포 방법 수정: GitHub release 페이지에 배포 가능한 파일을 업로드하고, Windows나 macOS에서 명령어로 설치할 수 있도록. AI-DLC 절차대로 분석 → Inception artifact 갱신 → 새 Unit/Bolt로 Construction."
+**분석/판단**: Brownfield · **OPERATIONS(배포/패키징) + 신규 CI/CD** 도입(종전 "CI/CD 미정의"·"자동 업데이트/앱 장터 = 범위 밖"에서 정합화). 런타임 코드(U1~U7)에 속하지 않는 **전달(delivery) 계층** → 새 런타임 Unit 불필요, **신규 Bolt R1**로 처리(적응형 워크플로우 — Application Design/신규 컴포넌트 스킵). Tauri는 크로스컴파일 불가 → 각 OS 러너에서 빌드.
+- **INCEPTION 문서 반영**:
+  - `requirements.md` v1.4 — **FR-14 신설**(14.1 태그 트리거 빌드 · 14.2 Releases 업로드+draft→publish · 14.3 한 줄 설치 · 14.4 API 동적 자산 조회/버전 고정 · 14.5 미서명 → 격리해제/SmartScreen 안내 · 14.6 자동 업데이트/스토어는 범위 밖), **AC-23 신설**, §5 "범위 제외" 정합화(GitHub Releases 배포는 범위 내로 승격, 인앱 자동업데이트·스토어만 제외), SECURITY-10 노트(CI 도입 트리거 → `cargo audit`/`npm audit` 백로그), DoD 보강.
+- **CONSTRUCTION (Bolt R1 Code Generation, 리포 루트)**:
+  - `.github/workflows/release.yml` — 4잡: `create-release`(draft 생성 + install 스크립트 자산 첨부, 병렬 잡 레이스 방지) → `build-macos`(유니버설 .dmg, ad-hoc `APPLE_SIGNING_IDENTITY=-`) ‖ `build-windows`(.msi + `-setup.exe`) → `publish`(`gh release edit --draft=false --latest`). `push: tags v*` + `workflow_dispatch(tag)` 트리거. **CI cwd 취약성 제거**: 프론트를 명시 빌드(`npm --prefix frontend run build`) 후 `tauri build --config '{"build":{"beforeBuildCommand":""}}'`를 `crates/vc-app`에서 `../../frontend/node_modules/.bin/tauri`로 실행(`#H1` 회피).
+  - `install.sh`(macOS) — Releases API로 유니버설 .dmg 조회(jq 불필요, grep/sed) → 다운로드 → hdiutil 마운트 → `/Applications` 설치(권한 시 sudo 폴백) → `xattr -dr com.apple.quarantine`(Gatekeeper 해제) → Automation/Accessibility 안내. `VC_VERSION`으로 버전 고정.
+  - `install.ps1`(Windows) — Releases API(`Invoke-RestMethod`, TLS1.2) → `-setup.exe`(우선, `/S`) 또는 `.msi`(`msiexec /qn`) 무인 설치 → SmartScreen 안내. `$env:VC_VERSION` 고정.
+- **OPERATIONS 문서 반영**: `release-packaging.md` §6(파이프라인+한 줄 설치+서명 주의+릴리스 컷 절차) 신설·§5 갱신, `operations-overview.md`(deliverables + Distribution channel 절), `production-readiness-checklist.md` §4b + Go/no-go 각주.
+- **검증(이 환경)**: `bash -n install.sh` 통과, 워크플로우 YAML 탭 없음·구조 확인(로컬에 pyyaml/actionlint 부재로 정식 파서 검증은 생략, 수동 리뷰). `pwsh` 부재로 install.ps1 정적 파싱 불가 — 신중 작성. **`.bin/tauri`는 `@tauri-apps/cli` 표준 bin**(CI `npm ci` 후 생성).
+- **⏳ 미검증(외부·비가역이라 이 Bolt에서 미실행)**: 실제 `v*` 태그 push / CI 실행 / 릴리스 발행 / 두 OS 설치 E2E(AC-23). 사용자가 태그를 밀면 동작하도록 준비만 완료. **push/태그/릴리스 미실행, 코드(U1~U7) 무수정.**
+- **브랜치**: `feature/release-github-distribution`(main 직접 커밋 회피, 로컬 커밋만 — push 안 함).
+- [x] 분석 → [x] Inception 정합화(requirements v1.4 FR-14/AC-23) → [x] Construction Bolt R1(workflow + 설치 스크립트 2종) → [x] 로컬 정적 검증(bash -n, YAML 구조) → [x] Operations 문서 갱신 → [x] 실 CI 실행(사용자 승인 후 push+태그).
+
+#### CI 첫 실행 결과 + Windows 배포 블로커 수정 (2026-09-09)
+사용자 승인 후 `feature/release-github-distribution` push → PR #22(origin/main 병합, audit union 충돌 해소) → main 병합 → **`v0.1.0` 태그 push로 릴리스 워크플로우 첫 실행**(run 34317217160).
+- **결과**: `create-release` ✅(draft + 설치 스크립트 첨부) · `build-macos` ✅(유니버설 .dmg 업로드) · **`build-windows` ❌** · `publish` ⏭(windows 실패로 skip).
+- **Windows 실패 원인(진단 완료)**: 워크스페이스는 **컴파일 성공**(10분, `vibe-control.exe` 생성, dead_code 경고 1건뿐)했으나 **WiX/MSI 번들링에서 `failed to bundle project: Couldn't find a .ico icon`**. 근본 원인 = `crates/vc-app/tauri.conf.json`의 `bundle.icon`이 `["icons/icon.png"]` 하나만 참조 → Windows 번들러가 `.ico`를 못 찾음. **`icons/icon.ico`(유효한 6크기 MS 아이콘)는 리포에 이미 존재·추적**되는데 config 목록에 누락돼 있었을 뿐.
+- **수정**: `bundle.icon`을 표준 Tauri 목록으로 확장 — `32x32.png`/`128x128.png`/`128x128@2x.png`/`icon.icns`/`icon.ico`(전부 존재). macOS(.icns)·Windows(.ico) 모두 커버. (브랜치 `fix/windows-ico-icon` → PR → main, `v0.1.0` 태그 재지정 후 재실행.)
+- **결론(윈도우 배포 가능 여부)**: 코드/컴파일은 Windows에서 정상 — 유일한 블로커는 아이콘 config 누락이었고 수정됨.
+
+#### ✅ 재실행 성공 + 릴리스 발행 (run 34318680356, PR #23 병합 후 v0.1.0 재지정)
+아이콘 수정 후 `v0.1.0` 태그 재지정 → 릴리스 워크플로우 재실행. **4잡 전부 성공**: `create-release` ✅ · `build-macos` ✅ · **`build-windows` ✅**(.ico 수정으로 WiX/NSIS 번들링 통과) · `publish` ✅(draft→published/latest 전환).
+- **발행된 릴리스** `https://github.com/reiple/vibe-control/releases/tag/v0.1.0` (draft:false), 자산 5종:
+  - `vibe-control_0.1.0_universal.dmg` (~20 MB, macOS Intel+Apple Silicon)
+  - **`vibe-control_0.1.0_x64_en-US.msi` (~8.1 MB, Windows WiX)**
+  - **`vibe-control_0.1.0_x64-setup.exe` (~5.4 MB, Windows NSIS)**
+  - `install.sh` / `install.ps1` (설치 스크립트)
+- **Windows 배포 가능 = YES(확정)**. `install.ps1` 자산 해석을 Windows PowerShell로 dry-run 검증(설치는 미실행): 최신 태그 `v0.1.0` → `-setup.exe` 선택 → 다운로드 URL 정상 해석.
+- **AC-23 상태**: CI 그린(양 OS) + 릴리스 자산 존재 + Windows 설치 스크립트 자산 해석 확인 = **충족**. 잔여는 두 OS에서 실제 한 줄 설치 후 앱 기동 육안 확인 1회(머신 변경 수반이라 사용자 실행 권장).
