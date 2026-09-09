@@ -63,37 +63,16 @@ export function GroupTerminal({
     };
 
     // User typing in the terminal goes straight to the session (real terminal),
-    // normalized to NFC. Korean/CJK IME in this macOS WKWebView otherwise
-    // delivered composed text as decomposed jamo (NFD) — ㅎ+ㅏ+ㄴ instead of 한 —
-    // which showed up in claude as split 자음/모음. NFC recombines them; it's a
-    // no-op for ASCII and escape/control sequences, so it's safe everywhere.
-    let composing = false;
-    const send = (data: string) => {
-      if (data) void sendInteractiveText(sessionRef, data.normalize("NFC"));
-    };
+    // normalized to NFC. xterm already sends the FULL composed syllable once on
+    // compositionend (read from textarea.value) — no per-keystroke leak — but in
+    // this macOS WKWebView that value is decomposed jamo (NFD, ㅎ+ㅏ+ㄴ), which
+    // reached claude as split 자음/모음. NFC recombines them into 한. It's a no-op
+    // for ASCII and escape/control sequences, so applying it to every send is
+    // safe — and we must NOT gate/suppress onData (an earlier attempt to buffer
+    // composition ourselves dropped most characters).
     const dataSub = term.onData((data) => {
-      // While an IME composition is active, swallow xterm's intermediate/deferred
-      // sends — we forward the finalized string ourselves on compositionend so a
-      // syllable arrives as one unit instead of piece-by-piece.
-      if (composing) return;
-      send(data);
+      void sendInteractiveText(sessionRef, data.normalize("NFC"));
     });
-
-    // IME composition: xterm's own finalized send also runs through onData, but
-    // on a setTimeout(0) fired while `composing` is still true (we clear it a
-    // tick later, AFTER xterm's), so it's swallowed and we never double-send.
-    const ta = term.textarea;
-    const onCompStart = () => {
-      composing = true;
-    };
-    const onCompEnd = (e: CompositionEvent) => {
-      send(e.data);
-      setTimeout(() => {
-        composing = false;
-      }, 0);
-    };
-    ta?.addEventListener("compositionstart", onCompStart);
-    ta?.addEventListener("compositionend", onCompEnd);
 
     (async () => {
       // 1) Subscribe before starting so the opening banner isn't missed.
@@ -139,8 +118,6 @@ export function GroupTerminal({
       disposed = true;
       ro.disconnect();
       dataSub.dispose();
-      ta?.removeEventListener("compositionstart", onCompStart);
-      ta?.removeEventListener("compositionend", onCompEnd);
       if (unlisten) unlisten();
       term.dispose();
     };
