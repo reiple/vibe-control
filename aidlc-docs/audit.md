@@ -797,3 +797,11 @@ Important:
 **Context**: OPERATIONS — 통합 브랜치에 origin/main(#19) 병합. App.tsx 충돌은 kind-aware 활성화 + 저장 리소스 상태 표시 두 기능 union 결합(삭제 없음), audit UNION. 빌드 3종 PASS, 대화형 UNVERIFIED.
 
 ---
+
+## CONSTRUCTION — 승인된 3건 UI 변경 (새로고침 버튼 제거 · 토큰 패널 · 그룹 Delete→×)
+**Timestamp**: 2026-09-09T23:20:00Z
+**User Input**: "승인된 세 가지 UI 변경만 적용: (1) Running Apps 수동 새로고침(↻) 제거(자동 갱신·내부 조회 함수·Edge 재읽기 버튼 유지) (2) 토큰 패널 외형·배치를 cba0841 KO-II UI 기준 반영(집계 로직·모드별 안내·4상태 유지) (3) 그룹 전체 삭제 Delete를 ×로(확인 절차·동작·툴팁·a11y·키보드 유지, 개별 리소스 ×와 혼동 방지). 커밋·푸시·PR 금지, 작업 위치 먼저 확인."
+**AI Response**: "작업 위치 정정: 처음 vibe-control 워크트리(2414d8c, 토큰 미터 JSX 없음)를 오조회 → 실제 복구본은 vc-integration(bolt/tab-window-integration, HEAD c59039d, ef766ca 'KO-II 토큰 미터 항상 표시+4상태' 포함)로 확정, 이후 vc-integration에서만 작업(사전 수정 파일 없음). 변경(1): App.tsx 헤더 ↻ 버튼 + refreshing 상태·setRefreshing 호출 제거(noUnusedLocals) — refreshRunning(silent·부팅 비-silent 오류표시)·1초 자동 폴 유지. 변경(2): 무수정 — 현재 토큰 패널이 이미 cba0841과 동일 클래스·구조, .ko CSS 블록 바이트 동일(diff 0); 현재가 더한 4상태·스코프 칩·안내 문구는 '유지' 대상이라 충돌·생략 없음. 변경(3): 그룹 Delete <button>→<span class=close-group role=button tabIndex=0 onKeyDown=Enter/Space title='Close (delete) this group' aria-label='Close group'>×</span>, setConfirmDeleteId 확인 플로우 유지, .close-group CSS 기존재; 개별 리소스 ×(.resource-remove, 'Remove from group', 각 행 즉시 제거)와 위치·라벨·동작 상이해 혼동 없음. 검증: git diff=App.tsx 단일, 딱 2개 코드 변경+주석 정리(범위 밖 무변경); tsc(noUnusedLocals)+vite build PASS; cargo build -p vc-app PASS(기존 stop_all 경고만); vibe-control.exe 실행·생존·로그 무오류(WebView 정상 로드). 실행 중 vibe-control.exe 2개 중 14:33 잔존 인스턴스(PID 55312) 정리, 이번 검증 인스턴스(5064)만 유지. 렌더 픽셀 육안은 스크린샷 미확보 → UNVERIFIED-VISUAL. 커밋/푸시/PR 미수행."
+**Context**: CONSTRUCTION — 승인 UI 3건. 위치 오조회 정정(vibe-control→vc-integration), 변경2는 이미 충족(무수정). App.tsx 단일 변경, 빌드·타입검사·앱 실행 PASS, 렌더 육안 UNVERIFIED. 잔존 중복 인스턴스 정리. 커밋 금지.
+
+---

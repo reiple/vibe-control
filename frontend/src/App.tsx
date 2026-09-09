@@ -519,7 +519,6 @@ export default function App() {
   // Keyed by appKey (name+bundle id) so the expansion survives the 1s poll
   // replacing the list, and two same-named apps don't collide.
   const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
-  const [refreshing, setRefreshing] = useState(false);
 
   // ── Windows browser tabs (read lazily on expand, never on the poll, FR-10.7) ──
   const [tabsByApp, setTabsByApp] = useState<Record<string, RunningWindow[]>>({});
@@ -745,25 +744,22 @@ export default function App() {
   const refreshRunning = async (silent = false) => {
     // Never re-render the running list mid-drag: replacing/reordering the
     // items cancels the in-flight native HTML5 drag before it can drop. The
-    // background poll yields to an active drag; a manual ↻ can't collide with
-    // a drag (one pointer) so it isn't gated.
+    // background poll yields to an active drag; a non-silent refresh (boot) runs
+    // when no drag is in flight, so it isn't gated.
     if (silent && draggedApp.current) return;
-    if (!silent) setRefreshing(true);
     try {
       const apps = await listRunningApps();
       if (silent && draggedApp.current) return; // a drag began while fetching
       setRunningApps(apps);
     } catch (e) {
       // A background poll shouldn't flash the error banner every tick — only
-      // surface failures from an explicit refresh.
+      // surface failures from an explicit (non-silent) refresh.
       if (!silent) setError(String(e));
-    } finally {
-      if (!silent) setRefreshing(false);
     }
   };
 
   // Live status: poll running apps every second so the left panel stays current
-  // without the user pressing ↻. Silent (no spinner / no error banner).
+  // automatically. Silent (no spinner / no error banner).
   useEffect(() => {
     const id = setInterval(() => refreshRunning(true), 1000);
     return () => clearInterval(id);
@@ -1260,14 +1256,6 @@ export default function App() {
       <aside className="sidebar" ref={sidebarRef}>
         <header className="sidebar-header">
           <h1>Running Apps</h1>
-          <button
-            className="ghost icon"
-            onClick={() => refreshRunning()}
-            disabled={refreshing}
-            title="Refresh"
-          >
-            ↻
-          </button>
         </header>
         <input
           className="search"
@@ -1687,12 +1675,22 @@ export default function App() {
                       </button>
                     </>
                   ) : (
-                    <button
-                      className="mini"
+                    <span
+                      className="close-group"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setConfirmDeleteId(b.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setConfirmDeleteId(b.id);
+                        }
+                      }}
+                      title="Close (delete) this group"
+                      aria-label="Close group"
                     >
-                      Delete
-                    </button>
+                      ×
+                    </span>
                   )}
                 </div>
               </header>
