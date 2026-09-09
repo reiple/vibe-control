@@ -45,8 +45,8 @@
 
 | # | 원 설계 | 실제 코드 | 유형 | 근거 |
 |---|---|---|---|---|
-| C1 | 저장 실패 시 임시 파일 **정리/롤백** | `save()`가 쓰기 실패 시 `Err`만 반환, `.tmp` 파일 정리 없음(누수) | [코드백로그] | `vc-store/src/lib.rs:80-81` |
-| C2 | 단일 JSON 저장소가 설정 포함 **원자적 교체** | `bundles.json`은 temp→rename 원자적. 그러나 `settings.json`은 **별도 파일 + 비원자적** `fs::write` | [문서반영]+[코드백로그] | `vc-store/src/lib.rs:103-112` |
+| C1 | 저장 실패 시 임시 파일 **정리/롤백** | ✅ **해결(2026-09-09)** — `save()`/`save_settings()`가 공유 `atomic_write(path, bytes)` 헬퍼 사용. 쓰기·rename 실패 시 `.tmp`를 `fs::remove_file`로 정리 후 `Err` 반환(누수 없음). 단위 테스트 `test_save_cleans_temp_on_failure`/`test_save_leaves_no_temp_file`로 검증 | [문서반영] | `vc-store/src/lib.rs`(`atomic_write`) |
+| C2 | 단일 JSON 저장소가 설정 포함 **원자적 교체** | ✅ **해결(2026-09-09)** — `settings.json`도 `atomic_write`(temp→rename)로 전환. `bundles.json`과 동일한 원자성. 단위 테스트 `test_settings_atomic_roundtrip`로 검증(별도 파일 구조는 유지 — C3 참조) | [문서반영] | `vc-store/src/lib.rs`(`save_settings`→`atomic_write`) |
 | C3 | `BundleStore`가 `StoreState`에 대한 `load()/save()` | 실제 트레이트는 `Vec<WorkBundle>` 대상 + `load_settings`/`save_settings` 추가. `StoreState` 타입 없음. 버전 태깅·마이그레이션은 vc-store가 아니라 `vc-core/migrate`에 존재 | [문서반영] | `vc-store/src/lib.rs:5-10`, `vc-core/src/migrate/mod.rs:6,44` |
 
 ---
@@ -294,7 +294,7 @@ vc-os-windows `list_tabs`에서 UIA `Name`이 빈 문자열인 탭을 `(제목 �
 | 우선 | 항목 | 관련 이탈 | 관련 FR/AC |
 |---|---|---|---|
 | ✅완료 | 창 단위 모델 재정렬 **완료**(G1·G2·G3). 열거를 `EnumWindows` 네이티브 FFI로 교체 — Edge/Chrome/카톡 다중 창이 각각 표시됨(실측 검증, 2026-09-09) | **G1✔, G2✔, G3✔** | **FR-2.2/2.4/2.6/2.8, FR-4.1/4.2, AC-20** |
-| P1 | **묶음에서 리소스 제거** 경로 배선(`remove_resource`는 도메인에 이미 존재) | 신규 `#D-33` | FR-1.2 |
+| ✅완료 | **묶음에서 리소스 제거** 배선 완료 — 코드 감사(2026-09-09)에서 이미 구현되어 있음 확인: `remove_resource` Tauri 커맨드(`vc-app/src/lib.rs:562`) + `removeResource` api 래퍼(`frontend/src/api.ts:115`) + `App.tsx:644` 호출. 종전 백로그 표기가 stale이었음 | ~~신규 `#D-33`~~ | FR-1.2 |
 | P1 | 레이아웃 설정 영속화(get/update_settings 배선) | E2 | FR-8.10, AC-14 |
 | P1 | 저장 리소스 상태 표시 배선(`evaluate` 호출 + 프론트 `status` 필드) | A4, 신규 `#D-30` | FR-7.1~7.3 |
 | ✅완료 | **폴링 절약 구현 완료 (2026-09-08)** — 창이 숨겨짐/최소화 시 폴링 중단, 리사이즈 후 400ms 유예, 복귀 시 즉시 갱신, 진행 중 폴링과 중첩 방지. `frontend/src/App.tsx` | ~~`#D-37`~~ | FR-7.5, **FR-7.6**, NFR-Pf3 |
@@ -304,7 +304,7 @@ vc-os-windows `list_tabs`에서 UIA `Name`이 빈 문자열인 탭을 `(제목 �
 | P3 | ~~세션 전체 대화 뷰어 복원~~ → **요구사항 v1.1에서 축소**(터미널 포커스로 대체). 되돌릴 경우에만 착수 | E1 | FR-12.3(개정), AC-17(개정) |
 | P3 | 스플래시 고DPI 렌더 보정(Tauri 창 nudge) | **H2** | FR-13(알려진 제약) |
 | P4 | 죽은 API `WinWindowEnumerator::list_running` 정리 / `reqwest` 주석 정정 | **H3, H4** | — |
-| P1 | 저장 실패 시 `.tmp` 정리 + `settings.json` 원자적 쓰기 | C1, C2 | FR-11.5/11.6, SECURITY-15 |
+| ✅완료 | 저장 실패 시 `.tmp` 정리 + `settings.json` 원자적 쓰기 **완료(2026-09-09)** — 공유 `atomic_write` 헬퍼(temp→rename, 실패 시 `.tmp` 정리). `cargo test -p vc-store` 5/5 통과·clippy 0 경고 | C1✔, C2✔ | FR-11.5/11.6, SECURITY-15 |
 | P2 | 중복 식별 금지 불변식 도메인화(`add_resource`/`is_duplicate`) | D1 | FR-3.4, AC-3 |
 | 부분완료 | Windows 브라우저 탭 — 라이브 표시·활성화(§H) + **작업 묶음 개별 등록·정확 활성화·중복 방지 완료**(§H2, 제목 기반 포커스 전용). 잔여: capture용 URL 수집(DevTools 필요) | B3 | FR-9.6/10.12, FR-3.4/3.5/4.1/4.2, AC-20 완료 / FR-9.1·9.3, AC-9 잔여 |
 | P3 | Windows 트레이/전역 단축키 | B5 | FR-10.13 |

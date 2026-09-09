@@ -992,6 +992,24 @@ try { $ws = New-Object -ComObject WScript.Shell; if ($procId -ne 0) { [void]$ws.
         Self::start_process(url)
     }
 
+    /// Focus a specific browser tab by URL (per-tab activation, FR-2.2 / FR-4.1)
+    /// — the Windows counterpart of the macOS path.
+    ///
+    /// Windows can't *select* an already-open tab: tab enumeration isn't
+    /// implemented on this platform (see `WinBrowserTabReader::read_tabs` — it
+    /// needs UI Automation or the Chrome DevTools protocol, both out of MVP
+    /// scope), so there is no handle to a live tab to raise. Instead we open the
+    /// URL, which mirrors the macOS behavior when the registered tab was closed:
+    /// the user always lands on the correct URL and never on some unrelated tab
+    /// that merely happened to be frontmost. The browser is opened via
+    /// `Start-Process` (default browser), so `app` (the display name captured on
+    /// another OS, e.g. "Safari"/"Google Chrome") is intentionally ignored — it
+    /// isn't a resolvable Windows executable.
+    pub fn activate_browser_tab(app: &str, url: &str) -> Result<()> {
+        let _ = app;
+        Self::open_url(url)
+    }
+
     /// Launch a target via PowerShell `Start-Process`, passing the (untrusted)
     /// target through an env var so it is never parsed by a shell. One helper
     /// serves apps, URLs and paths: `Start-Process` routes each appropriately

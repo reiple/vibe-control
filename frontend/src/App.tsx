@@ -9,38 +9,37 @@ import type {
   RunningWindow,
   ChatMsg,
   ClaudeStatus,
+  ClaudeUsage,
 } from "./types";
 import {
   getBundles,
   getSessionSnapshot,
   restoreBundle,
-  resumeCodingSession,
   activateCodingSession,
   listRunningApps,
+  listAppChildren,
   activateApp,
   activateWindow,
+  activateChild,
   listBrowserTabs,
   activateTab,
+  activateTabResource,
+  addTabResource,
+  addWindowResource,
+  activateWindowResource,
   getAppIcon,
   createBundle,
   deleteBundle,
+  removeResource,
   addAppResource,
-  addTabResource,
-  activateTabResource,
-  addWindowResource,
-  activateWindowResource,
+  addChildResource,
   claudeStatus,
+  claudeUsage,
   setClaudeApiKey,
   setClaudeModel,
   sendClaudeMessage,
+  requestAccessibility,
 } from "./api";
-
-// Apps whose expanded list shows browser TABS (via UI Automation) rather than
-// OS windows — matched case-insensitively against the app-group name, which on
-// Windows is the browser's exe stem (FR-9.6 / FR-10.12). A browser group is
-// always expandable so its tabs can be revealed even when it has one window.
-// Tabs are fetched lazily on expand, never on the 1-second poll (FR-10.7).
-const BROWSER_APPS = new Set(["chrome", "msedge", "brave", "whale"]);
 
 // Selectable models for the console. These are AWS Bedrock inference-profile
 // ids (the app talks to the Bedrock runtime, not api.anthropic.com), matching
@@ -52,6 +51,20 @@ const CLAUDE_MODELS: { id: string; label: string }[] = [
 
 // Fallback shown when no model is saved yet — matches the backend default.
 const DEFAULT_MODEL = "global.anthropic.claude-opus-4-8";
+
+// KO-II usage meter helpers ------------------------------------------------
+// Compact token formatter: 942 · 12.3k · 1.24M.
+const fmtTokens = (n: number): string => {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(2)}M`;
+};
+// The big cumulative counter shows full digits with thousands separators.
+const fmtFull = (n: number): string => n.toLocaleString("en-US");
+// Human label for the connected model id (falls back to the raw id's tail).
+const modelLabel = (id: string): string =>
+  CLAUDE_MODELS.find((m) => m.id === id)?.label ??
+  (id ? id.split(".").pop() ?? id : "—");
 
 // Tauri command errors arrive as a serialized object ({ message }), so String(e)
 // would render "[object Object]". Pull out the human-readable message.
@@ -79,11 +92,44 @@ const kindLabel: Record<string, string> = {
 };
 
 const isActivatable = (kind: string) =>
-  kind === "AppLaunch" || kind === "WindowRef";
+  kind === "AppLaunch" ||
+  kind === "WindowRef" ||
+  kind === "BrowserTab" ||
+  kind === "Folder";
 
-// A saved live browser tab (FR-9.6 / AC-20): double-clickable to re-focus the
-// exact tab, but with no per-tab icon (the browser has one icon for all tabs).
+// A saved live browser tab (FR-9.6 / AC-20): focus-only, no URL — activated by
+// its stored handle (re-matched by title), never re-opened as a URL (FR-9.7).
 const isSavedTab = (kind: string) => kind === "BrowserTabLive";
+
+// Apps whose expanded list shows browser TABS (via UI Automation) rather than
+// OS windows — matched case-insensitively against the app-group name, which on
+// Windows is the browser's exe stem (FR-9.6 / FR-10.12). A browser group is
+// always expandable so its tabs can be revealed even when it has one window.
+// Tabs are fetched lazily on expand, never on the 1-second poll (FR-10.7).
+const BROWSER_APPS = new Set(["chrome", "msedge", "brave", "whale"]);
+
+// The left-panel expansion has two OS-specific models that must not regress each
+// other: Windows uses HEAD's UI-Automation tab/window enumeration (per-tab via
+// listBrowserTabs, per-window from the polled app.windows), while macOS uses the
+// generic children model (listAppChildren → Safari/Chrome tabs, Finder folders,
+// per-instance windows). One flag switches the expand/fetch/render/drag paths.
+const IS_MACOS =
+  /Mac|iP(hone|ad|od)/.test(navigator.platform) ||
+  /Macintosh|Mac OS X/.test(navigator.userAgent);
+
+// Apps are keyed by (name + bundle id): two distinct apps can share a display
+// name with different bundle ids, so keying on name alone would collide React
+// keys and merge their expand/children/loading state. NUL (U+0000) can't occur
+// in a name or bundle id, so it's an unambiguous separator.
+const APP_KEY_SEP = String.fromCharCode(0);
+const appKey = (a: { name: string; bundle_id?: string | null }) =>
+  `${a.name}${APP_KEY_SEP}${a.bundle_id ?? ""}`;
+
+// A WindowRef's descriptor/reopen_info is an opaque window handle
+// (`app<U+001F>title<U+001F>idx`); its app-name part (before the first U+001F
+// unit separator) resolves the app icon. A no-op for handle-less targets.
+const UNIT_SEP = String.fromCharCode(31);
+const appNameOf = (handle: string) => handle.split(UNIT_SEP)[0];
 
 // Module-level cache: an app's high-res icon (§13.5) is fetched once per
 // identifier for the app's lifetime. Seeding useState from this on mount keeps
@@ -245,19 +291,63 @@ export default function App() {
   const [bundles, setBundles] = useState<WorkBundle[]>([]);
   const [runningApps, setRunningApps] = useState<RunningApp[]>([]);
   const [filter, setFilter] = useState("");
-  // Names of app groups the user has expanded to reveal their windows (FR-2.8).
-  // Keyed by app name so the expansion survives the 1s poll replacing the list.
+  // App groups the user has expanded to reveal their windows (FR-2.8). Keyed by
+  // appKey (name + bundle id) so the expansion survives the 1s poll replacing the
+  // list and two same-named apps don't share expansion state.
   const [expandedApps, setExpandedApps] = useState<Set<string>>(new Set());
-  // Browser tabs fetched on expand, keyed by app name (FR-9.6/FR-10.12). Held
-  // separately from runningApps so the poll never re-reads tabs (FR-10.7); a
-  // present-but-empty entry means "read, none available" → fall back to windows.
+  // Lazily-fetched children (browser tabs / Finder folders / windows) per app,
+  // keyed by appKey (FR-2.2). `undefined` = not yet fetched; `[]` = fetched,
+  // none. Mirrored into `expandedRef` so the 1s poll can refresh them without a
+  // stale closure.
+  const [appChildren, setAppChildren] = useState<Record<string, RunningWindow[]>>(
+    {}
+  );
+  const [loadingApp, setLoadingApp] = useState<Set<string>>(new Set());
+  // True when macOS Accessibility permission is missing: the System Events pass
+  // behind per-instance window listing (VS Code / Terminal / other non-browser
+  // apps) returns nothing without it, so an empty window list means "grant
+  // permission", not "no windows". Browser tabs / Finder folders use Apple
+  // Events and are unaffected.
+  const [accessNeeded, setAccessNeeded] = useState(false);
+  const expandedRef = useRef<Set<string>>(new Set());
+  // Monotonic per-app fetch sequence: the 1s poll can start a second
+  // listAppChildren for an app before the first resolves, and the two osascript
+  // calls can finish out of order. Each fetch captures its sequence number and
+  // only writes if it's still the latest, so a slow earlier response can't clobber
+  // fresher children. Keyed by appKey.
+  const childFetchSeq = useRef<Record<string, number>>({});
+  // A child being dragged into a group (a tab/folder/window), distinct from a
+  // whole-app drag. Kept in a ref so the poll can yield to an in-flight drag.
+  const draggedChild = useRef<{
+    kind: string;
+    name: string;
+    target: string;
+    // Opaque activation token (`app\u{1f}url` for a tab, `Finder\u{1f}name` for a
+    // Finder window). Preserved so the registered resource can select the exact
+    // tab/window, not just re-open the bare target.
+    handle: string;
+  } | null>(null);
+  // Windows-only (UIA) expansion state, keyed by app.name. Browser tabs are
+  // fetched lazily on expand (never on the poll, FR-10.7); a present-but-empty
+  // entry means "read, none" → fall back to the polled OS windows.
   const [tabsByApp, setTabsByApp] = useState<Record<string, RunningWindow[]>>(
     {}
   );
-  const [tabsLoadingApps, setTabsLoadingApps] = useState<Set<string>>(
-    new Set()
-  );
-  const [refreshing, setRefreshing] = useState(false);
+  const [tabsLoadingApps, setTabsLoadingApps] = useState<Set<string>>(new Set());
+  // The live browser tab being dragged (Windows): browser group name + opaque
+  // handle + title, so a drop registers it as a focus-only resource (FR-9.6).
+  const draggedTab = useRef<{
+    browser: string;
+    handle: string;
+    title: string;
+  } | null>(null);
+  // The individual OS window being dragged (Windows): owning app-group name +
+  // opaque handle + title, so a drop registers it as a WindowRef (FR-2.8).
+  const draggedWin = useRef<{
+    app: string;
+    handle: string;
+    title: string;
+  } | null>(null);
 
   // Boot splash: `booting` keeps the overlay mounted (blocking input);
   // `splashOut` triggers its fade just before we unmount it.
@@ -269,24 +359,6 @@ export default function App() {
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
   const draggedApp = useRef<RunningApp | null>(null);
-  // The live browser tab being dragged (distinct from an app drag). Holds the
-  // browser group name + the tab's opaque handle + title so a drop can register
-  // it as a focus-only resource (FR-9.6 / AC-20).
-  const draggedTab = useRef<{
-    browser: string;
-    handle: string;
-    title: string;
-  } | null>(null);
-  // The individual OS window being dragged (distinct from an app or tab drag).
-  // Holds the owning app-group name + the window's opaque handle + title so a
-  // drop can register it as a focus-only WindowRef resource (FR-2.8 / AC-20).
-  // Set from BOTH a general app's window rows and a browser's OS-window
-  // fallback rows (shown when tab reading fails).
-  const draggedWin = useRef<{
-    app: string;
-    handle: string;
-    title: string;
-  } | null>(null);
 
   // Polling economy (FR-7.5 / FR-7.6 / NFR-Pf3). `pollInFlight` keeps a slow
   // refresh from overlapping the next tick; `resizingUntil` suppresses polls
@@ -304,6 +376,8 @@ export default function App() {
 
   // ── Claude prompt console ──────────────────────────────────────────
   const [claude, setClaude] = useState<ClaudeStatus | null>(null);
+  // Live Bedrock token usage for the KO-II meter (updated on load + each send).
+  const [usage, setUsage] = useState<ClaudeUsage | null>(null);
   const [chat, setChat] = useState<ChatMsg[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [chatSending, setChatSending] = useState(false);
@@ -356,6 +430,21 @@ export default function App() {
           .catch(() => {
             if (!cancelled) setClaude(null);
           }),
+        claudeUsage()
+          .then((u) => {
+            if (!cancelled) setUsage(u);
+          })
+          .catch(() => {
+            if (!cancelled) setUsage(null);
+          }),
+        // Trigger the one-time Accessibility prompt at launch and record whether
+        // it's granted, so per-instance window lists work without the user
+        // hunting through System Settings.
+        requestAccessibility()
+          .then((ok) => {
+            if (!cancelled) setAccessNeeded(!ok);
+          })
+          .catch(() => {}),
         refreshRunning(), // first running-apps scan
       ]);
 
@@ -375,35 +464,63 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Keep the account-wide "today" usage fresh: CloudWatch totals move as the
+  // whole account keeps working, independent of this app's own calls. A light
+  // GetMetricData poll every few minutes (boot did the first fetch).
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      claudeUsage()
+        .then(setUsage)
+        .catch(() => {});
+    }, 180_000);
+    return () => window.clearInterval(id);
+  }, []);
+
   const refreshRunning = async (silent = false) => {
     // Never re-render the running list mid-drag: replacing/reordering the
     // items cancels the in-flight native HTML5 drag before it can drop. The
     // background poll yields to an active drag; a manual ↻ can't collide with
     // a drag (one pointer) so it isn't gated.
-    if (silent && (draggedApp.current || draggedTab.current || draggedWin.current))
+    if (
+      silent &&
+      (draggedApp.current ||
+        draggedChild.current ||
+        draggedTab.current ||
+        draggedWin.current)
+    )
       return;
     // FR-7.6 concurrency guard: if the previous poll is still fetching, skip
     // this tick rather than stacking another OS enumeration on top of it. Only
     // background polls are gated — an explicit ↻ is a deliberate user action.
     if (silent && pollInFlight.current) return;
     if (silent) pollInFlight.current = true;
-    if (!silent) setRefreshing(true);
     setSessionNonce((n) => n + 1); // also refresh inline coding-session statuses
     try {
       const apps = await listRunningApps();
       if (
         silent &&
-        (draggedApp.current || draggedTab.current || draggedWin.current)
+        (draggedApp.current ||
+          draggedChild.current ||
+          draggedTab.current ||
+          draggedWin.current)
       )
         return; // a drag began while fetching
       setRunningApps(apps);
+      // macOS only: keep expanded apps' children live (a browser's tabs change
+      // as the user navigates). Windows never re-reads tabs on the poll
+      // (FR-10.7); its window rows come from the polled app.windows directly.
+      if (IS_MACOS) {
+        for (const key of expandedRef.current) {
+          const a = apps.find((x) => appKey(x) === key);
+          if (a) void fetchChildren(a, true);
+        }
+      }
     } catch (e) {
       // A background poll shouldn't flash the error banner every tick — only
       // surface failures from an explicit refresh.
       if (!silent) setError(String(e));
     } finally {
       if (silent) pollInFlight.current = false;
-      if (!silent) setRefreshing(false);
     }
   };
 
@@ -458,6 +575,99 @@ export default function App() {
     activateApp(target).catch((e) => setError(String(e)));
   };
 
+  const toggleExpanded = (key: string) =>
+    setExpandedApps((cur) => {
+      const next = new Set(cur);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      expandedRef.current = next; // mirror for the poll's live refresh
+      return next;
+    });
+
+  // Fetch one app's children (tabs/folders/windows). `background` = a poll-tick
+  // refresh of an already-open group: no spinner, and it bails if a drag starts.
+  const fetchChildren = async (app: RunningApp, background = false) => {
+    const key = appKey(app);
+    // Claim this fetch's sequence number; a later fetch bumps it, marking any
+    // still-in-flight earlier fetch as stale so it won't overwrite fresh data.
+    const seq = (childFetchSeq.current[key] ?? 0) + 1;
+    childFetchSeq.current[key] = seq;
+    if (!background) setLoadingApp((s) => new Set(s).add(key));
+    try {
+      const kids = await listAppChildren(app.name, app.bundle_id);
+      if (draggedChild.current || draggedApp.current) return; // don't yank a drag
+      if (childFetchSeq.current[key] !== seq) return; // superseded by a newer fetch
+      setAppChildren((c) => ({ ...c, [key]: kids }));
+    } catch {
+      if (!background && childFetchSeq.current[key] === seq)
+        setAppChildren((c) => ({ ...c, [key]: [] }));
+    } finally {
+      if (!background)
+        setLoadingApp((s) => {
+          const n = new Set(s);
+          n.delete(key);
+          return n;
+        });
+    }
+  };
+
+  // Expand/collapse an app; on first expand, lazily fetch its children (FR-2.2).
+  const handleToggleApp = (app: RunningApp) => {
+    const key = appKey(app);
+    const willExpand = !expandedApps.has(key);
+    toggleExpanded(key);
+    if (willExpand && appChildren[key] === undefined) void fetchChildren(app);
+  };
+
+  // Activate a specific child: focus a browser tab, open a folder, or raise a
+  // window (FR-2.8 / FR-4.1). Surface failures (e.g. the tab/window was closed).
+  const activateChildItem = (w: RunningWindow) => {
+    setError(null);
+    activateChild(w.kind, w.target, w.handle).catch((e) => setError(errText(e)));
+  };
+
+  // Double-click a group resource: a WindowRef's target is an opaque window
+  // handle, so raise that exact window (activateWindow splits the handle);
+  // everything else is an app-level launch/focus. Passing a window handle to
+  // activateApp would fail — open_app can't parse `app\u{1f}title\u{1f}idx`.
+  const activateResource = (r: Resource) => {
+    setError(null);
+    const descriptor = r.identity.descriptor;
+    const reopen = r.identity.reopen_info ?? descriptor;
+    let p: Promise<void>;
+    switch (r.kind) {
+      // A Windows live tab (no URL, FR-9.7): re-focus the exact tab by its stored
+      // handle, re-matched by title if stale — never open a URL.
+      case "BrowserTabLive":
+        p = activateTabResource(r.identity.hint ?? "", descriptor);
+        break;
+      // reopen is `app\u{1f}url`; select that exact tab in that browser (falls back
+      // in the backend to opening the url if it's a legacy url-only resource).
+      case "BrowserTab":
+        p = activateChild("tab", descriptor, reopen);
+        break;
+      // descriptor is a POSIX path, or a `Finder\u{1f}name` handle for a path-less
+      // window (Recents / saved search) → raise it by name (empty path target).
+      case "Folder":
+        p = descriptor.includes(UNIT_SEP)
+          ? activateChild("folder", "", descriptor)
+          : activateChild("folder", descriptor, "");
+        break;
+      // A window ref: on Windows re-focus the exact HWND (verified by title,
+      // scoped to the owning app); on macOS the reopen_info is the opaque window
+      // handle raised directly.
+      case "WindowRef":
+        p = IS_MACOS
+          ? activateWindow(reopen)
+          : activateWindowResource(r.identity.hint ?? "", descriptor, reopen);
+        break;
+      default:
+        p = activateApp(reopen);
+    }
+    p.catch((e) => setError(errText(e)));
+  };
+
+  // ── Windows (UIA) expansion: per-tab + per-window ───────────────────────
   // Activate exactly one window/tab by its opaque handle (FR-2.8/AC-20). Surface
   // failures (e.g. the window was closed between polls) in the error banner.
   const activateWin = (handle: string) => {
@@ -497,36 +707,31 @@ export default function App() {
       .catch((e) => setError(errText(e)));
   };
 
-  // Double-clicking a SAVED live tab in a group re-focuses exactly that tab
-  // (FR-4.1/4.2, AC-20): try the stored handle, else re-match by title. No URL
-  // is ever opened (FR-9.7).
-  const activateSavedTab = (r: Resource) => {
-    setError(null);
-    activateTabResource(r.identity.hint ?? "", r.identity.descriptor).catch((e) =>
-      setError(errText(e))
-    );
+  // Note: saved live tabs (BrowserTabLive) and individual windows (WindowRef)
+  // are re-focused via the OS-aware `activateResource` dispatch above
+  // (FR-4.1/4.2, AC-20) — no URL is ever opened for a live tab (FR-9.7).
+
+  // Expand/collapse a Windows browser group and lazily read its tabs on open
+  // (never on the poll, FR-10.7). Window rows come from the polled app.windows.
+  const handleToggleTabApp = (app: RunningApp, isBrowser: boolean) => {
+    const willExpand = !expandedApps.has(appKey(app));
+    toggleExpanded(appKey(app));
+    if (willExpand && isBrowser) void fetchTabs(app.name);
   };
 
-  // Double-clicking a SAVED individual window in a group re-focuses exactly that
-  // window (FR-4.1/4.2, AC-20): try the stored HWND, else re-match by title
-  // within the owning app. A closed window is not reopened — it surfaces as an
-  // error rather than silently launching the app.
-  const activateSavedWindow = (r: Resource) => {
-    setError(null);
-    activateWindowResource(
-      r.identity.hint ?? "",
-      r.identity.descriptor,
-      r.identity.reopen_info ?? ""
-    ).catch((e) => setError(errText(e)));
+  const onDragStartChild = (e: React.DragEvent, w: RunningWindow) => {
+    draggedChild.current = {
+      kind: w.kind,
+      name: w.title,
+      target: w.target,
+      handle: w.handle,
+    };
+    draggedApp.current = null;
+    draggedTab.current = null;
+    draggedWin.current = null;
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("text/plain", w.title);
   };
-
-  const toggleExpanded = (name: string) =>
-    setExpandedApps((cur) => {
-      const next = new Set(cur);
-      if (next.has(name)) next.delete(name);
-      else next.add(name);
-      return next;
-    });
 
   const openGroupModal = () => {
     setError(null);
@@ -561,30 +766,41 @@ export default function App() {
     }
   };
 
+  const handleRemoveResource = async (bundleId: string, resourceId: string) => {
+    setError(null);
+    try {
+      setBundles(await removeResource(bundleId, resourceId));
+    } catch (e) {
+      setError(errText(e));
+    }
+  };
+
   const onDragStartApp = (e: React.DragEvent, app: RunningApp) => {
     draggedApp.current = app;
-    draggedTab.current = null; // an app drag isn't a tab drag
+    draggedChild.current = null; // symmetric to onDragStartChild: never drop with a stale child ref
+    draggedTab.current = null;
+    draggedWin.current = null;
     e.dataTransfer.effectAllowed = "copy";
     e.dataTransfer.setData("text/plain", app.name);
   };
 
-  // Dragging an individual browser tab row registers just that tab (not the
-  // whole browser app) on drop (FR-9.6 / AC-20). `browser` is the group name.
+  // Windows: dragging an individual browser tab row registers just that tab (not
+  // the whole browser) on drop as a focus-only live tab (FR-9.6 / AC-20).
   const onDragStartTab = (e: React.DragEvent, browser: string, w: RunningWindow) => {
     draggedTab.current = { browser, handle: w.handle, title: w.title };
     draggedApp.current = null;
+    draggedChild.current = null;
     draggedWin.current = null;
     e.dataTransfer.effectAllowed = "copy";
     e.dataTransfer.setData("text/plain", w.title);
   };
 
-  // Dragging an individual OS window row registers just that window (not the
-  // whole app) on drop as a WindowRef (FR-2.8 / FR-3.5 / AC-20). `app` is the
-  // owning app-group name; used for both general apps and the browser OS-window
-  // fallback.
+  // Windows: dragging an individual OS window row registers just that window (not
+  // the whole app) on drop as a WindowRef (FR-2.8 / FR-3.5 / AC-20).
   const onDragStartWin = (e: React.DragEvent, app: string, w: RunningWindow) => {
     draggedWin.current = { app, handle: w.handle, title: w.title };
     draggedApp.current = null;
+    draggedChild.current = null;
     draggedTab.current = null;
     e.dataTransfer.effectAllowed = "copy";
     e.dataTransfer.setData("text/plain", w.title);
@@ -593,21 +809,34 @@ export default function App() {
   const onDropToBundle = async (e: React.DragEvent, bundle: WorkBundle) => {
     e.preventDefault();
     setDragOverId(null);
+    const child = draggedChild.current;
     const tab = draggedTab.current;
     const win = draggedWin.current;
     const app = draggedApp.current;
+    draggedChild.current = null;
     draggedTab.current = null;
     draggedWin.current = null;
     draggedApp.current = null;
     setError(null);
     try {
-      if (tab) {
-        // A live browser tab → focus-only tab resource (no URL, FR-9.7).
+      // A macOS child (tab/folder/window) registers as its own resource kind; a
+      // Windows tab → focus-only live tab; a Windows window → WindowRef; a whole
+      // app → app launch (FR-2.2 / FR-9.6 / §13.3).
+      if (child) {
+        setBundles(
+          await addChildResource(
+            bundle.id,
+            child.kind,
+            child.name,
+            child.target,
+            child.handle
+          )
+        );
+      } else if (tab) {
         setBundles(
           await addTabResource(bundle.id, tab.title, tab.browser, tab.handle)
         );
       } else if (win) {
-        // An individual OS window → focus-only WindowRef resource (FR-2.8).
         setBundles(
           await addWindowResource(bundle.id, win.title, win.app, win.handle)
         );
@@ -640,13 +869,6 @@ export default function App() {
   const handleActivateSession = (resource: Resource) => {
     setError(null);
     activateCodingSession(resource.identity.descriptor).catch((e) =>
-      setError(String(e))
-    );
-  };
-
-  const handleResumeSession = (resource: Resource) => {
-    setError(null);
-    resumeCodingSession(resource.identity.descriptor).catch((e) =>
       setError(String(e))
     );
   };
@@ -692,6 +914,10 @@ export default function App() {
     try {
       const reply = await sendClaudeMessage(next);
       setChat((cur) => [...cur, { role: "assistant", content: reply }]);
+      // Refresh the usage meter with this call's tokens.
+      claudeUsage()
+        .then(setUsage)
+        .catch(() => {});
     } catch (e) {
       setChatError(errText(e)); // keep the user's message so they can retry
     } finally {
@@ -699,21 +925,19 @@ export default function App() {
     }
   };
 
+  // Derived usage figures for the KO-II meter.
+  const inTok = usage?.input_tokens ?? 0;
+  const outTok = usage?.output_tokens ?? 0;
+
   return (
     <div className="app-shell">
     {booting && <Splash hiding={splashOut} />}
     <div className="app">
       <aside className="sidebar">
-        <header className="sidebar-header">
-          <h1>Running Apps</h1>
-          <button
-            className="ghost icon"
-            onClick={() => refreshRunning()}
-            disabled={refreshing}
-            title="Refresh"
-          >
-            ↻
-          </button>
+        {/* The macOS traffic lights float over this header (transparent Overlay
+            title bar); it doubles as the window drag region. */}
+        <header className="sidebar-header" data-tauri-drag-region>
+          <h1 data-tauri-drag-region>Running Apps</h1>
         </header>
         <input
           className="search"
@@ -723,41 +947,145 @@ export default function App() {
         />
         <ul className="running-list">
           {filteredApps.map((app) => {
-            const wins = app.windows ?? [];
-            const multi = wins.length > 1;
-            const isBrowser = BROWSER_APPS.has(app.name.toLowerCase());
-            const isExpanded = expandedApps.has(app.name);
-            // A browser is always expandable (to reveal its tabs); other apps
-            // expand only when they own more than one window.
-            const expandable = multi || isBrowser;
-            const tabs = tabsByApp[app.name];
-            const tabsLoading = tabsLoadingApps.has(app.name);
-            // Show TABS for an expanded browser once some were read; otherwise
-            // (non-browser, or a browser exposing no readable tabs) fall back to
-            // the OS windows so multi-window apps still list every window.
-            const showTabs = isBrowser && (tabs?.length ?? 0) > 0;
-            const rows = showTabs ? tabs! : wins;
-            const count = showTabs ? tabs!.length : wins.length;
-            // Clicking an app: expandable (browser, or >1 window) → toggle the
-            // list; exactly 1 window → activate it; nothing to expand and no
-            // window info → activate the app by name.
-            const onAppClick = () => {
-              if (expandable) {
-                const opening = !isExpanded;
-                toggleExpanded(app.name);
-                // Lazily read a browser's tabs the moment its group opens.
-                if (opening && isBrowser) void fetchTabs(app.name);
-              } else if (wins.length === 1) {
-                activateWin(wins[0].handle);
-              } else {
-                activate(app.bundle_id ?? app.name);
-              }
-            };
+            // ── Windows (UIA) expansion ──────────────────────────────────
+            // A browser expands to its live tabs (read lazily on open, FR-9.6);
+            // any other app expands to its OS windows. Falls back to the window
+            // list when a browser's tabs can't be read (background window).
+            if (!IS_MACOS) {
+              const key = appKey(app);
+              const wins = app.windows ?? [];
+              const multi = wins.length > 1;
+              const isBrowser = BROWSER_APPS.has(app.name.toLowerCase());
+              const isExpanded = expandedApps.has(key);
+              // A browser is always expandable (to reveal its tabs); other apps
+              // expand only when they own more than one window.
+              const expandable = multi || isBrowser;
+              const tabs = tabsByApp[app.name];
+              const tabsLoading = tabsLoadingApps.has(app.name);
+              // Show TABS for an expanded browser once some were read; otherwise
+              // fall back to the OS windows so multi-window apps still list every
+              // window.
+              const showTabs = isBrowser && (tabs?.length ?? 0) > 0;
+              const rows = showTabs ? tabs! : wins;
+              const count = showTabs ? tabs!.length : wins.length;
+              // Clicking an app: expandable (browser, or >1 window) → toggle the
+              // list; exactly 1 window → activate it; otherwise activate by name.
+              const onAppClick = () => {
+                if (expandable) {
+                  handleToggleTabApp(app, isBrowser);
+                } else if (wins.length === 1) {
+                  activateWin(wins[0].handle);
+                } else {
+                  activate(app.bundle_id ?? app.name);
+                }
+              };
+              return (
+                <Fragment key={key}>
+                  <li
+                    className={`running-item${expandable ? " has-windows" : ""}${
+                      expandable && isExpanded ? " expanded" : ""
+                    }`}
+                    draggable
+                    onDragStart={(e) => onDragStartApp(e, app)}
+                    onDragEnd={() => {
+                      draggedApp.current = null;
+                      setDragOverId(null);
+                    }}
+                    onClick={onAppClick}
+                    title={
+                      isBrowser
+                        ? "Click: show tabs · Drag: add to a group"
+                        : multi
+                        ? "Click: show windows · Drag: add to a group"
+                        : "Click: bring to front · Drag: add to a group"
+                    }
+                  >
+                    <AppIcon target={app.bundle_id ?? app.name} />
+                    <span className="running-name">{app.name}</span>
+                    {expandable && count > 0 && (
+                      <span className="running-count" aria-hidden>
+                        {isExpanded ? "▾" : "▸"} {count}
+                      </span>
+                    )}
+                  </li>
+                  {expandable &&
+                    isExpanded &&
+                    rows.map((w, i) => (
+                      <li
+                        key={`${key}${w.handle}${i}`}
+                        className="running-window"
+                        draggable
+                        onDragStart={
+                          showTabs
+                            ? (e) => onDragStartTab(e, app.name, w)
+                            : (e) => onDragStartWin(e, app.name, w)
+                        }
+                        onDragEnd={() => {
+                          draggedTab.current = null;
+                          draggedWin.current = null;
+                          setDragOverId(null);
+                        }}
+                        onClick={() =>
+                          showTabs
+                            ? activateTabRow(w.handle, app.name)
+                            : activateWin(w.handle)
+                        }
+                        title={
+                          showTabs
+                            ? "Click: switch to this tab · Drag: add to a group"
+                            : "Click: bring this window to front · Drag: add this window to a group"
+                        }
+                      >
+                        <span
+                          className={`win-dot${w.is_focused ? " active" : ""}`}
+                          aria-hidden
+                        />
+                        <span className="win-title">{w.title}</span>
+                      </li>
+                    ))}
+                  {isBrowser && isExpanded && !showTabs && (
+                    <li className="running-window running-window-hint">
+                      <span className="win-title">
+                        {tabsLoading
+                          ? "탭 읽는 중…"
+                          : wins.length > 0
+                          ? "백그라운드 창이라 탭을 읽지 못했습니다 — 창 목록을 표시합니다"
+                          : "열린 탭을 찾을 수 없습니다"}
+                      </span>
+                      {!tabsLoading && (
+                        <button
+                          className="ghost reveal-tabs"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            void fetchTabs(app.name, true);
+                          }}
+                          title="브라우저 창을 앞으로 가져와 탭을 다시 읽습니다"
+                        >
+                          ⟳ 앞으로 가져와 다시 읽기
+                        </button>
+                      )}
+                    </li>
+                  )}
+                </Fragment>
+              );
+            }
+            // ── macOS expansion: children (tabs / folders / windows) ─────
+            const key = appKey(app);
+            const isExpanded = expandedApps.has(key);
+            const kids = appChildren[key];
+            const loading = loadingApp.has(key);
+            // Safari/Chrome (tabs) and Finder (folders) read via Apple Events;
+            // every other app's windows come from the System Events pass that
+            // needs Accessibility. Only those show the permission hint when the
+            // list comes back empty for lack of access.
+            const winApp = !["Safari", "Google Chrome", "Finder"].includes(
+              app.name
+            );
             return (
-              <Fragment key={app.name}>
+              <Fragment key={key}>
                 <li
-                  className={`running-item${expandable ? " has-windows" : ""}${
-                    expandable && isExpanded ? " expanded" : ""
+                  className={`running-item has-windows${
+                    isExpanded ? " expanded" : ""
                   }`}
                   draggable
                   onDragStart={(e) => onDragStartApp(e, app)}
@@ -767,83 +1095,75 @@ export default function App() {
                     draggedApp.current = null;
                     setDragOverId(null);
                   }}
-                  onClick={onAppClick}
-                  title={
-                    isBrowser
-                      ? "Click: show tabs · Drag: add to a group"
-                      : multi
-                      ? "Click: show windows · Drag: add to a group"
-                      : "Click: bring to front · Drag: add to a group"
-                  }
+                  onClick={() => activate(app.bundle_id ?? app.name)}
+                  title="Click: bring to front · Drag: add to a group"
                 >
                   <AppIcon target={app.bundle_id ?? app.name} />
                   <span className="running-name">{app.name}</span>
-                  {expandable && count > 0 && (
-                    <span className="running-count" aria-hidden>
-                      {isExpanded ? "▾" : "▸"} {count}
-                    </span>
-                  )}
+                  {/* Chevron reveals per-tab/per-window items (FR-2.2/2.8). */}
+                  <button
+                    className="running-expand"
+                    aria-label={isExpanded ? "Hide items" : "Show items"}
+                    title={
+                      isExpanded
+                        ? "Hide windows / tabs"
+                        : "Show windows / tabs"
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleToggleApp(app);
+                    }}
+                  >
+                    {isExpanded ? "▾" : "▸"}
+                    {kids && kids.length > 0 ? ` ${kids.length}` : ""}
+                  </button>
                 </li>
-                {expandable &&
-                  isExpanded &&
-                  rows.map((w, i) => (
-                    <li
-                      key={`${app.name} ${w.handle} ${i}`}
-                      className="running-window"
-                      draggable
-                      onDragStart={
-                        showTabs
-                          ? (e) => onDragStartTab(e, app.name, w)
-                          : (e) => onDragStartWin(e, app.name, w)
-                      }
-                      onDragEnd={() => {
-                        // Clear whichever ref this row set, so the paused poll
-                        // resumes even on a cancelled (dropped-outside) drag.
-                        draggedTab.current = null;
-                        draggedWin.current = null;
-                        setDragOverId(null);
-                      }}
-                      onClick={() =>
-                        showTabs
-                          ? activateTabRow(w.handle, app.name)
-                          : activateWin(w.handle)
-                      }
-                      title={
-                        showTabs
-                          ? "Click: switch to this tab · Drag: add to a group"
-                          : "Click: bring this window to front · Drag: add this window to a group"
-                      }
-                    >
-                      <span
-                        className={`win-dot${w.is_focused ? " active" : ""}`}
-                        aria-hidden
-                      />
-                      <span className="win-title">{w.title}</span>
-                    </li>
-                  ))}
-                {isBrowser && isExpanded && !showTabs && (
-                  <li className="running-window running-window-hint">
-                    <span className="win-title">
-                      {tabsLoading
-                        ? "탭 읽는 중…"
-                        : wins.length > 0
-                        ? "백그라운드 창이라 탭을 읽지 못했습니다 — 창 목록을 표시합니다"
-                        : "열린 탭을 찾을 수 없습니다"}
-                    </span>
-                    {!tabsLoading && (
-                      <button
-                        className="ghost reveal-tabs"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          void fetchTabs(app.name, true);
+                {isExpanded &&
+                  (loading && !kids ? (
+                    <li className="running-window muted">Loading…</li>
+                  ) : kids && kids.length > 0 ? (
+                    kids.map((w, i) => (
+                      <li
+                        key={`${key}-${w.handle}-${i}`}
+                        className="running-window"
+                        draggable
+                        onDragStart={(e) => onDragStartChild(e, w)}
+                        onDragEnd={() => {
+                          draggedChild.current = null;
+                          setDragOverId(null);
                         }}
-                        title="브라우저 창을 앞으로 가져와 탭을 다시 읽습니다"
+                        onClick={() => activateChildItem(w)}
+                        title={
+                          w.kind === "tab"
+                            ? "Click: focus this tab · Drag: add to a group"
+                            : w.kind === "folder"
+                            ? "Click: open this folder · Drag: add to a group"
+                            : "Click: bring this window to front · Drag: add to a group"
+                        }
                       >
-                        ⟳ 앞으로 가져와 다시 읽기
-                      </button>
-                    )}
-                  </li>
-                )}
+                        <span
+                          className={`win-dot${w.is_focused ? " active" : ""}`}
+                          aria-hidden
+                        />
+                        <span className="win-title">{w.title}</span>
+                      </li>
+                    ))
+                  ) : accessNeeded && winApp ? (
+                    <li
+                      className="running-window muted access-needed"
+                      onClick={async (e) => {
+                        e.stopPropagation();
+                        const ok = await requestAccessibility();
+                        setAccessNeeded(!ok);
+                        if (ok) void fetchChildren(app);
+                      }}
+                      title="Enable vibe-control under System Settings → Privacy & Security → Accessibility, then click to retry"
+                    >
+                      ⚠ Grant Accessibility to list windows
+                    </li>
+                  ) : (
+                    <li className="running-window muted">No windows or tabs</li>
+                  ))}
               </Fragment>
             );
           })}
@@ -854,14 +1174,66 @@ export default function App() {
       </aside>
 
       <main className="main">
-        <header className="main-header">
-          <h2>vibe-control</h2>
+        <header className="main-header" data-tauri-drag-region>
+          <h2 data-tauri-drag-region>vibe-control</h2>
           <div className="header-actions">
             <button className="rec add-group" onClick={openGroupModal}>
               Add Group
             </button>
           </div>
         </header>
+
+        {/* KO II-style display: a wide black LCD recessed into the chassis,
+            showing TODAY's Claude token usage as a graphical meter (à la
+            Teenage Engineering K.O. II) — glossy glare sweep baked on top. */}
+        <div className="ko-screen">
+          <div className="ko-screen-glass">
+            {/* Left: today's token counter (status LED + model pill inline) + legend. */}
+            <div className="ko-usage">
+              <div className="ko-usage-total">
+                <span
+                  className={`ko-led ${claude?.configured ? "on" : "off"}`}
+                  aria-hidden
+                />
+                <b>{fmtFull(usage?.total_tokens ?? 0)}</b>
+                <span className="ko-usage-model">
+                  {modelLabel(usage?.model ?? claude?.model ?? DEFAULT_MODEL)}
+                </span>
+              </div>
+              <div className="ko-legend">
+                <span className="ko-chip in">
+                  <em />IN {fmtTokens(inTok)}
+                </span>
+                <span className="ko-chip out">
+                  <em />OUT {fmtTokens(outTok)}
+                </span>
+                <span className="ko-chip req">
+                  <em />
+                  {usage?.requests ?? 0} CALLS
+                </span>
+              </div>
+            </div>
+
+            {/* Right: last-call readout + small group/app counts. */}
+            <div className="ko-side">
+              <div className="ko-last" title="Tokens in the most recent call">
+                <b>{fmtTokens(usage?.last_total ?? 0)}</b>
+                <i>last call</i>
+              </div>
+              <div className="ko-mini">
+                <span>
+                  <b>{String(bundles.length).padStart(2, "0")}</b>
+                  <i>GRP</i>
+                </span>
+                <span>
+                  <b>{String(runningApps.length).padStart(2, "0")}</b>
+                  <i>APP</i>
+                </span>
+              </div>
+            </div>
+            <span className="ko-screen-glare" aria-hidden />
+          </div>
+        </div>
 
         {error && <div className="error">{error}</div>}
 
@@ -914,12 +1286,22 @@ export default function App() {
                       </button>
                     </>
                   ) : (
-                    <button
-                      className="mini"
+                    <span
+                      className="close-group"
+                      role="button"
+                      tabIndex={0}
                       onClick={() => setConfirmDeleteId(b.id)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter" || e.key === " ") {
+                          e.preventDefault();
+                          setConfirmDeleteId(b.id);
+                        }
+                      }}
+                      title="Close (delete) this group"
+                      aria-label="Close group"
                     >
-                      Delete
-                    </button>
+                      ×
+                    </span>
                   )}
                 </div>
               </header>
@@ -936,28 +1318,27 @@ export default function App() {
                         ? "activatable"
                         : ""
                     }`}
-                    onDoubleClick={() => {
-                      if (isSavedTab(r.kind)) activateSavedTab(r);
-                      // A saved individual window re-focuses that exact window,
-                      // not just the app (FR-4.2); a closed window is not
-                      // reopened — it surfaces as an error.
-                      else if (r.kind === "WindowRef") activateSavedWindow(r);
-                      else if (isActivatable(r.kind))
-                        activate(r.identity.reopen_info ?? r.identity.descriptor);
-                    }}
+                    onDoubleClick={() =>
+                      (isActivatable(r.kind) || isSavedTab(r.kind)) &&
+                      activateResource(r)
+                    }
                     title={
                       isSavedTab(r.kind)
-                        ? "Double-click: switch to this tab"
-                        : r.kind === "WindowRef"
-                          ? "Double-click: bring this window to front"
-                          : isActivatable(r.kind)
-                            ? "Double-click: bring to front · opens it if closed"
-                            : undefined
+                        ? "Double-click: switch to this tab (never opens a URL)"
+                        : isActivatable(r.kind)
+                        ? "Double-click: bring to front · opens it if closed"
+                        : undefined
                     }
                   >
                     {isActivatable(r.kind) && (
                       <AppIcon
-                        target={r.identity.reopen_info ?? r.identity.descriptor}
+                        target={
+                          r.kind === "WindowRef"
+                            ? appNameOf(
+                                r.identity.reopen_info ?? r.identity.descriptor
+                              )
+                            : r.identity.reopen_info ?? r.identity.descriptor
+                        }
                         className="app-icon app-icon--sm"
                       />
                     )}
@@ -972,19 +1353,24 @@ export default function App() {
                         >
                           View
                         </button>
-                        <button
-                          className="mini resume-button"
-                          onClick={() => handleResumeSession(r)}
-                          title="Resume this session in a new terminal"
-                        >
-                          Resume
-                        </button>
                         <SessionStatus
                           sessionRef={r.identity.descriptor}
                           nonce={sessionNonce}
                         />
                       </>
                     )}
+                    <button
+                      className="resource-remove"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        void handleRemoveResource(b.id, r.id);
+                      }}
+                      onDoubleClick={(e) => e.stopPropagation()}
+                      title="Remove from this group"
+                      aria-label="Remove from group"
+                    >
+                      ×
+                    </button>
                   </li>
                 ))}
               </ul>
@@ -1010,8 +1396,8 @@ export default function App() {
                   {report.skipped.length > 0 && (
                     <p className="skipped-note">
                       {report.skipped.length} coding session
-                      {report.skipped.length > 1 ? "s" : ""} — open each with its
-                      “Resume” button.
+                      {report.skipped.length > 1 ? "s" : ""} skipped — focus an
+                      open one with its “View” button.
                     </p>
                   )}
                 </div>
