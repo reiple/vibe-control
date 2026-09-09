@@ -1529,11 +1529,11 @@ export default function App() {
           const ready = meterState === "ready" && usage != null;
           const ledOn = usage?.configured ?? claude?.configured ?? false;
           const model = modelLabel(claude?.model ?? DEFAULT_MODEL);
-          // Local-CLI scope note: today's spend across every `claude` session on
-          // this machine (all group terminals), priced per model. Cache tokens
-          // are billed at their real reduced rate, so the $ reflects true cost.
+          // Scope note only for the non-ready states (guidance / loading /
+          // error). When real numbers are shown, no caption — the LCD speaks for
+          // itself (the `{note && …}` render guard hides the empty string).
           const note = ready
-            ? "※ 오늘 로컬 Claude CLI 전체 세션 사용량 — 모델별 단가로 환산(캐시 토큰 포함). 그룹 터미널이 작업할수록 실시간으로 올라갑니다."
+            ? ""
             : meterState === "unconfigured"
               ? "※ 아직 로컬 Claude CLI 기록이 없습니다 — 그룹 터미널에서 대화하면 집계됩니다."
               : meterState === "loading"
