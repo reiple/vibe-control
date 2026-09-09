@@ -267,9 +267,9 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **U6 vc-app**: `activate_live_tab` — `focus_tab` 전에 `enumerate_browser_tab_sessions`로 live tab 열거 → 저장 핸들이 기대 제목을 가리키는지 검증 → 일치 시 fast-path, 불일치 시 제목 기반 검색. vc-os-windows 어댑터 무변경.
 - **U4 vc-os-windows**: 빈 제목 fallback을 `(탭 N번 — 제목 없음)` (N=1기준 위치) 형식으로 변경. vc-app·프론트 계약 무변경(제목 문자열 내용만 변화).
 - **빌드·테스트**: `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고; `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2 통과.
-- **미완료(live 검증)**: 탭 순서 변경 후 saved tab 활성화 정확도는 실제 브라우저 필요 — 이 환경에서 실행 불가; 완료로 기록하지 않음.
+- **✅ live 검증 완료(2026-09-09, 사용자 수동 검증)**: 탭 순서 변경 후 saved tab 활성화 정확도 PASS(Chrome/Edge). 자동 UI 클릭(PowerShell 좌표)은 WebView2에 합성 더블클릭이 신뢰성 있게 전달되지 않아(단일 클릭 hover는 전달됨) 검증 수단에서 제외 → 사용자 실환경 수동 검증으로 확정.
 - **문서**: `known-deviations.md` §H3, `window-enumeration.md` §6.2 갱신 + §6.8 추가, `aidlc-state.md`, `audit.md` 추가.
-- [x] 분석(확인된 원인 vs 추정 원인 구분) → [x] Construction Code Generation(U4·U6 코드 수정) → [x] build/clippy/test 통과 → [ ] live 검증(탭 순서 변경 후 활성화·Edge 빈 제목 변경 확인 — 수동 필요)
+- [x] 분석(확인된 원인 vs 추정 원인 구분) → [x] Construction Code Generation(U4·U6 코드 수정) → [x] build/clippy/test 통과 → [x] live 검증(탭 순서 변경 후 활성화·Edge 빈 제목 변경 확인 — 2026-09-09 사용자 수동 검증 PASS)
 
 ### 🔧 Supplement Bolt H4 (2026-09-09): Edge 중첩 Tab 수집·접근성 트리 준비·일반 앱 개별 창 등록
 **트리거**: 사용자 요청 — 재현 진단 결과에 근거한 AI-DLC 보완. ① Edge 탭 수집·활성화(중첩 Tab), ② 접근성 트리 준비/사용자 흐름(제한 재시도 + 실패 안내 + 명시적 "다시 읽기", 펼침만으로 포그라운드 금지), ③ 일반 앱 개별 창 등록(카카오톡 등, 탭 수집 실패 시에도 등록 가능; 닫힌 창 자동 재열기 제외).
@@ -278,6 +278,6 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - **U6 vc-app**: `enumerate_browser_tab_sessions(name, bring_to_front)`·`list_browser_tabs(name, reveal)`; `activate_live_tab` 저장 탭은 포그라운드 재열거(§H3 제목 재검증 유지); 신규 `add_window_resource`/`activate_window_resource`+`activate_live_window`(`WindowRef` 배선, 제목 중복 방지, 닫힌 창 재열기 없음), `reopen_resource` WindowRef 분기. `generate_handler!` 22→24개.
 - **U7 프론트**: 창 행 draggable(일반 앱+브라우저 폴백)→`addWindowResource`, `draggedWin` ref+폴링 양보; 폴백 사유 안내+"⟳ 앞으로 가져와 다시 읽기" 버튼(reveal); 저장 `WindowRef` 배지 "Window"+더블클릭 복귀.
 - **정적 검증(실행 완료)**: `cargo clippy --workspace --all-targets` 0 경고, `cargo test --workspace` 전 통과(vc-core 24/24·vc-os-windows 5/5·vc-app 2/2·vc-sessions 8/8·vc-store 2/2), `npx tsc --noEmit` 무오류·`vite build` 성공.
-- **미완료(런타임 검증)**: Edge 백/포그라운드·여러 창·탭 순서 변경·Chrome 회귀·카카오톡 개별 창 등록 — 앱 UI 플로우 직접 실행 못 함, 완료로 기록하지 않음(사용자 실환경 확인 필요).
+- **✅ 런타임 검증 완료(2026-09-09, 사용자 수동 검증)**: Edge 포그라운드 탭 목록·백그라운드 폴백 + "⟳ 앞으로 가져와 다시 읽기"(reveal)·다중 Edge 창 구분·빈 제목/중첩 Tab 재발 없음·탭 순서 변경 후 저장 탭 활성화·Chrome 회귀 없음·카카오톡 개별 창 등록·복귀 모두 PASS. 정확 활성화(KakaoTalk 창/Chrome 탭/일반 앱)·AC-21 splash(노출·입력 차단·8초 내 해제)도 PASS. 자동 UI 클릭은 신뢰성 문제로 제외, 사용자 수동 검증으로 확정.
 - **문서**: `known-deviations.md` §H4 + B3 백로그 갱신, `window-enumeration.md` §6.9 추가, `aidlc-state.md`, `audit.md` 추가.
-- [x] 진단(확정/미확정 구분) → [x] 설계·수용 기준 제시 → [x] Construction Code Generation(U4·U6·U7) → [x] clippy/test/tsc/vite 정적 검증 통과 → [ ] 런타임 검증(Edge 백/포그라운드·다중 창·순서 변경·Chrome 회귀·카카오톡 등록 — 수동 필요)
+- [x] 진단(확정/미확정 구분) → [x] 설계·수용 기준 제시 → [x] Construction Code Generation(U4·U6·U7) → [x] clippy/test/tsc/vite 정적 검증 통과 → [x] 런타임 검증(Edge 백/포그라운드·다중 창·순서 변경·Chrome 회귀·카카오톡 등록 — 2026-09-09 사용자 수동 검증 PASS)

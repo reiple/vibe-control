@@ -181,7 +181,7 @@ G1(창 단위)에 이어 사용자 요청("지원 브라우저의 열린 탭을 
 
 - **수정(vc-app/src/lib.rs `activate_live_tab`)**: `focus_tab` 호출 전에 `enumerate_browser_tab_sessions`로 live tab 목록을 먼저 가져와, 저장된 핸들(`handle`)이 기대 제목(`title`)을 가진 탭을 실제로 가리키는지 확인. 일치 시 빠른 경로로 `focus_tab`; 불일치 시 제목 기반 검색으로 직행.
 - **잔여 한계(수용)**: 같은 창에 제목이 동일한 탭이 여러 개이면 첫 번째 매칭을 선택 — URL 없이는 구분 불가(FR-9.7).
-- **테스트**: `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2. 탭 순서 변경 후 saved tab 활성화 정확도는 수동 검증 필요(이 환경에서 실행 불가 — 미완료로 기록).
+- **테스트**: `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2. 탭 순서 변경 후 saved tab 활성화 정확도는 **✅ 2026-09-09 사용자 수동 검증 PASS**(순서 변경 후에도 저장 탭이 정확히 활성화됨, Chrome/Edge).
 
 **문제 2 — Edge 탭 빈 제목 표시 개선**
 
@@ -213,7 +213,7 @@ vc-os-windows `list_tabs`에서 UIA `Name`이 빈 문자열인 탭을 `(제목 �
   - 탭 읽기 실패 폴백 문구를 사유 안내로("백그라운드 창이라 탭을 읽지 못했습니다 — 창 목록을 표시합니다") + **"⟳ 앞으로 가져와 다시 읽기"** 버튼(→ `fetchTabs(name, reveal=true)`). 목록 펼치기만으로는 창을 포그라운드로 가져오지 않음.
   - 저장 `WindowRef` 리소스는 배지 "Window"(앱/창/탭 구분 유지), 더블클릭 시 `activateWindowResource`로 그 창 복귀. 앱 전체 등록(`add_app_resource`) 유지.
 - **정적 검증(2026-09-09, 실행 완료)**: `cargo clippy --workspace --all-targets` 0 경고, `cargo test --workspace` 전 크레이트 통과(vc-core 24/24·vc-os-windows 5/5·vc-app 2/2·vc-sessions 8/8·vc-store 2/2), 프론트 `npx tsc --noEmit` 무오류·`vite build` 성공. 2단계 진단 스크립트는 실 Windows+Edge에서 실행해 중첩 Tab·지연 트리를 실측 확정.
-- **런타임 검증(미완료 — 이 세션에서 직접 실행 못 함, 검증 완료로 처리하지 않음)**: ① Edge 백그라운드/포그라운드 탭 수집, ② 여러 Edge 창, ③ 탭 순서 변경 후 저장 탭 정확 활성화, ④ Chrome 회귀(직계 `TabItem` 수집 유지), ⑤ 카카오톡 개별 창 등록·복귀. 진단은 실측했으나 앱을 통한 위 UI 플로우 실행은 미수행. 사용자 실환경 확인 필요.
+- **✅ 런타임 검증 완료(2026-09-09, 사용자 수동 검증)**: ① Edge 백그라운드/포그라운드 탭 수집(reveal "⟳ 앞으로 가져와 다시 읽기" 동작 확인), ② 여러 Edge 창 각각 구분, ③ 탭 순서 변경 후 저장 탭 정확 활성화, ④ Chrome 회귀 없음(직계 `TabItem` 수집 유지), ⑤ 카카오톡 개별 창 등록·복귀 — **모두 PASS**. 추가로 정확 활성화(KakaoTalk 창/Chrome 탭/일반 앱, AC-20)·Chrome 탭 개별 표시·활성 탭 표시·DnD 개별 등록·AC-21 splash(노출·입력 차단·8초 내 해제)도 실환경 PASS. **검증 방식 주의**: PowerShell 좌표 기반 자동 UI 클릭은 WebView2에 합성 더블클릭이 신뢰성 있게 전달되지 않아(단일 클릭 hover는 전달됨) 검증 수단에서 제외 — 표시/등록은 실행 앱 스크린샷 실측, 정확 활성화·Edge·순서변경·splash는 사용자 수동 검증으로 확정.
 - **설계 문서**: `construction/vc-os-windows/functional-design/window-enumeration.md` §6.9.
 
 ---
