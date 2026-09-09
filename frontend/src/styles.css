@@ -102,13 +102,15 @@ body { margin: 0; background: var(--body); }
    click, drag, and key focus underneath until it fades out. Rendered by React
    (not static HTML) so it paints at the correct DPI scale on Windows/WebView2.
 
-   Story (see intro-animation.md): scattered, disconnected tool "pads" are
-   activated one-by-one in a rhythmic, step-sequencer sweep — each pad snapping
-   on with a tactile orange pulse — then routed together into a single control
-   hub before the "vibe control" name resolves with a confirmation pulse.
+   Story (see intro-animation.md): a centred, organised 5-row grid of tool
+   "pads" (filling the viewport width) powers on — an activation ripples out
+   from the centre, lighting the pads step-by-step in varied but harmonious
+   accent hues. The pads start clearly visible, then dim to a faded backdrop as
+   the "vibe control" logo (record-dot mark + wordmark) resolves in the exact
+   centre as the clear focal point, ending with a confirmation pulse.
    The motion language borrows the KO-II hardware sampler's tactile, grid/pad,
-   step-timed feel (NOT a music UI): controlled chaos becoming rhythm and order.
-   Dark, minimal, premium; the final fade to the light chassis is the
+   step-timed feel (NOT a music UI): many tools organised around one control
+   system. Dark, minimal, premium; the final fade to the light chassis is the
    transition into the app.
    ------------------------------------------------------------------------- */
 .splash {
@@ -539,6 +541,20 @@ body { margin: 0; background: var(--body); }
 .running-expand:active { transform: none; box-shadow: none; filter: none; }
 .running-expand:focus-visible { outline: none; box-shadow: none; }
 
+/* Windows path: chevron + window/tab count next to the app name. Kept small and
+   tidy (mono, tabular-nums) and pushed to the row's trailing edge so the digit
+   sits at the same quiet level as the expanded sub-items below it. */
+.running-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* One live window/tab/folder inside an expanded app group (FR-2.2/2.8).
    Indented under the app icon; drag-registerable into a context group. */
 .running-window {
@@ -554,7 +570,7 @@ body { margin: 0; background: var(--body); }
 /* Placeholder rows (Loading… / No windows or tabs): non-interactive, dimmed. */
 .running-window.muted {
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: 11px;
   cursor: default;
 }
 .running-window.muted:hover { background: transparent; }
@@ -582,11 +598,35 @@ body { margin: 0; background: var(--body); }
 }
 .win-title {
   font-family: var(--grotesk);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-muted);
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Informational row shown under an expanded browser when its tabs are still
+   loading or couldn't be read — not clickable, quieter than a real tab. */
+.running-window-hint {
+  cursor: default;
+  opacity: 0.7;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.running-window-hint:hover { background: transparent; }
+.running-window-hint .win-title {
+  font-style: italic;
+  white-space: normal;
+}
+/* Explicit "bring forward and re-read" action inside the fallback hint — the
+   opt-in that foregrounds a background browser window (accessibility-tree
+   readiness / FR-10.7). */
+.reveal-tabs {
+  font-family: var(--grotesk);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 /* ── Buttons = EP-133 keys: SHARP · FLAT · SOFT ────────────
@@ -1385,6 +1425,72 @@ button.mini.danger {
 @media (prefers-reduced-motion: reduce) {
   .modal-backdrop,
   .modal { animation: none; }
+}
+
+/* ── Full-conversation viewer (FR-12.3 / AC-17) ── */
+.conversation-modal {
+  width: min(720px, 100%);
+  max-height: min(80vh, 720px);
+  padding: 16px 16px 12px;
+  gap: 10px;
+}
+.conversation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.conversation-head .modal-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 6px 4px 2px;
+}
+.conversation-empty {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  padding: 24px 0;
+  text-align: center;
+}
+.conv-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--sunk);
+  box-shadow: inset 0 1px 0 var(--edge-hi);
+}
+.conv-turn.user {
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+}
+.conv-role {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+.conv-text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ── Bottom: the Claude prompt console = a docked control strip ── */

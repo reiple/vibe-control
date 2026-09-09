@@ -21,6 +21,13 @@ use vc_store::{BundleStore, JsonBundleStore};
 /// Cap on coding sessions pulled into a capture (most recent first).
 const MAX_CAPTURED_SESSIONS: usize = 8;
 
+/// Unit separator joining the parts of a saved live-tab hint
+/// (`<browser>\u{1f}<hwnd>\u{1f}<idx>`). The `<hwnd>\u{1f}<idx>` suffix is
+/// exactly the token the Windows tab reader emits/consumes; we only prefix the
+/// browser name so activation knows which process to re-enumerate on a stale
+/// token. Matches the separator the adapters already use for opaque handles.
+const TAB_SEP: char = '\u{1f}';
+
 pub struct AppState {
     store: Box<dyn BundleStore + Send>,
     bundles: Vec<WorkBundle>,
@@ -168,6 +175,61 @@ impl AppState {
         self.settings.claude_model = Some(model).filter(|m| !m.trim().is_empty());
         self.store.save_settings(&self.settings)
     }
+
+    /// The persisted UI layout (sidebar width, card height, saved window rect),
+    /// with the Claude fields deliberately excluded — this is safe to hand to
+    /// the frontend (E2 / FR-8.10 / AC-14).
+    pub fn layout(&self) -> LayoutSettings {
+        LayoutSettings {
+            panel_width: self.settings.panel_width,
+            card_height: self.settings.card_height,
+            window_x: self.settings.window_x,
+            window_y: self.settings.window_y,
+            window_width: self.settings.window_width,
+            window_height: self.settings.window_height,
+        }
+    }
+
+    /// Persist the panel/card layout the frontend owns (sidebar drag-resize).
+    /// The window rect is written by the backend's window-event path, so it is
+    /// left untouched here.
+    pub fn set_panel_layout(&mut self, panel_width: f32, card_height: f32) -> Result<()> {
+        // Guard against a degenerate 0/NaN width bricking the sidebar on reload.
+        if panel_width.is_finite() && panel_width > 0.0 {
+            self.settings.panel_width = panel_width;
+        }
+        if card_height.is_finite() && card_height > 0.0 {
+            self.settings.card_height = card_height;
+        }
+        self.store.save_settings(&self.settings)
+    }
+
+    /// Record the current window position/size in memory only (no disk write) —
+    /// called on every move/resize event, which fire rapidly during a drag.
+    /// The values are flushed to disk once by `persist_settings` on window close.
+    pub fn stash_window_rect(&mut self, x: i32, y: i32, width: u32, height: u32) {
+        self.settings.window_x = Some(x);
+        self.settings.window_y = Some(y);
+        self.settings.window_width = Some(width);
+        self.settings.window_height = Some(height);
+    }
+
+    /// Flush the in-memory settings (including the stashed window rect) to disk.
+    pub fn persist_settings(&self) -> Result<()> {
+        self.store.save_settings(&self.settings)
+    }
+}
+
+/// UI layout the frontend reads on boot and writes back on change (E2). Excludes
+/// the Claude connection fields of `AppSettings`, which the UI must never see.
+#[derive(Serialize, serde::Deserialize, Clone)]
+pub struct LayoutSettings {
+    pub panel_width: f32,
+    pub card_height: f32,
+    pub window_x: Option<i32>,
+    pub window_y: Option<i32>,
+    pub window_width: Option<u32>,
+    pub window_height: Option<u32>,
 }
 
 type SharedState = Mutex<AppState>;
@@ -419,6 +481,43 @@ async fn activate_window(handle: String) -> std::result::Result<(), CommandError
     Ok(())
 }
 
+/// List a running browser's currently-open tabs as individual selectable
+/// sessions (FR-9.6 / FR-10.12 / AC-20). `name` is the app-group name the UI
+/// already has (the browser's process/exe stem, e.g. `chrome` / `msedge`). Each
+/// returned `RunningWindow` is one tab: `handle` an opaque per-tab activation
+/// token (never interpreted by the frontend), `title` the tab's page title,
+/// `is_focused` the active tab (green dot). Fetched ON DEMAND when the user
+/// expands a browser group — NEVER on the 1-second poll (FR-10.7) — since it
+/// reads the browser's accessibility tree, which is heavier than window
+/// enumeration. Returns empty (UI falls back to the OS-window list) when no
+/// browser window's tabs are readable — e.g. a fully-background window whose
+/// accessibility tree the browser hasn't built, or an unsupported platform.
+///
+/// `reveal` distinguishes the two entry points (FR-10.7 / accessibility-tree
+/// readiness): group-expand passes `false` — a background window is read
+/// best-effort with bounded retries but is NEVER forced to the foreground, so
+/// merely opening a group can't steal focus. The explicit "bring forward and
+/// re-read" action passes `true`, foregrounding each browser window first,
+/// which is the reliable way to make Chromium build a background window's tree.
+#[tauri::command]
+async fn list_browser_tabs(
+    name: String,
+    reveal: bool,
+) -> std::result::Result<Vec<RunningWindow>, CommandError> {
+    Ok(enumerate_browser_tab_sessions(&name, reveal)
+        .into_iter()
+        .map(|(handle, title, is_focused)| RunningWindow {
+            handle,
+            title,
+            // A browser tab session; `target` is intentionally empty — a live tab
+            // carries no URL (FR-9.7 forbids guessing one), it is focus-only.
+            kind: "tab".into(),
+            target: String::new(),
+            is_focused,
+        })
+        .collect())
+}
+
 /// Lazily enumerate one running app's expandable children when the user expands
 /// it in the left panel (FR-2.2 / FR-2.8). Kept off the fast `list_running_apps`
 /// path because the per-window/tab scan is slow and permission-gated. Returns
@@ -440,6 +539,47 @@ async fn list_app_children(
             is_focused,
         })
         .collect())
+}
+
+/// Bring a SPECIFIC browser tab to the front (FR-2.8 / FR-4.1 / FR-4.2, AC-20):
+/// the per-tab counterpart of `activate_window`. `handle` is the opaque token
+/// from a `list_browser_tabs` entry. It focuses exactly that tab (foregrounding
+/// its window first), not just the browser app; errors if the tab or window is
+/// gone since the last fetch so the UI can drop it and re-enumerate.
+#[tauri::command]
+async fn activate_tab(handle: String) -> std::result::Result<(), CommandError> {
+    focus_tab(&handle)?;
+    Ok(())
+}
+
+/// Activate a SAVED live browser tab (FR-4.1 / FR-4.2 / AC-20): the double-click
+/// counterpart of `add_tab_resource`. `hint` is the stored
+/// `<browser>\u{1f}<hwnd>\u{1f}<idx>` token, `title` the saved tab title used as
+/// a fallback match key when the token has gone stale. Focuses exactly that tab,
+/// never just the browser app; errors when the tab can no longer be found.
+#[tauri::command]
+async fn activate_tab_resource(
+    hint: String,
+    title: String,
+) -> std::result::Result<(), CommandError> {
+    activate_live_tab(&hint, &title)?;
+    Ok(())
+}
+
+/// Activate a SAVED individual window (FR-2.8 / FR-4.1 / FR-4.2 / AC-20): the
+/// double-click counterpart of `add_window_resource`. `hint` is the stored HWND
+/// token, `title` the saved window title, `app` the owning app-group name (used
+/// to scope the re-match). Focuses exactly that window — never just the app —
+/// and errors when the window can no longer be found. Closed windows are NOT
+/// auto-reopened (out of scope): a gone window surfaces as an error.
+#[tauri::command]
+async fn activate_window_resource(
+    hint: String,
+    title: String,
+    app: String,
+) -> std::result::Result<(), CommandError> {
+    activate_live_window(&hint, &title, &app)?;
+    Ok(())
 }
 
 /// Activate a specific child (tab/folder/window) picked from an expanded app
@@ -619,6 +759,152 @@ fn add_app_resource(
     Ok(app.get_bundles().to_vec())
 }
 
+/// Find an 8-4-4-4-12 hex UUID token anywhere in a terminal window title.
+/// Claude Code resumes launched by this app show `claude --resume <uuid>` in
+/// the title, so this exactly identifies the session when present.
+#[cfg(target_os = "macos")]
+fn session_id_from_title(title: &str) -> Option<String> {
+    fn is_uuid(tok: &str) -> bool {
+        let b = tok.as_bytes();
+        if b.len() != 36 {
+            return false;
+        }
+        b.iter().enumerate().all(|(i, &c)| match i {
+            8 | 13 | 18 | 23 => c == b'-',
+            _ => c.is_ascii_hexdigit(),
+        })
+    }
+    title
+        .split(|c: char| c.is_whitespace())
+        .find(|tok| is_uuid(tok))
+        .map(str::to_string)
+}
+
+/// If a dragged window is actually an open Claude Code terminal, resolve it to
+/// its session transcript so it can register as a live coding session (with a
+/// conversation preview + 대화 보기) instead of a bare window ref. Returns the
+/// session's `(label, session_ref)`. Best-effort — `None` when the window isn't
+/// a recognizable coding session, so the caller falls back to a plain window.
+///
+/// Two join keys, most precise first: (1) a session id embedded in the terminal
+/// title (how our own resumes launch), (2) the terminal's working directory
+/// matched to the most-recently-active session started there.
+#[cfg(target_os = "macos")]
+fn resolve_terminal_session(handle: &str, title: &str) -> Option<(String, String)> {
+    let mut parts = handle.split('\u{1f}');
+    let app = parts.next().unwrap_or("");
+    let _title = parts.next();
+    let idx: usize = parts.next().and_then(|s| s.parse().ok()).unwrap_or(0);
+
+    // discover() returns sessions most-recently-modified first, so the first
+    // match on either key is the active session for that terminal.
+    let sessions = ClaudeCodeSessionProvider.discover().unwrap_or_default();
+
+    // (1) Exact: session id in the title.
+    if let Some(id) = session_id_from_title(title) {
+        let needle = format!("{id}.jsonl");
+        if let Some(s) = sessions.iter().find(|s| s.session_ref.ends_with(&needle)) {
+            return Some((s.label.clone(), s.session_ref.clone()));
+        }
+    }
+
+    // (2) Robust: match the terminal's cwd to a session's cwd.
+    let cwd = vc_os_macos::terminal_window_cwd(app, title, idx)?;
+    let cwd_canon = std::fs::canonicalize(&cwd).ok();
+    for s in &sessions {
+        let Some(scwd) = ClaudeCodeSessionProvider::session_cwd(&s.session_ref) else {
+            continue;
+        };
+        let same = match (&cwd_canon, std::fs::canonicalize(&scwd).ok()) {
+            (Some(a), Some(b)) => *a == b,
+            _ => scwd == cwd,
+        };
+        if same {
+            return Some((s.label.clone(), s.session_ref.clone()));
+        }
+    }
+    None
+}
+
+/// Return the persisted UI layout so the frontend can restore the sidebar width
+/// on boot (E2 / FR-8.10 / AC-14). Never includes Claude credentials.
+#[tauri::command]
+fn get_layout(state: State<SharedState>) -> std::result::Result<LayoutSettings, CommandError> {
+    let app = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    Ok(app.layout())
+}
+
+/// Persist the sidebar/card layout the user adjusted (debounced by the UI).
+#[tauri::command]
+fn save_panel_layout(
+    state: State<SharedState>,
+    panel_width: f32,
+    card_height: f32,
+) -> std::result::Result<(), CommandError> {
+    let mut app = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    app.set_panel_layout(panel_width, card_height)?;
+    Ok(())
+}
+
+/// Add ONE live browser tab (dragged from the left panel) to a context group as
+/// its own focus-only resource (FR-9.6 / FR-10.12 / AC-20). Unlike a captured
+/// `BrowserTab` (which persists a URL), a live tab carries NO URL — UIA can't
+/// read a background tab's URL and FR-9.7 forbids guessing one — so it is
+/// display+activate only: `display_name`/`descriptor` = the tab title, `hint` =
+/// `<browser>\u{1f}<hwnd>\u{1f}<idx>` (the non-stable activation token),
+/// `reopen_info` = None. `browser` is the app-group name (browser exe stem, e.g.
+/// `chrome`), `handle` the per-tab token from a `list_browser_tabs` entry.
+/// Dedup is on the full hint, so the SAME live tab can't be registered twice
+/// while two DIFFERENT tabs of one window (distinct index) both can (FR-3.4).
+/// Returns the updated bundle list.
+#[tauri::command]
+fn add_tab_resource(
+    state: State<SharedState>,
+    bundle_id: String,
+    title: String,
+    browser: String,
+    handle: String,
+) -> std::result::Result<Vec<WorkBundle>, CommandError> {
+    let mut app = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    let mut bundles = app.get_bundles().to_vec();
+    let bundle = bundles
+        .iter_mut()
+        .find(|b| b.id.to_string() == bundle_id)
+        .ok_or_else(|| CommandError {
+            message: format!("group not found: {bundle_id}"),
+        })?;
+
+    let hint = format!("{browser}{TAB_SEP}{handle}");
+    // FR-3.4: the exact same live tab (browser + window + tab index) can't be
+    // registered twice; two different tabs of one window (different index) still
+    // both register, since the whole hint differs.
+    let already = bundle.resources.iter().any(|r| {
+        matches!(r.kind, ResourceKind::BrowserTabLive)
+            && r.identity.hint.as_deref() == Some(hint.as_str())
+    });
+    if !already {
+        bundle.add_resource(Resource::new(
+            title.clone(),
+            ResourceKind::BrowserTabLive,
+            ResourceIdentity {
+                kind: ResourceKind::BrowserTabLive,
+                descriptor: title,
+                hint: Some(hint),
+                reopen_info: None,
+            },
+        ));
+    }
+
+    app.set_bundles(bundles)?;
+    Ok(app.get_bundles().to_vec())
+}
+
 /// Add a specific app child (a browser tab, a Finder folder, or a single app
 /// window) dragged from an expanded group into a context group (FR-2.2 / §13.3).
 /// `kind` selects the resource kind: "tab" → browser tab (target = URL), "folder"
@@ -634,31 +920,48 @@ fn add_child_resource(
     target: String,
     handle: String,
 ) -> std::result::Result<Vec<WorkBundle>, CommandError> {
-    let rkind = match kind.as_str() {
-        "tab" => ResourceKind::BrowserTab,
-        "folder" => ResourceKind::Folder,
-        _ => ResourceKind::WindowRef,
-    };
-    // The child handle carries identity the bare target lacks: `app\u{1f}url` for a
-    // browser tab (WHICH browser to drive so activation selects the exact tab) and
-    // `Finder\u{1f}name` for a path-less Finder window (Recents / saved search,
-    // raised by name). Pick the descriptor (dedup + display) and the reopen hint
-    // (drives activation) per kind so clicking the registered item lands on it.
-    let handle_or_target = if handle.is_empty() {
-        target.as_str()
-    } else {
-        handle.as_str()
-    };
-    let (descriptor, reopen): (&str, &str) = match rkind {
-        // URL identifies the tab for dedup; the `app\u{1f}url` handle drives it.
-        ResourceKind::BrowserTab => (target.as_str(), handle_or_target),
-        // POSIX path when present; else fall back to the `Finder\u{1f}name` handle
-        // so a path-less window is still uniquely identified and re-raisable.
-        ResourceKind::Folder if target.is_empty() => (handle.as_str(), handle.as_str()),
-        ResourceKind::Folder => (target.as_str(), target.as_str()),
-        // A window ref's target already IS its opaque handle.
-        _ => (target.as_str(), handle_or_target),
-    };
+    // A dragged window that is actually an open Claude Code terminal registers
+    // as a live CodingSession (conversation preview + 대화 보기) — the same kind
+    // "Capture current" produces — rather than a bare window ref. Best-effort;
+    // falls through to the normal kind mapping when it isn't a coding session.
+    #[cfg(target_os = "macos")]
+    let session = (kind != "tab" && kind != "folder")
+        .then(|| resolve_terminal_session(&handle, &name))
+        .flatten();
+    #[cfg(not(target_os = "macos"))]
+    let session: Option<(String, String)> = None;
+
+    // (display_name, kind, descriptor, reopen). For a coding session the label
+    // and .jsonl path come from the session, matching capture_current so the two
+    // paths dedup together. Otherwise the child handle carries identity the bare
+    // target lacks: `app\u{1f}url` for a browser tab (WHICH browser to drive) and
+    // `Finder\u{1f}name` for a path-less Finder window (raised by name).
+    let (display_name, rkind, descriptor, reopen): (String, ResourceKind, String, String) =
+        if let Some((label, session_ref)) = session {
+            (label, ResourceKind::CodingSession, session_ref.clone(), session_ref)
+        } else {
+            let rkind = match kind.as_str() {
+                "tab" => ResourceKind::BrowserTab,
+                "folder" => ResourceKind::Folder,
+                _ => ResourceKind::WindowRef,
+            };
+            let handle_or_target = if handle.is_empty() {
+                target.as_str()
+            } else {
+                handle.as_str()
+            };
+            let (descriptor, reopen): (&str, &str) = match rkind {
+                // URL identifies the tab for dedup; the `app\u{1f}url` handle drives it.
+                ResourceKind::BrowserTab => (target.as_str(), handle_or_target),
+                // POSIX path when present; else fall back to the `Finder\u{1f}name`
+                // handle so a path-less window is uniquely identified and re-raisable.
+                ResourceKind::Folder if target.is_empty() => (handle.as_str(), handle.as_str()),
+                ResourceKind::Folder => (target.as_str(), target.as_str()),
+                // A window ref's target already IS its opaque handle.
+                _ => (target.as_str(), handle_or_target),
+            };
+            (name.clone(), rkind, descriptor.to_string(), reopen.to_string())
+        };
 
     let mut app = state.lock().map_err(|_| CommandError {
         message: "state lock poisoned".into(),
@@ -677,11 +980,67 @@ fn add_child_resource(
         .iter()
         .any(|r| r.kind == rkind && r.identity.descriptor == descriptor);
     if !already {
-        bundle.add_resource(make_resource(&name, rkind, descriptor, Some(reopen)));
+        bundle.add_resource(make_resource(&display_name, rkind, &descriptor, Some(&reopen)));
     }
 
     app.set_bundles(bundles)?;
     Ok(app.get_bundles().to_vec())
+}
+
+/// Add ONE individual OS window (dragged from the left panel) to a context group
+/// as a focus-only `WindowRef` resource (FR-2.8 / FR-3.5 / AC-20) — e.g. a single
+/// KakaoTalk chat-room window rather than the whole app. This complements
+/// whole-app registration (`add_app_resource`) and browser-tab registration
+/// (`add_tab_resource`), and works from BOTH kinds of left-panel window rows: a
+/// general app's OS windows and the browser's OS-window fallback rows (shown when
+/// tab reading fails). `title` = the window title (display + descriptor), `app` =
+/// the owning app-group name (kept in `reopen_info` to scope re-matching), `handle`
+/// = the volatile HWND token (kept in `hint`, used only after confirming identity).
+/// Dedup is on the title (consistent with vc-core `distinct_key(WindowRef)`), since
+/// the OS recycles HWNDs so they can't be part of the identity key. Closed windows
+/// are NOT auto-reopened — that's deliberately out of scope. Returns the updated
+/// bundle list.
+#[tauri::command]
+fn add_window_resource(
+    state: State<SharedState>,
+    bundle_id: String,
+    title: String,
+    app: String,
+    handle: String,
+) -> std::result::Result<Vec<WorkBundle>, CommandError> {
+    let mut guard = state.lock().map_err(|_| CommandError {
+        message: "state lock poisoned".into(),
+    })?;
+    let mut bundles = guard.get_bundles().to_vec();
+    let bundle = bundles
+        .iter_mut()
+        .find(|b| b.id.to_string() == bundle_id)
+        .ok_or_else(|| CommandError {
+            message: format!("group not found: {bundle_id}"),
+        })?;
+
+    // FR-3.4/3.5: dedup on the window title within the group, consistent with
+    // vc-core `distinct_key(WindowRef) = descriptor`. The HWND is volatile (the
+    // OS recycles it), so it is NEVER part of the identity key.
+    let already = bundle
+        .resources
+        .iter()
+        .any(|r| matches!(r.kind, ResourceKind::WindowRef) && r.identity.descriptor == title);
+    if !already {
+        bundle.add_resource(Resource::new(
+            title.clone(),
+            ResourceKind::WindowRef,
+            ResourceIdentity {
+                kind: ResourceKind::WindowRef,
+                descriptor: title,
+                hint: Some(handle),
+                reopen_info: Some(app),
+            },
+        ));
+    }
+
+    guard.set_bundles(bundles)?;
+    Ok(guard.get_bundles().to_vec())
 }
 
 /// Connection status for the Claude prompt console. Deliberately never carries
@@ -874,25 +1233,36 @@ fn reopen_resource(resource: &Resource) -> std::result::Result<(), String> {
 
     match resource.kind {
         ResourceKind::AppLaunch => open_app(target),
-        // A window ref's target is an opaque window handle (`app\u{1f}title\u{1f}idx`),
-        // not an app name/bundle id: `focus_window` splits it to raise that exact
-        // window (relaunching the app if it's closed), whereas `open_app` would
-        // treat the whole handle as an app name and fail.
-        ResourceKind::WindowRef => focus_window(target),
+        // A saved individual window: re-focus that exact window in its running
+        // app from the stored HWND (verified by title). Never re-launch/re-open
+        // a closed window — auto-reopen is deliberately out of scope; a gone
+        // window surfaces as an error instead.
+        ResourceKind::WindowRef => activate_live_window(
+            resource.identity.hint.as_deref().unwrap_or(""),
+            &resource.identity.descriptor,
+            resource.identity.reopen_info.as_deref().unwrap_or(""),
+        ),
         // A folder's descriptor is a POSIX path, or a `Finder\u{1f}name` handle for
         // a path-less window (Recents / saved search) → raise that window by name.
         ResourceKind::Folder => match resource.identity.descriptor.split_once('\u{1f}') {
             Some((_, win_name)) => activate_finder_window(win_name),
             None => open_path(&resource.identity.descriptor),
         },
-        // A tab's reopen hint is `app\u{1f}url` → select that exact tab in that
-        // browser (not a fresh default-browser tab). Legacy resources stored only
-        // the url (no separator) → best-effort open it.
+        // A captured tab's reopen hint is `app\u{1f}url` → select that exact tab in
+        // that browser (not a fresh default-browser tab). Legacy resources stored
+        // only the url (no separator) → best-effort open it.
         ResourceKind::BrowserTab => match target.split_once('\u{1f}') {
             Some((app_name, url)) => activate_browser_tab(app_name, url),
             None => open_url(target),
         },
         ResourceKind::Url => open_url(target),
+        // A live tab has no URL (FR-9.7): re-focus the exact tab in its running
+        // browser from the saved handle, never open a URL. The title is the
+        // fallback match key if the stored (hwnd,idx) token went stale.
+        ResourceKind::BrowserTabLive => activate_live_tab(
+            resource.identity.hint.as_deref().unwrap_or(""),
+            &resource.identity.descriptor,
+        ),
         // Coding sessions resume from the raw descriptor (session path/id),
         // not the reopen hint.
         ResourceKind::CodingSession => resume_session(&resource.identity.descriptor),
@@ -932,6 +1302,113 @@ fn focus_window(handle: &str) -> std::result::Result<(), String> {
         let _ = handle;
         Err("window activation not supported on this platform".into())
     }
+}
+
+/// A browser's live tabs as `(handle_token, title, is_active)`, on demand. Only
+/// Windows currently has a live tab reader (UI Automation over Chromium's tab
+/// strip); macOS reads Safari/Chrome tabs for CAPTURE (title+url) but not as
+/// activatable live-panel sessions, so it returns empty here (the UI falls back
+/// to the app's OS windows). Never errors — an empty list is the graceful
+/// degradation the caller expects.
+fn enumerate_browser_tab_sessions(name: &str, bring_to_front: bool) -> Vec<(String, String, bool)> {
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinBrowserTabReader::list_tabs(name, bring_to_front).unwrap_or_default()
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = (name, bring_to_front);
+        Vec::new()
+    }
+}
+
+/// Focus a specific browser tab by its opaque per-platform handle, the per-tab
+/// counterpart of `focus_window`. Only Windows supports it today; elsewhere the
+/// UI never surfaces tab handles, so this is an explicit unsupported error.
+fn focus_tab(handle: &str) -> std::result::Result<(), String> {
+    #[cfg(target_os = "windows")]
+    {
+        vc_os_windows::WinBrowserTabReader::activate_tab(handle).map_err(|e| e.to_string())
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        let _ = handle;
+        Err("browser-tab activation not supported on this platform".into())
+    }
+}
+
+/// Activate a stored live browser tab from its `<browser>\u{1f}<hwnd>\u{1f}<idx>`
+/// hint. Tries the stored (hwnd, index) token first; if that's stale — the
+/// browser was restarted, or tabs were reordered/closed so the index moved —
+/// re-reads the browser's live tabs and re-matches by the saved title (FR-9.7:
+/// title only, we never fabricate a URL). Errors if the tab can no longer be
+/// found so the UI surfaces it rather than silently focusing the wrong thing
+/// (FR-4.2 — activating the browser without switching the tab is NOT success).
+/// Split a saved live-tab hint `<browser>\u{1f}<hwnd>\u{1f}<idx>` back into its
+/// `(browser, "<hwnd>\u{1f}<idx>")` parts — the inverse of the `add_tab_resource`
+/// compose. The second element is exactly the token the tab reader consumes.
+/// `None` when either part is missing (malformed / legacy hint).
+fn split_tab_hint(hint: &str) -> Option<(&str, &str)> {
+    let mut parts = hint.splitn(2, TAB_SEP);
+    let browser = parts.next().unwrap_or("");
+    let handle = parts.next().unwrap_or("");
+    if browser.is_empty() || handle.is_empty() {
+        return None;
+    }
+    Some((browser, handle))
+}
+
+fn activate_live_tab(hint: &str, title: &str) -> std::result::Result<(), String> {
+    let (browser, handle) =
+        split_tab_hint(hint).ok_or_else(|| "invalid saved tab handle".to_string())?;
+    // Enumerate live tabs first so the stored position can be verified before
+    // committing. Calling focus_tab blindly on a stale index silently activates
+    // the wrong tab (the script returns OK as long as the index is in range,
+    // regardless of whether the title matches — FR-4.2). Activating a saved tab
+    // is an explicit user action, so foreground the window while re-reading:
+    // that forces Chromium to build a background window's tree, so the title
+    // re-match below works even when the browser has been backgrounded since.
+    let live_tabs = enumerate_browser_tab_sessions(browser, true);
+    // 1) Fast path: stored position still points to the expected tab.
+    if live_tabs.iter().any(|(h, t, _)| h == handle && t == title) {
+        return focus_tab(handle);
+    }
+    // 2) Position is stale — find the tab by title (handles reorder/close).
+    for (h, t, _active) in &live_tabs {
+        if t == title {
+            return focus_tab(h);
+        }
+    }
+    Err(format!("tab no longer open: {title}"))
+}
+
+/// Activate a stored individual window from its saved HWND `hint`, scoped to the
+/// owning `app`. The OS recycles window handles, so — exactly like
+/// `activate_live_tab` — we re-enumerate the app's live windows and confirm the
+/// stored handle still names the SAME window before focusing it; if it went
+/// stale (app restarted, window recreated) we re-match by the saved `title`
+/// within that app. Errors when the window can no longer be found so the UI
+/// surfaces it rather than focusing the wrong window (FR-4.2 — focusing the app
+/// or a different window is NOT success). A closed window is intentionally NOT
+/// reopened (out of scope): it simply reports "no longer open".
+fn activate_live_window(handle: &str, title: &str, app: &str) -> std::result::Result<(), String> {
+    if handle.is_empty() {
+        return Err("invalid saved window handle".to_string());
+    }
+    let apps = enumerate_running_windows();
+    if let Some((_, _, windows)) = apps.iter().find(|(name, _, _)| name == app) {
+        // 1) Fast path: stored handle still names the same window.
+        if windows.iter().any(|(h, t, _)| h == handle && t == title) {
+            return focus_window(handle);
+        }
+        // 2) Handle went stale — re-match by title within the same app.
+        for (h, t, _focused) in windows {
+            if t == title {
+                return focus_window(h);
+            }
+        }
+    }
+    Err(format!("window no longer open: {title}"))
 }
 
 fn open_path(target: &str) -> std::result::Result<(), String> {
@@ -1101,6 +1578,23 @@ fn enumerate_running_windows() -> Vec<AppWindows> {
     }
 }
 
+/// Restore the saved window position/size (E2 / FR-8.10 / AC-14) before the
+/// window is shown, so it reopens where the user left it. Physical pixels are
+/// stored and restored as-is (consistent round-trip on the same display).
+/// Best-effort: any missing value or failed call leaves the configured default.
+fn restore_window_rect(app: &tauri::AppHandle, layout: &LayoutSettings) {
+    use tauri::{LogicalPosition, LogicalSize, Manager};
+    let Some(win) = app.get_webview_window("main") else {
+        return;
+    };
+    if let (Some(w), Some(h)) = (layout.window_width, layout.window_height) {
+        let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
+    }
+    if let (Some(x), Some(y)) = (layout.window_x, layout.window_y) {
+        let _ = win.set_position(LogicalPosition::new(x as f64, y as f64));
+    }
+}
+
 /// One expandable child of an app: `(kind, handle, title, target, is_focused)`.
 type AppChild = (String, String, String, String, bool);
 
@@ -1149,12 +1643,49 @@ pub fn run() {
     tauri::Builder::default()
         .setup(|app| {
             let state = AppState::new().map_err(|e| e.to_string())?;
+            let layout = state.layout();
             app.manage(Mutex::new(state));
+            restore_window_rect(app.handle(), &layout);
             // Surface the Accessibility prompt at launch so per-instance window
             // listing works without the user having to hunt through Settings.
             // Unscriptable to grant; only prompts when not already trusted.
             let _ = vc_os_macos::accessibility_trusted(true);
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            use tauri::{Manager, WindowEvent};
+            // Track the window rect in memory as it moves/resizes (cheap, no
+            // disk I/O — these fire many times per drag), then flush once when
+            // the window is closing so the next launch reopens in place.
+            let stash = |window: &tauri::Window| {
+                if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
+                    let scale = window.scale_factor().unwrap_or(1.0);
+                    let logical_pos = pos.to_logical::<f64>(scale);
+                    let logical_size = size.to_logical::<f64>(scale);
+                    if let Some(state) = window.try_state::<SharedState>() {
+                        if let Ok(mut app) = state.lock() {
+                            app.stash_window_rect(
+                                logical_pos.x as i32,
+                                logical_pos.y as i32,
+                                logical_size.width as u32,
+                                logical_size.height as u32,
+                            );
+                        }
+                    }
+                }
+            };
+            match event {
+                WindowEvent::Moved(_) | WindowEvent::Resized(_) => stash(window),
+                WindowEvent::CloseRequested { .. } | WindowEvent::Destroyed => {
+                    stash(window);
+                    if let Some(state) = window.try_state::<SharedState>() {
+                        if let Ok(app) = state.lock() {
+                            let _ = app.persist_settings();
+                        }
+                    }
+                }
+                _ => {}
+            }
         })
         .invoke_handler(tauri::generate_handler![
             get_bundles,
@@ -1168,13 +1699,21 @@ pub fn run() {
             list_app_children,
             activate_app,
             activate_window,
+            list_browser_tabs,
+            activate_tab,
+            activate_tab_resource,
+            activate_window_resource,
             activate_child,
             get_app_icon,
             create_bundle,
             delete_bundle,
             remove_resource,
             add_app_resource,
+            add_tab_resource,
+            add_window_resource,
             add_child_resource,
+            get_layout,
+            save_panel_layout,
             claude_status,
             claude_usage,
             set_claude_api_key,
@@ -1184,4 +1723,33 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running vibe-control");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The addressing scheme registration composes and activation splits must be
+    /// exact inverses: `add_tab_resource` stores `<browser>\u{1f}<handle>` and
+    /// `activate_live_tab` must recover `(browser, handle)` where `handle` is the
+    /// verbatim `<hwnd>\u{1f}<idx>` token the tab reader consumes. Dedup depends
+    /// on the same string, so a drift here would silently break both.
+    #[test]
+    fn tab_hint_compose_split_roundtrip() {
+        let browser = "chrome";
+        let handle = format!("12345{TAB_SEP}2"); // <hwnd>\u{1f}<idx>, as the reader emits
+        let hint = format!("{browser}{TAB_SEP}{handle}");
+
+        let (b, h) = split_tab_hint(&hint).expect("well-formed hint splits");
+        assert_eq!(b, browser);
+        assert_eq!(h, handle); // the inner \u{1f} survives (splitn(2) stops at the first)
+    }
+
+    #[test]
+    fn tab_hint_rejects_malformed() {
+        assert!(split_tab_hint("").is_none());
+        assert!(split_tab_hint("chrome").is_none()); // no separator → no handle
+        assert!(split_tab_hint(&format!("chrome{TAB_SEP}")).is_none()); // empty handle
+        assert!(split_tab_hint(&format!("{TAB_SEP}12345{TAB_SEP}2")).is_none()); // empty browser
+    }
 }

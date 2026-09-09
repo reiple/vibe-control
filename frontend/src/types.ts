@@ -1,6 +1,7 @@
 export type ResourceKind =
   | "WindowRef"
   | "BrowserTab"
+  | "BrowserTabLive"
   | "Folder"
   | "AppLaunch"
   | "Url"
@@ -75,6 +76,17 @@ export interface RunningApp {
    *  empty when only app-level info is available — the app is then a single
    *  activatable entry. */
   windows: RunningWindow[];
+}
+
+/** Persisted UI layout (sidebar width + saved window rect). Mirrors the backend
+ *  `LayoutSettings` — never carries Claude credentials. */
+export interface LayoutSettings {
+  panel_width: number;
+  card_height: number;
+  window_x: number | null;
+  window_y: number | null;
+  window_width: number | null;
+  window_height: number | null;
 }
 
 /** One turn of the in-app Claude prompt console. */

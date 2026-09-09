@@ -8,6 +8,7 @@ import type {
   ChatMsg,
   ClaudeStatus,
   ClaudeUsage,
+  LayoutSettings,
 } from "./types";
 
 const inTauri = (): boolean =>
@@ -95,6 +96,33 @@ export async function activateWindow(handle: string): Promise<void> {
   await invoke("activate_window", { handle });
 }
 
+/** Lazily fetch a running browser's open tabs as individual selectable
+ *  sessions (FR-9.6 / FR-10.12 / AC-20). `name` is the browser app-group name
+ *  (e.g. "chrome" / "msedge"). Each RunningWindow is one tab; `handle` is an
+ *  opaque per-tab token for `activateTab`. Fetched ON DEMAND when a browser
+ *  group is expanded — never on the poll. Empty when no window's tabs are
+ *  readable (UI then shows the OS windows instead).
+ *
+ *  `reveal` picks the entry point: on group-expand it stays false, so a
+ *  background browser window is read best-effort but is NEVER pulled to the
+ *  foreground (opening a group can't steal focus). The explicit "bring forward
+ *  and re-read" button passes true, which foregrounds each browser window first
+ *  — the reliable way to make Chromium build a background window's tab tree. */
+export async function listBrowserTabs(
+  name: string,
+  reveal = false
+): Promise<RunningWindow[]> {
+  if (!inTauri()) return [];
+  return await invoke<RunningWindow[]>("list_browser_tabs", { name, reveal });
+}
+
+/** Bring a SPECIFIC browser tab to the front (FR-2.8 / FR-4.2 / AC-20).
+ *  `handle` is the opaque token from a listBrowserTabs entry; it focuses
+ *  exactly that tab (foregrounding its window first), not just the browser. */
+export async function activateTab(handle: string): Promise<void> {
+  await invoke("activate_tab", { handle });
+}
+
 /** Lazily fetch a running app's icon as a base64 PNG data URI, or null.
  *  `id` is a bundle id when known, else an app name (same value used to
  *  activate the app). Returns null outside Tauri or when no icon exists. */
@@ -134,6 +162,25 @@ export async function addAppResource(
   });
 }
 
+/** Register ONE live browser tab (dragged from the left panel) into a group as
+ *  its own focus-only resource (FR-9.6 / AC-20). No URL is stored (FR-9.7) — the
+ *  tab is keyed by `title` + an opaque `handle` under `browser`. The same tab
+ *  can't be added twice; two different tabs of one window both can. Returns the
+ *  updated bundle list. */
+export async function addTabResource(
+  bundleId: string,
+  title: string,
+  browser: string,
+  handle: string
+): Promise<WorkBundle[]> {
+  return await invoke<WorkBundle[]>("add_tab_resource", {
+    bundleId,
+    title,
+    browser,
+    handle,
+  });
+}
+
 /** Register a specific app child (browser tab, Finder folder, or single window)
  *  into a context group (FR-2.2 / §13.3). `kind` selects the resource kind. */
 export async function addChildResource(
@@ -150,6 +197,65 @@ export async function addChildResource(
     target,
     handle,
   });
+}
+
+// ── Layout persistence (E2 / FR-8.10 / AC-14) ────────────────────────
+/** Read the persisted UI layout (sidebar width, saved window rect). Returns
+ *  null outside Tauri so the web dev shell just uses CSS defaults. */
+export async function getLayout(): Promise<LayoutSettings | null> {
+  if (!inTauri()) return null;
+  return await invoke<LayoutSettings>("get_layout");
+}
+
+/** Persist the sidebar/card layout the user adjusted (debounced by the caller). */
+export async function savePanelLayout(
+  panelWidth: number,
+  cardHeight: number
+): Promise<void> {
+  if (!inTauri()) return;
+  await invoke("save_panel_layout", { panelWidth, cardHeight });
+}
+
+/** Activate a SAVED live browser tab (FR-4.1 / FR-4.2 / AC-20). `hint` is the
+ *  stored opaque token and `title` the saved tab title (fallback match key when
+ *  the token has gone stale). Focuses exactly that tab, not just the browser. */
+export async function activateTabResource(
+  hint: string,
+  title: string
+): Promise<void> {
+  await invoke("activate_tab_resource", { hint, title });
+}
+
+/** Register ONE individual OS window (dragged from the left panel) into a group
+ *  as a focus-only WindowRef resource (FR-2.8 / FR-3.5 / AC-20) — e.g. a single
+ *  KakaoTalk chat-room window, or a browser window from the OS-window fallback.
+ *  `title` is the window title, `app` the owning app-group name, `handle` the
+ *  opaque HWND token. The same window title can't be added twice. Returns the
+ *  updated bundle list. */
+export async function addWindowResource(
+  bundleId: string,
+  title: string,
+  app: string,
+  handle: string
+): Promise<WorkBundle[]> {
+  return await invoke<WorkBundle[]>("add_window_resource", {
+    bundleId,
+    title,
+    app,
+    handle,
+  });
+}
+
+/** Activate a SAVED individual window (FR-4.1 / FR-4.2 / AC-20). `hint` is the
+ *  stored HWND token, `title` the saved window title (re-match key when the
+ *  handle goes stale), `app` the owning app-group name. Focuses exactly that
+ *  window, not just the app. A closed window is not reopened — it errors. */
+export async function activateWindowResource(
+  hint: string,
+  title: string,
+  app: string
+): Promise<void> {
+  await invoke("activate_window_resource", { hint, title, app });
 }
 
 // ── Claude prompt console ─────────────────────────────────────────────

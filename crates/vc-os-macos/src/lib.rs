@@ -38,6 +38,101 @@ fn run_jxa(script: &str, args: &[&str]) -> Option<String> {
     Some(String::from_utf8_lossy(&output.stdout).trim().to_string())
 }
 
+/// Terminal-emulator apps whose window → working-directory we can introspect
+/// via AppleScript (`tty` per tab/session). Other emulators (Warp, Ghostty, …)
+/// don't expose a tty through automation, so we don't try — the caller falls
+/// back to other signals (e.g. a session id embedded in the window title).
+#[cfg(target_os = "macos")]
+fn is_terminal_app(app: &str) -> bool {
+    matches!(app, "Terminal" | "iTerm2" | "iTerm")
+}
+
+/// The tty device (e.g. `/dev/ttys000`) backing a specific terminal window,
+/// looked up by its 1-based index (matching the `System Events` z-order the
+/// window handle was built from) with an exact-title fallback. macOS
+/// Terminal.app only. `None` when it can't be resolved.
+#[cfg(target_os = "macos")]
+fn terminal_window_tty(app: &str, title: &str, idx: usize) -> Option<String> {
+    let esc = title.replace('\\', "\\\\").replace('"', "\\\"");
+    let script = match app {
+        "Terminal" => format!(
+            "tell application \"Terminal\"\n\
+             try\n\
+             set t to tty of selected tab of window {idx}\n\
+             if t is not missing value then return t\n\
+             end try\n\
+             repeat with w in windows\n\
+             try\n\
+             if (name of w) is \"{esc}\" then\n\
+             set t to tty of selected tab of w\n\
+             if t is not missing value then return t\n\
+             end if\n\
+             end try\n\
+             end repeat\n\
+             end tell\n\
+             return \"\""
+        ),
+        // iTerm2/iTerm and others: not introspected here (kept minimal and
+        // testable); the title-embedded session id path still covers resumes.
+        _ => return None,
+    };
+    let out = run_osascript(&script)?;
+    let out = out.trim();
+    if out.is_empty() || out == "missing value" {
+        None
+    } else {
+        Some(out.to_string())
+    }
+}
+
+/// The working directory of the foreground process group on a tty, via
+/// `ps` + `lsof`. Picks the deepest (longest) non-empty cwd among the tty's
+/// processes — when a shell `cd`s into a project and runs a tool there, they
+/// share that cwd, and the deepest one is the project dir we want to match.
+#[cfg(target_os = "macos")]
+fn cwd_for_tty(tty: &str) -> Option<String> {
+    let dev = tty.trim().trim_start_matches("/dev/");
+    if dev.is_empty() || dev == "missing value" {
+        return None;
+    }
+    let out = Command::new("ps").args(["-t", dev, "-o", "pid="]).output().ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let pids = String::from_utf8_lossy(&out.stdout);
+    let mut best: Option<String> = None;
+    for pid in pids.split_whitespace() {
+        let Ok(lo) = Command::new("lsof")
+            .args(["-a", "-p", pid, "-d", "cwd", "-Fn"])
+            .output()
+        else {
+            continue;
+        };
+        for line in String::from_utf8_lossy(&lo.stdout).lines() {
+            if let Some(p) = line.strip_prefix('n') {
+                let p = p.trim();
+                if !p.is_empty() && best.as_ref().map(|b| p.len() > b.len()).unwrap_or(true) {
+                    best = Some(p.to_string());
+                }
+            }
+        }
+    }
+    best
+}
+
+/// Best-effort working directory of a specific terminal window (identified by
+/// app name, window title, and 1-based index). Used to match an open Claude
+/// Code terminal to the session transcript started in that directory. `None`
+/// when the app isn't an introspectable terminal or the lookup fails.
+#[cfg(target_os = "macos")]
+pub fn terminal_window_cwd(app: &str, title: &str, idx: usize) -> Option<String> {
+    if !is_terminal_app(app) {
+        return None;
+    }
+    let tty = terminal_window_tty(app, title, idx)?;
+    cwd_for_tty(&tty)
+}
+
 /// Whether this process holds macOS **Accessibility** permission — required for
 /// the `System Events` pass behind per-instance window listing (VS Code /
 /// Terminal / any non-browser, non-Finder app). Window *titles* on modern macOS

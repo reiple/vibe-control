@@ -9,6 +9,13 @@ pub type ResourceId = Uuid;
 pub enum ResourceKind {
     WindowRef,
     BrowserTab,
+    /// A live browser tab registered from the running-tab list (FR-9.6 /
+    /// FR-10.12). Focus-only: unlike `BrowserTab` (a captured tab that persists a
+    /// URL), UIA can't read a background tab's URL and FR-9.7 forbids guessing
+    /// one, so this carries the tab TITLE (`descriptor`) plus a non-stable
+    /// activation token (`hint` = `<browser>\u{1f}<hwnd>\u{1f}<idx>`) and NO
+    /// `reopen_info` URL. Restored by re-focusing the tab, never by opening a URL.
+    BrowserTabLive,
     Folder,
     AppLaunch,
     Url,

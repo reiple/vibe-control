@@ -92,6 +92,26 @@ impl ClaudeCodeSessionProvider {
         None
     }
 
+    /// The working directory a session was started in, read cheaply by
+    /// streaming only the first lines that could carry `cwd` (transcripts can be
+    /// many MB, so we never load the whole file just for this). Used to match an
+    /// already-open terminal to the session running in it. `None` if the ref
+    /// can't be resolved or no cwd line is found near the top.
+    pub fn session_cwd(session_ref: &str) -> Option<String> {
+        use std::io::{BufRead, BufReader};
+        let path = Self::resolve_path(session_ref)?;
+        let file = fs::File::open(&path).ok()?;
+        for line in BufReader::new(file).lines().take(400).map_while(|l| l.ok()) {
+            let Ok(v) = serde_json::from_str::<Value>(&line) else {
+                continue;
+            };
+            if let Some(c) = v.get("cwd").and_then(Value::as_str) {
+                return Some(c.to_string());
+            }
+        }
+        None
+    }
+
     /// (cwd, session_id) needed to resume a session with `claude --resume`.
     /// cwd is read from the first log line that carries it.
     pub fn resume_info(session_ref: &str) -> Option<(String, String)> {
@@ -226,6 +246,15 @@ pub fn parse_session_bytes(raw: &[u8]) -> SessionSnapshot {
 
         match ty {
             "user" => {
+                // Harness-injected pseudo-prompts (a subagent task-notification,
+                // other system messages) are logged as `user` turns but are NOT
+                // something the user asked — skip them so they never surface as
+                // the "last question". Treated like tool output: the agent is
+                // working on them.
+                if is_injected_prompt(&value) {
+                    last_completion = SessionCompletion::NotWaiting;
+                    continue;
+                }
                 let text = extract_text(content);
                 // A user line that carries only tool_result (no prose) is
                 // machine feedback, not a real user turn.
@@ -272,6 +301,21 @@ pub fn parse_session_bytes(raw: &[u8]) -> SessionSnapshot {
             SessionCompletion::Unknown
         },
         available,
+    }
+}
+
+/// Whether a `user`-type line is a harness-injected pseudo-prompt rather than
+/// something the user actually typed. Claude Code marks injected turns (subagent
+/// task-notifications, other system messages) with `promptSource: "system"` or
+/// an `origin.kind` other than `"human"`. A deny-list: lines lacking these
+/// fields (older transcripts, other tools) still count as real prompts.
+fn is_injected_prompt(value: &Value) -> bool {
+    if value.get("promptSource").and_then(Value::as_str) == Some("system") {
+        return true;
+    }
+    match value.get("origin").and_then(|o| o.get("kind")).and_then(Value::as_str) {
+        Some(kind) => kind != "human",
+        None => false,
     }
 }
 
@@ -396,6 +440,26 @@ mod tests {
         // …yet your last prompt is still surfaced (the bug: it used to blank
         // out whenever the session wasn't in the Waiting state).
         assert_eq!(snap.last_question.as_deref(), Some("start"));
+    }
+
+    #[test]
+    fn skips_injected_system_prompts() {
+        // A real typed prompt, then a harness-injected task-notification logged
+        // as a `user` turn. The notification must NOT become the last_question.
+        let jsonl = concat!(
+            r#"{"type":"user","origin":{"kind":"human"},"promptSource":"typed","message":{"role":"user","content":"이미지 약간 더 크게"}}"#,
+            "\n",
+            r#"{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"키웠습니다."}]}}"#,
+            "\n",
+            r#"{"type":"user","origin":{"kind":"task-notification"},"promptSource":"system","message":{"role":"user","content":"<task-notification><task-id>abc</task-id></task-notification>"}}"#,
+            "\n",
+        );
+        let snap = parse_session_bytes(jsonl.as_bytes());
+        // The injected notification is neither a turn nor the last question.
+        assert_eq!(snap.last_question.as_deref(), Some("이미지 약간 더 크게"));
+        assert!(snap.conversation.iter().all(|t| !t.content.contains("task-notification")));
+        // It arrived after the assistant replied → agent is working on it.
+        assert_eq!(snap.completion, SessionCompletion::NotWaiting);
     }
 
     #[test]
