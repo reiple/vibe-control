@@ -821,3 +821,11 @@ Important:
 **Context**: OPERATIONS — Bolt R1 CI 첫 실행 검증 + Windows 배포 블로커(.ico) 수정. macOS 배포 OK 확인.
 
 ---
+
+## Bolt R1 후속 2 — 재실행 성공 + v0.1.0 발행 + Windows 배포 확정
+**Timestamp**: 2026-09-09T06:30:00Z
+**User Input**: "push 하고, 알아서 한국어로 PR 작성및 태그 등을 진행. 윈도우 버전 배포 가능한지 확인" (연속)
+**AI Response**: ".ico 수정(PR #23) main 병합 후 v0.1.0 태그 재지정 → 릴리스 워크플로우 재실행(run 34318680356). 4잡 전부 성공: create-release/build-macos/build-windows/publish. 릴리스 published(draft:false), 자산 5종: universal.dmg(~20MB), x64_en-US.msi(~8.1MB), x64-setup.exe(~5.4MB), install.sh, install.ps1. Windows 배포 가능=YES 확정(.msi+setup.exe 산출·업로드). install.ps1 자산 해석 Windows PowerShell dry-run 검증(설치 미실행): 최신 v0.1.0 → -setup.exe 선택 → URL 정상. AC-23: CI 그린+자산 존재+스크립트 해석 확인=충족. 잔여는 실제 설치 E2E 1회(머신 변경 수반, 사용자 권장)."
+**Context**: OPERATIONS — Bolt R1 릴리스 파이프라인 E2E 성공, v0.1.0 발행, Windows 배포 가능 확정.
+
+---
