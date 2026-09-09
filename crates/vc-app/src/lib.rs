@@ -2493,12 +2493,64 @@ fn restore_window_rect(app: &tauri::AppHandle, layout: &LayoutSettings) {
     let Some(win) = app.get_webview_window("main") else {
         return;
     };
-    if let (Some(w), Some(h)) = (layout.window_width, layout.window_height) {
-        let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
-    }
+    // Only restore a *sane* size. A collapsed rect (e.g. width 0, or a height
+    // below the configured minimum) is corrupt — usually captured while the
+    // window was minimized — and restoring it would open an invisible window.
+    const MIN_W: u32 = 200;
+    const MIN_H: u32 = 200;
+    let size_ok = match (layout.window_width, layout.window_height) {
+        (Some(w), Some(h)) if w >= MIN_W && h >= MIN_H => {
+            let _ = win.set_size(LogicalSize::new(w as f64, h as f64));
+            true
+        }
+        _ => false,
+    };
+    // Only restore a position that lands on a currently-connected monitor.
+    // Windows reports a minimized window at ~(-32000, -32000); a stale rect can
+    // also point at a monitor that's since been disconnected. Either way the
+    // window would be off-screen with only a taskbar entry, so we skip the
+    // position (Tauri then centers it) unless it visibly overlaps a monitor.
     if let (Some(x), Some(y)) = (layout.window_x, layout.window_y) {
-        let _ = win.set_position(LogicalPosition::new(x as f64, y as f64));
+        let w = if size_ok { layout.window_width.unwrap() as i32 } else { 700 };
+        let h = if size_ok { layout.window_height.unwrap() as i32 } else { 500 };
+        if window_visible_on_monitor(&win, x, y, w, h) {
+            let _ = win.set_position(LogicalPosition::new(x as f64, y as f64));
+        }
     }
+}
+
+/// True when a window placed at logical (x, y) with size (w, h) would be at
+/// least partially visible on some connected monitor — i.e. a graspable strip
+/// (≥ MARGIN px) of its title area overlaps a monitor's work area. Guards
+/// against restoring an off-screen or minimized-sentinel position. Falls back
+/// to `true` when monitor info is unavailable (don't over-block).
+fn window_visible_on_monitor(
+    win: &tauri::WebviewWindow,
+    x: i32,
+    y: i32,
+    w: i32,
+    h: i32,
+) -> bool {
+    const MARGIN: i32 = 50;
+    let Ok(monitors) = win.available_monitors() else {
+        return true;
+    };
+    if monitors.is_empty() {
+        return true;
+    }
+    monitors.iter().any(|m| {
+        let scale = m.scale_factor();
+        let mp = m.position().to_logical::<f64>(scale);
+        let ms = m.size().to_logical::<f64>(scale);
+        let (mx, my) = (mp.x as i32, mp.y as i32);
+        let (mw, mh) = (ms.width as i32, ms.height as i32);
+        // A visible sliver overlaps horizontally and vertically, and the top
+        // edge (drag area) is within the monitor's vertical span.
+        x + w > mx + MARGIN
+            && x < mx + mw - MARGIN
+            && y + h > my + MARGIN
+            && y < my + mh - MARGIN
+    })
 }
 
 /// One expandable child of an app: `(kind, handle, title, target, is_focused)`.
@@ -2582,10 +2634,25 @@ pub fn run() {
             // disk I/O — these fire many times per drag), then flush once when
             // the window is closing so the next launch reopens in place.
             let stash = |window: &tauri::Window| {
+                // Never persist a minimized window's geometry: Windows reports
+                // its position as ~(-32000, -32000) and a collapsed size, which
+                // would reopen the window off-screen and invisible next launch.
+                if matches!(window.is_minimized(), Ok(true)) {
+                    return;
+                }
                 if let (Ok(pos), Ok(size)) = (window.outer_position(), window.inner_size()) {
                     let scale = window.scale_factor().unwrap_or(1.0);
                     let logical_pos = pos.to_logical::<f64>(scale);
                     let logical_size = size.to_logical::<f64>(scale);
+                    // Belt-and-suspenders: drop obviously off-screen / degenerate
+                    // rects even if is_minimized() didn't report true.
+                    if logical_pos.x <= -30000.0
+                        || logical_pos.y <= -30000.0
+                        || logical_size.width < 200.0
+                        || logical_size.height < 200.0
+                    {
+                        return;
+                    }
                     if let Some(state) = window.try_state::<SharedState>() {
                         if let Ok(mut app) = state.lock() {
                             app.stash_window_rect(

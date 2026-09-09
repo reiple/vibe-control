@@ -774,3 +774,11 @@ Important:
 **Context**: CONSTRUCTION/OPERATIONS — 통합 보완 브랜치에 origin/main(#17·#18) 병합. 충돌 2건 해소(IS_MACOS 중복 제거, audit UNION), 양쪽 기능 보존 확인, usage meter 상태 우선순위 재정렬. App.tsx 통째 덮어쓰기 없음. 빌드 2종 PASS, 대화형 UNVERIFIED. 병합 미커밋→커밋.
 
 ---
+
+## Bolt: 창이 화면 밖으로 복원되어 안 보이는 문제 수정 (window rect 검증 가드)
+**Timestamp**: 2026-09-09T21:30:00Z
+**User Input**: "cargo tauri dev 시 창이 열렸다가 바로 작업표시줄로 들어가고 다시 안 뜬다 → 원인 확인" (이후: "권장 사항대로" 진행 승인 = settings.json 창 좌표 정정 + 코드 가드, 이후 "커밋하고 push하고 pr 날려줘")
+**AI Response**: "원인 확정: AppData/Roaming/vibe-control/settings.json에 window_x/y=-16000, width=0, height=28 저장(화면 밖·붕괴 rect). lib.rs restore_window_rect가 화면 안/유효 크기 검증 없이 그대로 복원 → 창이 off-screen+폭0으로 열려 작업표시줄만 남고 클릭해도 안 보임. on_window_event stash가 최소화 상태 좌표(-32000 계열)·붕괴 크기까지 저장해 자기반복 루프. (재발 관찰: 이전 테스트의 옛 바이너리 인스턴스가 종료되며 정정한 settings.json을 나쁜 값으로 재덮어씀 — 모든 인스턴스 정리 후 재정정.) 조치: (1) 데이터 정정 — settings.json의 window_x/y/width/height만 null로 초기화(API 키·panel_width·card_height 보존). (2) 코드 가드(crates/vc-app/src/lib.rs) — restore_window_rect: 크기 200×200 미만이면 복원 스킵, 위치가 available_monitors 어디에도 50px 이상 걸치지 않으면 복원 스킵(window_visible_on_monitor 헬퍼 추가, 모니터 정보 없으면 true로 폴백); stash: is_minimized()면 저장 스킵 + 좌표≤-30000/크기<200면 저장 스킵. 검증: cargo build 정상(에러 0, 기존 stop_all 경고만). cargo tauri dev 실행 후 Win32 GetWindowRect로 창 위치 실측 — 정정 전 L=-16000 T=-16000 W=13 H=36 → 정정+가드 후 L=98 T=98 W=1013 H=736 Minimized=False(화면 안 정상 표시) 확인. 병합(#17 무프레임)이 직접 원인 아님 — rect 지속 로직의 검증 부재가 원인. 대화형 기능은 GUI 수동 확인 필요(UNVERIFIED)."
+**Context**: CONSTRUCTION — 창 위치/크기 복원 가드. 화면 밖 복원 방지 + 최소화 상태 저장 방지. lib.rs 단일 코드 변경 + settings.json 데이터 정정. 빌드 PASS, 창 위치 실측 검증.
+
+---
