@@ -145,6 +145,14 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 - [x] Construction / Code Generation (U4→U3→U6→U7) — **G1 enumeration NOW on `EnumWindows` native FFI; G2 activation + G3 expand/collapse UI done**
 - [x] Build + test + real-OS verification (AC-20 on Windows; regression AC-2/3/4 — DnD app-row + capture dedup unchanged) — **multi-window-per-process (Edge/Chrome/KakaoTalk) now split correctly (2026-09-09)**
 
+### ✅ DONE (2026-09-09): P1 백로그 — C1/C2 원자적 쓰기 완료 + FR-1.2 상태 정정
+**트리거**: "AI-DLC 워크플로우를 확인하고 계속 진행". 워크플로우는 CONSTRUCTION 완료·G1/G2/G3 검증 완료 상태 → 남은 P1 백로그를 실제 코드와 대조.
+**드리프트 발견**: 백로그가 stale이었음 — **FR-1.2(묶음에서 리소스 제거)는 이미 완전 배선**(커맨드 `vc-app/src/lib.rs:562` + `api.ts:115` + `App.tsx:644`). 문서 미기재 커맨드(`list_app_children`/`activate_child`/`add_child_resource`/`claude_usage`)도 존재. 실제 미해결 P1: C1, C2, A4(FR-7 evaluate 미배선), B3(브라우저 탭 스텁).
+**구현(C1+C2)**: `crates/vc-store/src/lib.rs`에 공유 `atomic_write(path, bytes)` 헬퍼 도입 — temp 쓰기→원자적 rename, **쓰기/rename 실패 시 `.tmp`를 `fs::remove_file`로 정리 후 `Err`**(누수 없음). `save()`·`save_settings()` 둘 다 이를 사용 → `settings.json`도 원자적. 단위 테스트 3종 신설.
+**검증**: `cargo test -p vc-store` **5/5 통과**, `cargo clippy -p vc-store --all-targets` **0 경고**, `cargo build --workspace` clean. (실 툴체인 존재: cargo 1.98, node 24, frontend node_modules 설치됨.)
+**문서**: `known-deviations.md`(C1/C2 해결 표기, FR-1.2·C1/C2 백로그 행 완료 처리), `audit.md` 로그.
+**남은 P1 후보**: A4/FR-7 저장 리소스 상태 표시 배선(`evaluate` 호출), E2/FR-8.10 레이아웃 설정 영속화(get/update_settings), B3 Windows 브라우저 탭.
+
 ### ✅ DONE (2026-09-09): G1 window enumeration replaced with `EnumWindows` native FFI
 **Outcome**: The last broken piece — enumeration listing one window per process — is fixed. `crates/vc-os-windows/src/lib.rs` `raw_windows()` now walks all top-level windows via Win32 `EnumWindows` through inline native Rust FFI (`#[link]` `extern "system"` to user32/dwmapi/kernel32 — no `windows`/`winapi` crate, no per-poll `csc` recompile). Only `raw_windows()` changed; `list_running_windows`/`list_running_apps`/vc-app/frontend contracts untouched (minimal blast radius). Details + evidence in `known-deviations.md#G1` ("✅ G1 해결").
 - [x] **Reviewed yesterday's changes** (`git diff` since `bbc54e7`): UI (G3) + per-window activation (G2) confirmed complete; only enumeration needed the fix.
