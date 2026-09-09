@@ -1,4 +1,4 @@
-import { Fragment, useEffect, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import type {
   WorkBundle,
   Resource,
@@ -187,12 +187,89 @@ function AppIcon({
   );
 }
 
-// Full-viewport boot splash. Rendered by React (not static index.html markup)
-// so it paints at the correct DPI on Windows/WebView2, and it blocks all input
-// underneath until the app has finished its first load. `hiding` fades it out
-// just before it unmounts. The EP-133 device motif — charcoal pad, orange
-// record dot, an LCD segment chase — reads as the hardware "powering on".
+// Faint tool glyphs tucked into a few of the larger scattered tiles, so the
+// field reads as real applications being gathered — terminal, browser, folder,
+// code, settings — rather than abstract squares. Kept low-contrast and softly
+// blurred (see .intro-icon-glyph) so they stay atmospheric, not literal.
+const TOOL_GLYPHS: React.ReactElement[] = [
+  // terminal prompt
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M5 7l4 4-4 4" /><path d="M12 16h7" /></svg>,
+  // browser / globe
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="8" /><path d="M4 12h16" /><path d="M12 4c2.6 2.6 2.6 13.4 0 16" /><path d="M12 4c-2.6 2.6-2.6 13.4 0 16" /></svg>,
+  // folder
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round"><path d="M4 7h5l2 2h9v9H4z" /></svg>,
+  // code brackets
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 8l-4 4 4 4" /><path d="M15 8l4 4-4 4" /></svg>,
+  // settings gear
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="3" /><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M18.4 5.6l-2.1 2.1M7.7 16.3l-2.1 2.1" /></svg>,
+];
+
+// Full-viewport boot splash / intro animation. Rendered by React (not static
+// index.html markup) so it paints at the correct DPI on Windows/WebView2, and
+// it blocks all input underneath until the app has finished its first load.
+// `hiding` fades it out just before it unmounts.
+//
+// The choreography tells the product's story (intro-animation.md) in the KO-II
+// hardware sampler's motion language — tactile pads, step-sequencer timing,
+// pulse feedback (NOT a music UI). The tool pads are laid out as a calm,
+// organised 5-row control grid centred on screen (NOT randomly scattered): a
+// central activation pulse ripples outward, lighting the pads row-by-ring in
+// rhythm, then the "vibe control" logo resolves in the exact centre as the
+// unifying core the pads are arranged around. The grid is held faded (low
+// opacity) so it reads as an atmospheric control surface and never competes
+// with the logo — the logo is always the clear focal point. Pad glyphs and the
+// shuffled tie-break are generated once on mount; the motion is CSS-keyframe
+// driven.
+const SWEEP_S = 2.6; // total time the activation ripple takes to cross the grid
+const GRID_ROWS = 5; // requirement: five centred rows
+const CELL_PX = 40; // pad size
+const GAP_PX = 16; // gap between pads
+// Harmonious accent hues for the pad-press flash (driven via --hue in the
+// activation keyframe). Anchored on the brand orange and spread across warm →
+// magenta → violet → blue → teal so the field lights up in varied but
+// coordinated colour rather than a single orange.
+const FLASH_HUES = [16, 34, 350, 320, 275, 210, 172, 150];
+
 function Splash({ hiding }: { hiding: boolean }) {
+  const pads = useMemo(() => {
+    const rows = GRID_ROWS;
+    const stride = CELL_PX + GAP_PX;
+    // Fill the viewport width: enough columns so the five rows span edge to
+    // edge (with a small side margin), then centre the whole grid on the
+    // anchor so it stays symmetric. Computed once on mount.
+    const vw = typeof window !== "undefined" ? window.innerWidth : 1280;
+    const cols = Math.max(7, Math.floor((vw - GAP_PX) / stride));
+    const N = cols * rows;
+    const originX = ((cols - 1) / 2) * stride;
+    const originY = ((rows - 1) / 2) * stride;
+    const cx = (cols - 1) / 2;
+    const cy = (rows - 1) / 2;
+
+    const cells = Array.from({ length: N }, (_, i) => {
+      const col = i % cols;
+      const row = Math.floor(i / cols);
+      // Activation order ripples out from the centre (where the logo lights
+      // up), with a small random tie-break so same-distance pads feel tactile
+      // rather than mechanically simultaneous.
+      const dist = Math.hypot(col - cx, row - cy) + Math.random() * 0.35;
+      return {
+        id: i,
+        glyph: i % TOOL_GLYPHS.length,
+        x: `${(col * stride - originX).toFixed(1)}px`,
+        y: `${(row * stride - originY).toFixed(1)}px`,
+        hue: FLASH_HUES[Math.floor(Math.random() * FLASH_HUES.length)],
+        dist,
+      };
+    });
+    // Rank by ripple distance, then normalise so the sweep lasts SWEEP_S no
+    // matter how many columns the viewport fits.
+    const byDist = [...cells].sort((a, b) => a.dist - b.dist);
+    const delay = new Map(
+      byDist.map((c, rank) => [c.id, 0.6 + (rank / Math.max(1, N - 1)) * SWEEP_S]),
+    );
+    return cells.map((c) => ({ ...c, delay: delay.get(c.id) ?? 0.6 }));
+  }, []);
+
   return (
     <div
       className={`splash ${hiding ? "splash--hidden" : ""}`}
@@ -200,19 +277,48 @@ function Splash({ hiding }: { hiding: boolean }) {
       aria-label="Loading vibe-control"
       aria-busy="true"
     >
-      <div className="splash-card">
-        <div className="splash-badge">
-          <span className="splash-rec" />
+      <div className="intro">
+        {/* Faded control grid: five centred rows of tool pads, held quietly
+            behind the logo (low opacity) so they never out-shout it. */}
+        <div className="intro-field" aria-hidden>
+          {pads.map((p) => (
+            <span
+              key={p.id}
+              className="intro-pad"
+              style={
+                {
+                  "--x": p.x,
+                  "--y": p.y,
+                  "--size": `${CELL_PX}px`,
+                } as React.CSSProperties
+              }
+            >
+              <span
+                className="intro-pad-face"
+                // Each pad snaps "on" at its step in the outward ripple, in its
+                // own accent hue.
+                style={
+                  {
+                    animationDelay: `${p.delay.toFixed(2)}s`,
+                    "--hue": p.hue,
+                  } as React.CSSProperties
+                }
+              >
+                <span className="intro-pad-glyph">{TOOL_GLYPHS[p.glyph]}</span>
+              </span>
+            </span>
+          ))}
         </div>
-        <div className="splash-word">vibe-control</div>
-        <div className="splash-leds" aria-hidden>
-          <span />
-          <span />
-          <span />
-          <span />
-          <span />
+
+        {/* The logo — the clear focal point. A soft spotlight lifts it off the
+            faded grid, then the record-dot mark + wordmark resolve. */}
+        <div className="intro-logo">
+          <span className="intro-logo-mark" aria-hidden />
+          <div className="intro-logo-word">vibe control</div>
         </div>
-        <div className="splash-cap">Initializing</div>
+
+        {/* Final confirmation pulse — "centralised control" locked in. */}
+        <span className="intro-confirm" aria-hidden />
       </div>
     </div>
   );
@@ -283,9 +389,14 @@ export default function App() {
     let cancelled = false;
     let finished = false;
     const startedAt = performance.now();
-    const MIN_SPLASH_MS = 650;
-    const MAX_SPLASH_MS = 8000;
-    const FADE_MS = 400; // must match the .splash opacity transition
+    // Floor the visible time to the length of the intro choreography so the
+    // full sequence (activation ripple across the grid → logo mark → wordmark →
+    // confirmation) plays before the fade, rather than being cut short the instant the
+    // (usually faster) boot data lands. The hard cap still guarantees the
+    // splash lifts if boot stalls.
+    const MIN_SPLASH_MS = 5800;
+    const MAX_SPLASH_MS = 9000;
+    const FADE_MS = 500; // must match the .splash opacity transition
 
     // Fade the splash out, then unmount it. Idempotent: whichever of the boot
     // completion or the hard-cap fires first wins; the other is a no-op.

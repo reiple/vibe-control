@@ -568,6 +568,13 @@ Important:
 **Context**: Reconciliation run #2 CLOSED. Waiver approved and recorded with re-review triggers; the single non-waived code item implemented and type-checked; real-OS E2E deferred to the Windows/macOS checklist.
 
 ---
+## New Feature — Intro animation redesign (centred 5-row grid + central logo)
+**Timestamp**: 2026-09-09T00:00:00Z
+**User Input**: "AI-DLC 워크플로우를 계속 진행한다. 현재 Bolt는 완료되어 코드 작성, 테스트 및 배포까지 완료된 상태이다. 기존 시스템에 다음 기능을 추가하고 싶다. [추가 기능] intro animation의 디자인 요구사항: - 블럭을 랜덤 정렬이 아닌 화면 중앙 가로 정렬로 5줄로 하고 가운데에는 로고를 배치하며 블럭에 걸린 디자인은 유지하되 사용자의 시각이 혼란스럽지 않도록 로고보다 강조되서는 안되며 이를 위해 opacity같이 흐릿하게 한다. 이 변경사항을 AI-DLC 절차에 따라 분석하고, 필요한 기존 Inception artifact를 갱신한 후 새로운 Unit/Bolt로 Construction을 진행하라."
+**AI Response**: "Brownfield, adaptive-depth change scoped as a frontend-only visual redesign of the existing boot splash (FR-13, U7 frontend) — no new unit needed; it is a new Bolt on U7. INCEPTION doc-reflection: added FR-13.8 (intro visual composition — centred 5-row grid, faded pads, central logo as focal point) to requirements.md and bumped the revision history; added a composition scenario to US-13.1; rewrote intro-animation.md's storyboard from 'scattered → converge' to 'organised centred grid powering on around a central logo'. CONSTRUCTION (U7 code generation): rewrote Splash in frontend/src/App.tsx — pads now laid out as a centred 5×7 grid (GRID_ROWS=5) at fixed cell offsets (no random scatter), activation ordered as an outward ripple from centre; replaced the converging-hub-and-title ending with a central .intro-logo (orange record-dot mark + 'vibe control' wordmark) as the focal point. styles.css: .intro-field held at opacity 0.24 (the '흐릿하게' requirement) so pads never compete with the logo; removed the intro-pad-converge / intro-hub / intro-steps / intro-title rules; added .intro-logo(+::before spotlight)/.intro-logo-mark/.intro-logo-word; reduced-motion end state updated to the faded grid + centred logo. Choreography still fills MIN_SPLASH_MS≈5.8s (ripple → mark 2.6s → word 3.2s → confirm 4.4s). MID-TURN user request '동그란 원 scale 되는 에니메이션 제거해봐' → removed the circular scaling .intro-pulse ring (JSX + CSS + reduced-motion list). VERIFIED: npx tsc --noEmit clean; npx vite build succeeded (index CSS 25.00 kB, JS 166.20 kB); cargo build -p vc-app compiled vc-app successfully (final step failed only on os error 5 — the running vibe-control.exe was file-locked, not a code error). Real-OS visual confirmation of the 5.8s animation deferred to a Windows launch (AC-21 E2E checklist)."
+**Context**: New Bolt on U7 (frontend). INCEPTION artifacts updated + CONSTRUCTION code generated & built. AUTO MODE — no approval gates paused.
+
+---
 
 ## Supplement Bolt — Windows browser TABS (live view + exact-tab activation) — #B3 partial resolution
 **Timestamp**: 2026-09-09T00:00:00Z
@@ -614,6 +621,13 @@ Important:
 
 ---
 
+## UI Enhancement Bolt — Running Apps panel sizing (count number + expanded sub-items)
+**Timestamp**: 2026-09-09T00:00:00Z
+**User Input**: "기존 좌측 Running Apps 패널의 표시 크기를 보완: chrome/code/kakaotalk 등 앱 이름 옆 숫자와 토글로 펼쳐지는 하위 항목 글자 크기가 너무 크다. Windows Terminal 아래 하위 항목 크기 수준에 맞춰 더 작고 정돈되게 조정. 숫자 크기 축소, 토글 하위 항목 글자 크기 축소, 정렬/간격 확인, 기능은 그대로 UI 스타일만 최소 범위 수정. 보완 Bolt로 AI-DLC 절차에 따라 진행."
+**AI Response**: "Confirmed style/component structure. Windows render path (App.tsx:1006) uses <span className='running-count'> for the app-name number, but styles.css had NO `.running-count` rule → it inherited browser-default 16px grotesk, far larger than the app name (13px) and the macOS `.running-expand` (10px). Root cause of the oversized number. Style-only fixes in frontend/src/styles.css: (1) added `.running-count` rule — margin-left:auto (trailing edge), var(--mono) tabular-nums, 11px, line-height:1, var(--ink-muted), nowrap, flex-shrink:0; (2) `.win-title` 12px→11px (expanded tab/window sub-items smaller); (3) `.running-window.muted` 12px→11px for placeholder-row consistency. No JSX/behavior changes. Alignment preserved (46px left indent, existing flex/gap untouched)."
+**Context**: Post-construction UI enhancement Bolt. Style-only, minimal scope; number + sub-item text reduced to a tidy ~11px matching the sub-items under any expanded app (incl. Windows Terminal).
+
+---
 ## Backlog Continuation — P1×3 + P4 (E1·E2·C1·C2·D6)
 **Timestamp**: 2026-09-09T12:00:00Z
 **User Input**: "AI-DLC 워크플로우를 계속 진행한다. 남은 미해결/백로그를 진행하라."
@@ -621,3 +635,9 @@ Important:
 **Context**: CONSTRUCTION — Code Generation (U2 vc-store, U6 vc-app, U7 frontend, U1 vc-core dep cleanup) + Build and Test. Resolves known-deviations.md E1 (FR-12.3/AC-17), E2 (FR-8.10/AC-14), C1/C2 (FR-11.5/11.6, SECURITY-15), D6. AUTO MODE: implemented + built + tested + clippy-clean + live-verified backend + documented in one pass. Remaining backlog: P2 (D1, B3), P3 (B5, B6, A1–A4).
 
 ---
+
+## 문서 정합화 점검 — 구현 상태 vs AI-DLC artifact (읽기 전용 대조 + 최소 문서 수정)
+**Timestamp**: 2026-09-09T13:00:00Z
+**User Input**: "AI-DLC 문서 일관성 점검을 진행한다. 목적은 현재 구현 상태와 AI-DLC artifact 간의 불일치만 찾아 정리하는 것이다. [...] 먼저 불일치 목록만 간단히 제시하라. 그 후 문서 수정이 필요한 경우에만 기존 문서의 최소 범위만 수정하라. 새 문서를 만들거나 전체 문서를 재작성하지 말고, 코드 변경은 하지 마라."
+**AI Response**: "코드 무변경 읽기 전용 대조. 불일치 6건 발견: (1) 등록 커맨드 수 — 문서 최신 24개(§H4)이나 실측 generate_handler! 32개(main 병합으로 request_accessibility·claude_usage·list_app_children·activate_child·add_child_resource·get_layout·save_panel_layout·remove_resource 추가, 병합분 미반영). (2) 저장 라이브 탭(BrowserTabLive) — 문서는 '아이콘 없이'이나 커밋 382be34로 브라우저 아이콘 표시로 변경. (3) macOS 접근성 권한 — B6/FR-10.2/AC-13은 '부재/미구현'이나 accessibility_trusted+request_accessibility+부팅 프롬프트가 main 병합으로 부분 구현(안내 충족; PermissionChecker 상태 배선은 잔여). (4) requirements.md 정합화 노트 블록 verbatim 중복(병합 아티팩트). (5) FR-10.12 '스텁·탭 전혀 수집 안 됨'이 아래 정합화 노트+라이브 구현과 모순(스텁은 read_tabs만). (6) AC-7 동일 모순. 수정 문서: requirements.md(중복 노트 삭제·FR-10.2/FR-10.12/AC-7 정정), known-deviations.md(A2 커맨드 수 32·B6 부분 구현·§H2 저장 탭 아이콘), window-enumeration.md(§6.7 저장 탭 아이콘). 코드 무수정, 새 문서 무생성. 의도적 잔여 deviation: read_tabs URL 스텁(#B3/#D-40), PermissionChecker 상태 배선(#B6/#D-42), H-5 확장 규칙 8건 승인 면제, A1-A4 헥사고날 리팩터링, B5 트레이/단축키."
+**Context**: 문서 정합화 점검. 읽기 전용 코드 대조 후 문서 6개소 최소 수정. 코드 변경 없음.

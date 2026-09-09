@@ -231,6 +231,26 @@ Re-align the running-apps left panel to the ORIGINAL per-window design (which th
 
 ---
 
+## 🆕 New Bolt (U7 frontend) — Intro animation redesign (2026-09-09)
+트리거: 사용자 요청 — "블럭을 랜덤 정렬이 아닌 화면 중앙 가로 정렬로 5줄로 하고 가운데에는 로고를 배치하며 블럭에 걸린 디자인은 유지하되 … 로고보다 강조되서는 안되며 이를 위해 opacity같이 흐릿하게 한다."
+
+**분류**: 브라운필드, 프론트엔드 전용 시각 변경. **새 Unit 불필요** — 기존 U7(frontend)의 부팅 스플래시(FR-13)에 대한 **신규 Bolt**. Application Design / 신규 컴포넌트 없음(적응형 워크플로우 — 해당 스테이지 스킵).
+
+### INCEPTION 문서 반영
+- [x] `requirements.md` v1.3 — **FR-13.8 신설**(인트로 시각 구성: 중앙 5줄 그리드 · 중앙 로고 초점 · 패드 저불투명도 유지) + 개정 이력 · AC-21 보강
+- [x] `stories.md` US-13.1 — "인트로 구성" 시나리오 신설(FR-13.8)
+- [x] `intro-animation.md` — 스토리보드 재작성(scattered→converge → 조직화된 중앙 그리드 + 중앙 로고, 패드 흐릿)
+
+### CONSTRUCTION (U7 Code Generation)
+- [x] `frontend/src/App.tsx` `Splash` — 패드를 **중앙 정렬 5×7 그리드**(`GRID_ROWS=5`, 고정 셀 오프셋, 랜덤 산포 제거)로 배치, 활성화는 **중앙→바깥 리플** 순서. 수렴 허브+타이틀 종료를 **중앙 `.intro-logo`**(오렌지 레코드-닷 마크 + `vibe control` 워드마크)로 교체
+- [x] `frontend/src/styles.css` — `.intro-field` **opacity 0.24**(흐릿하게, 로고 미강조) · `intro-pad-converge`/`intro-hub`/`intro-steps`/`intro-title` 제거 · `.intro-logo(+::before 스포트라이트)`/`.intro-logo-mark`/`.intro-logo-word` 추가 · reduced-motion 종료 상태 갱신
+- [x] **사용자 중간 요청 반영** — "동그란 원 scale 되는 애니메이션 제거" → 원형 스케일 `.intro-pulse` 링 삭제(JSX+CSS+reduced-motion)
+- [x] **검증**: `npx tsc --noEmit` 통과 · `npx vite build` 성공(CSS 25.00 kB / JS 166.20 kB) · `cargo build -p vc-app` — vc-app 컴파일 성공(마지막 단계만 실행 중 `vibe-control.exe` 파일 잠금 `os error 5`로 교체 실패 — 코드 오류 아님)
+- [x] **추가 조정 (2026-09-09)** — (1) 블럭이 **뷰포트 가로 폭을 가득 채우도록** 열 개수를 `window.innerWidth` 기준으로 계산(고정 7열 → 반응형), 리플 스윕 시간은 패드 수와 무관하게 `SWEEP_S=2.6s`로 정규화. (2) 원형 스케일 `.intro-pulse` 제거(이전 요청). (3) 패드 활성 플래시를 **조화로운 다중 색상**으로 — `FLASH_HUES` 팔레트(오렌지·앰버·코랄·마젠타·바이올렛·블루·틸·그린)를 패드별 `--hue`로 부여, `intro-pad-activate` 키프레임이 `hsl(var(--hue) …)`로 발광. 재검증: `tsc` 통과 · `vite build` 성공
+- [ ] **실 OS 시각 확인 (AC-21 E2E)** — Windows 실행하여 가로 꽉 찬 5줄 그리드·중앙 로고·흐릿한 패드·다중 색상 플래시·~5.8s 코레오그래피 육안 확인 필요(이 환경에서 GUI 확인 불가)
+
+---
+
 ### ✅ DONE (2026-09-09): 백로그 소진 (E1·E2·D6 — feature/backlog-layout-conversation-store)
 창 단위 재정렬(G) 이후 남은 백로그 상위 항목을 구현·검증하고 main에 병합했다. **C1·C2(vc-store 원자적 쓰기)는 병합 시점에 main이 이미 반영(PR #7)**되어 있어 중복분은 폐기하고 main 버전을 채택 — 이 브랜치의 실기여는 E2·E1·D6.
 - [x] **E2 — 레이아웃 영속화**: `LayoutSettings` DTO(패널폭/카드높이/창 rect, Claude 자격증명 제외) + `get_layout`/`save_panel_layout` 커맨드(`generate_handler!` 등록). 창 위치/크기는 백엔드 `on_window_event`가 Moved/Resized 시 메모리에 stash, CloseRequested/Destroyed 시 1회 디스크 flush(폴링 디스크쓰기 회피). 부팅 시 `restore_window_rect`가 저장 rect를 창에 적용. 프론트: 부팅 시 사이드바 폭 적용(ref 명령형, CSS `resize`와 충돌 방지) + `ResizeObserver` 디바운스(500ms) 저장. **실측 검증(병합 전 브랜치)**: 창을 (150,120)/920×640으로 이동 후 종료 → settings.json에 rect 기록; 재기동 → outer rect 정확히 복원.
