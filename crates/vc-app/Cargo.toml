@@ -36,3 +36,5 @@ vc-store = { path = "../vc-store" }
 vc-sessions = { path = "../vc-sessions" }
 vc-os-macos = { path = "../vc-os-macos" }
 vc-os-windows = { path = "../vc-os-windows" }
+portable-pty = "0.9"
+vt100 = "0.16.2"

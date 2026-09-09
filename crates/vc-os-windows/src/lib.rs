@@ -51,6 +51,30 @@ use vc_core::{CoreError, Result};
 #[cfg(target_os = "windows")]
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 
+/// Coarse, machine-level Claude Code liveness probe (U2 FR-2.5 / NFR-3.3).
+///
+/// Read-only: shells out to `tasklist` (CSV, no header) and checks whether any
+/// running image name contains `claude`. Returns `Some(true)`/`Some(false)` on
+/// a successful query, and `None` when the probe itself fails so the caller can
+/// degrade that session to `Unknown` rather than falsely reporting `Inactive`.
+/// Uses `CREATE_NO_WINDOW` so the short-lived query never flashes a console
+/// window on the 1s status poll (same rationale as enumeration). Intentionally
+/// coarse (any `claude` process, not a per-session PID) — see the macOS
+/// counterpart for the design rationale (FD-Q1=A / FD-Q2=A).
+#[cfg(target_os = "windows")]
+pub fn claude_process_running() -> Option<bool> {
+    let output = Command::new("tasklist.exe")
+        .args(["/FO", "CSV", "/NH"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout).to_lowercase();
+    Some(stdout.lines().any(|line| line.contains("claude")))
+}
+
 #[cfg(target_os = "windows")]
 pub struct WinWindowEnumerator;
 
@@ -1047,15 +1071,21 @@ try { $ws = New-Object -ComObject WScript.Shell; if ($procId -ne 0) { [void]$ws.
     /// `Start-Process` does NOT wait, so this call returns immediately. (The
     /// previous implementation ran `powershell -NoExit` under `.output()`, which
     /// blocked until the user closed the window — an effective deadlock.)
-    pub fn run_in_terminal(command: &str) -> Result<()> {
+    /// Returns the PID of the spawned VISIBLE `powershell` window (via
+    /// `Start-Process -PassThru`), so the caller can track that terminal's
+    /// lifetime (session == terminal): kill it when the session is removed, and
+    /// detect when the user closes it to drop the session.
+    pub fn run_in_terminal(command: &str) -> Result<u32> {
         let output = Command::new("powershell.exe")
             .args([
                 "-NoProfile",
                 "-NonInteractive",
                 "-Command",
-                // Start-Process (no -Wait) spawns a visible new window and returns.
-                "Start-Process powershell -ArgumentList \
-                 '-NoExit','-NoProfile','-Command','Invoke-Expression $env:VC_CMD'",
+                // Start-Process (no -Wait) spawns a visible new window and
+                // returns its process object; print only its PID for the caller.
+                "$p = Start-Process powershell -ArgumentList \
+                 '-NoExit','-NoProfile','-Command','Invoke-Expression $env:VC_CMD' \
+                 -PassThru; [Console]::Out.Write($p.Id)",
             ])
             .env("VC_CMD", command)
             .creation_flags(CREATE_NO_WINDOW)
@@ -1068,6 +1098,86 @@ try { $ws = New-Object -ComObject WScript.Shell; if ($procId -ne 0) { [void]$ws.
                 stderr.trim()
             )));
         }
+        let pid_str = String::from_utf8_lossy(&output.stdout);
+        pid_str
+            .trim()
+            .parse::<u32>()
+            .map_err(|_| CoreError::Internal(format!("could not read terminal PID: {pid_str:?}")))
+    }
+
+    /// Type `text` into the terminal window owned by `pid` and submit it (Enter),
+    /// so an app-side send lands in the SAME interactive `claude` the user drives
+    /// directly. Focuses the window by PID (`WScript.Shell.AppActivate`) then
+    /// sends keystrokes (`SendKeys`). `text` is passed via env (never concatenated)
+    /// and SendKeys metacharacters are escaped by the caller. Best-effort: returns
+    /// Ok even if the window couldn't be focused (it may have been closed).
+    pub fn send_keys_to_pid(pid: u32, sendkeys: &str) -> Result<()> {
+        let _ = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ws = New-Object -ComObject WScript.Shell; \
+                 [void]$ws.AppActivate([int]$env:VC_PID); \
+                 Start-Sleep -Milliseconds 150; \
+                 $ws.SendKeys($env:VC_KEYS)",
+            ])
+            .env("VC_PID", pid.to_string())
+            .env("VC_KEYS", sendkeys)
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| CoreError::Internal(format!("SendKeys failed: {e}")))?;
+        Ok(())
+    }
+
+    /// Bring the terminal window owned by `pid` to the front (used when the user
+    /// re-opens an already-running session so its existing window surfaces rather
+    /// than spawning a duplicate). Best-effort; always Ok.
+    pub fn focus_pid(pid: u32) -> Result<()> {
+        let _ = Command::new("powershell.exe")
+            .args([
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$ws = New-Object -ComObject WScript.Shell; \
+                 [void]$ws.AppActivate([int]$env:VC_PID)",
+            ])
+            .env("VC_PID", pid.to_string())
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        Ok(())
+    }
+
+    /// Whether a process with `pid` is still running (used to detect that the user
+    /// closed a session's terminal). Read-only `tasklist` filter; a failed probe
+    /// conservatively reports `true` so a transient error never falsely drops a
+    /// session.
+    pub fn is_pid_alive(pid: u32) -> bool {
+        let output = Command::new("tasklist.exe")
+            .args(["/FI", &format!("PID eq {pid}"), "/NH", "/FO", "CSV"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output();
+        match output {
+            Ok(o) => {
+                let text = String::from_utf8_lossy(&o.stdout);
+                // A live PID prints a CSV row containing its number; a no-match
+                // prints an INFO/"No tasks" line (English) or "작업이 없" (Korean).
+                let has_pid = text.contains(&pid.to_string());
+                let no_match = text.contains("No tasks") || text.contains("작업이 없");
+                has_pid && !no_match
+            }
+            Err(_) => true, // probe failed — don't drop the session on a fluke
+        }
+    }
+
+    /// Kill the terminal window `pid` and its whole child tree (the `powershell`
+    /// host + the `claude` it runs) — used when a session is removed in the app.
+    pub fn kill_pid_tree(pid: u32) -> Result<()> {
+        let _ = Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .map_err(|e| CoreError::Internal(format!("taskkill failed: {e}")))?;
         Ok(())
     }
 
