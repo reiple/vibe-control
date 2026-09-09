@@ -45,6 +45,7 @@
   --condensed: var(--grotesk);
   /* Button labels — Lato (from Google Fonts), falling back to the UI stack. */
   --button: "Lato", var(--grotesk);
+  --kr: "Noto Sans KR", var(--grotesk);
 
   /* Chassis (warm light-grey plastic) */
   --body: #d4d1c9;
@@ -1868,7 +1869,7 @@ button.mini.danger {
   resize: none;
   max-height: 160px;
   padding: 10px 12px;
-  font-family: var(--mono);
+  font-family: var(--kr);
   font-size: 13px;
   line-height: 1.5;
   color: var(--ink);
@@ -2309,7 +2310,7 @@ textarea.cc-input--multiline {
    The single bottom prompt controls every group; typing `@` opens a
    group-name picker that rewrites the leading token into `@Name `. */
 .console-hint {
-  font-family: var(--mono);
+  font-family: var(--kr);
   font-size: 10px;
   letter-spacing: 0.04em;
   color: var(--ink-muted);
@@ -2319,7 +2320,7 @@ textarea.cc-input--multiline {
   font-weight: 700;
 }
 .console-hint code {
-  font-family: var(--mono);
+  font-family: var(--kr);
   color: var(--ink);
   background: var(--sunk);
   border: 1px solid var(--keyline);

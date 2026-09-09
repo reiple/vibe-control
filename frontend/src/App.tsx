@@ -1765,7 +1765,7 @@ export default function App() {
                 return (
                   <div className="group-live">
                     <div className="group-live-bar">
-                      <span className="group-live-title">터미널</span>
+                      <span className="group-live-title">Terminal</span>
                       <button
                         className="mini"
                         onClick={() =>
@@ -1773,11 +1773,11 @@ export default function App() {
                         }
                         title={
                           open
-                            ? "터미널 뷰를 접습니다 (claude는 계속 실행)"
-                            : "이 그룹의 claude 터미널을 엽니다"
+                            ? "Collapse the terminal view (claude keeps running)"
+                            : "Open this group's claude terminal"
                         }
                       >
-                        {open ? "접기" : "열기"}
+                        {open ? "Close" : "Open"}
                       </button>
                       {sessions.map((s) => (
                         <button
