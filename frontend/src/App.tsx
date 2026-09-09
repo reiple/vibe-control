@@ -1254,8 +1254,8 @@ export default function App() {
     {booting && <Splash hiding={splashOut} />}
     <div className="app">
       <aside className="sidebar" ref={sidebarRef}>
-        <header className="sidebar-header">
-          <h1>Running Apps</h1>
+        <header className="sidebar-header" data-tauri-drag-region>
+          <h1 data-tauri-drag-region>Running Apps</h1>
         </header>
         <input
           className="search"
@@ -1488,8 +1488,8 @@ export default function App() {
       </aside>
 
       <main className="main">
-        <header className="main-header">
-          <h2>vibe-control</h2>
+        <header className="main-header" data-tauri-drag-region>
+          <h2 data-tauri-drag-region>vibe-control</h2>
           <div className="header-actions">
             <button className="rec add-group" onClick={openGroupModal}>
               Add Group
@@ -1529,13 +1529,14 @@ export default function App() {
           const note = ready
             ? usage!.account
               ? `※ ${usage!.region || "계정"} 계정 전체 Bedrock 사용량(모든 모델). 그룹 터미널의 Claude Code 세션이 같은 Bedrock 계정을 사용하면 이 수치에 포함됩니다.`
-              : "※ vibe-control 프롬프트 콘솔 호출만 집계 — 그룹 터미널의 Claude Code 세션은 포함되지 않습니다."
+              : ""
             : meterState === "unconfigured"
               ? "※ Claude 미연결 — 설정에서 Bedrock 키를 추가하면 사용량이 집계됩니다."
               : meterState === "loading"
                 ? "※ 사용량을 불러오는 중입니다…"
                 : `※ 조회 실패: ${usageErr ?? "데이터 없음"}`;
           return (
+            <>
             <div className="ko-screen">
               <div className="ko-screen-glass">
                 <div className="ko-usage">
@@ -1604,17 +1605,9 @@ export default function App() {
                 </div>
                 <span className="ko-screen-glare" aria-hidden />
               </div>
-              <div
-                style={{
-                  fontSize: "11px",
-                  opacity: 0.7,
-                  marginTop: "4px",
-                  lineHeight: 1.3,
-                }}
-              >
-                {note}
-              </div>
             </div>
+            {note && <div className="ko-note">{note}</div>}
+            </>
           );
         })()}
 
