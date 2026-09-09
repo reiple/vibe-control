@@ -782,3 +782,18 @@ Important:
 **Context**: CONSTRUCTION — 창 위치/크기 복원 가드. 화면 밖 복원 방지 + 최소화 상태 저장 방지. lib.rs 단일 코드 변경 + settings.json 데이터 정정. 빌드 PASS, 창 위치 실측 검증.
 
 ---
+## P1 백로그 — 저장 리소스 상태 표시 배선 (FR-7.1~7.3 / A4)
+**Timestamp**: 2026-09-09T17:30:00Z
+**User Input**: "최신 코드 반영 후 남은 백로그 진행"
+**AI Response**: "AUTO MODE 단일 패스. (1) 최신 반영: origin/main fetch — 이미 main 최신(PR #17 병합 반영). (2) 백로그 대조: Explore 에이전트로 P1~P3 항목을 현재 코드와 대조 → P1(저장 리소스 상태 표시)이 진짜 미구현 확정(`evaluate`/`evaluate_status`가 vc-app에서 미호출, `Resource.status` Unknown 하드코딩, 프론트 `Resource`에 status 없음, 등록 커맨드 53개). 항목 편집/묶음 이름변경/중복불변식/트레이·단축키는 미구현이나 v1.1 연기 FR. macOS 권한은 부분 구현. (3) FR-7.1~7.3은 v1.1에서 연기(#D-30)됐으나 '도메인 완성, 배선만 남음'으로 명시 → 재활성화 결정(AUTO MODE 강한 콜). (4) 구현: vc-core `Resource.status` `#[serde(skip)]`→`#[serde(skip_deserializing)]`(프론트 직렬화 O/디스크 역직렬화 X → 항상 평가시점 재계산, roundtrip 안정·구파일 호환) + evaluate 단위 테스트 2종. vc-app `get_bundles` async화 + `running_titles_snapshot()`(앱 이름+런치 id(exe 경로)+창/탭 제목·핸들) + `vc_core::evaluate::evaluate` 호출로 `Resource.status` 채움(has_permission=true — app-level 열거 무권한; PermissionRequired는 FR-12.7/B6 후속). 프론트 `Resource.status?` + `StatusDot`(녹/빈점/amber) + 저장 리소스 행 렌더 + `res-inactive` 흐림 + CSS. (5) 검증 중 매칭 버그 발견·수정: `running_titles`에 앱 name만 넣어 실행 중 Code/WindowsTerminal이 Inactive 오표시(실 descriptor=exe 경로=bundle_id) → bundle_id·handle 토큰 추가로 해결. (6) 검증: cargo build/clippy(신규 경고 0) + test 전통과(vc-core 77·vc-app 18·vc-os-windows 5·vc-sessions 12·vc-store 8=120), tsc/vite clean. 실 Windows(embedded dist 빌드) 실행: 저장 Code/WindowsTerminal 녹색 Active 점, 수정 전 캡처로 Inactive 빈점+흐림 렌더 확인. 검증 스크린샷 3종 삭제. 환경: :1420 dev 서버는 이 저장소것(정상, 하이재킹 아님). 브랜치 feature/backlog-resource-status(main 직접 커밋 회피). 커밋/PR은 별도 진행."
+**Context**: CONSTRUCTION — Code Generation (U1 vc-core, U6 vc-app, U7 frontend). P1 백로그 소진. 연기됐던 FR-7.1~7.3(저장 리소스 상태 표시) 재활성화·배선, `known-deviations.md#A4` 부분 해소. 실 Windows 실행 검증. AUTO MODE.
+
+---
+
+## OPERATIONS — origin/main(#19 저장 리소스 상태 표시) 병합 + 충돌 해소
+**Timestamp**: 2026-09-09T22:10:00Z
+**User Input**: "현재 conflict나는 거 해결하고 merge해" (이후: "선택필요한 거 있으면 나한테 말해")
+**AI Response**: "origin fetch — origin/main이 c40de46→a803164 진행(PR #19 feature/backlog-resource-status: 저장 리소스 실행 상태 표시 FR-7.1~7.3). 이 때문에 PR이 CONFLICTING. `git merge origin/main --no-commit` → 텍스트 충돌 2건: (1) frontend/src/App.tsx 리소스 행 렌더 — HEAD의 kind-aware 활성화(activateResource·isSavedTab·iconTarget·제거 버튼)와 origin/main의 상태 표시(StatusDot·res-inactive·r.status) 양측 필요. 삭제 없이 결합 가능한 union이라 임의 선택 없이 둘 다 보존: canActivate 디스패치 + iconTarget 유지하면서 className에 res-inactive, 행 상단에 StatusDot 추가. (2) audit.md — append-only 로그, 양측 항목 UNION 보존(마커만 제거). StatusDot 정의(App.tsx:147)·ResourceStatus 타입은 병합으로 유입 확인. 검증: 잔여 충돌 마커 0, tsc --noEmit EXIT 0, vite build 성공(488.19 kB), cargo build --workspace EXIT 0(기존 stop_all 경고만, 무관). 대화형(상태 점 실시간 전이·kind별 활성화)은 GUI 수동 필요 → UNVERIFIED. 병합 커밋 수행."
+**Context**: OPERATIONS — 통합 브랜치에 origin/main(#19) 병합. App.tsx 충돌은 kind-aware 활성화 + 저장 리소스 상태 표시 두 기능 union 결합(삭제 없음), audit UNION. 빌드 3종 PASS, 대화형 UNVERIFIED.
+
+---

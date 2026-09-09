@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import type {
   WorkBundle,
   Resource,
+  ResourceStatus,
   RestoreReport,
   RunningApp,
   RunningWindow,
@@ -138,6 +139,27 @@ const appKey = (a: { name: string; bundle_id?: string | null }) =>
 // unit separator) resolves the app icon. A no-op for handle-less targets.
 const UNIT_SEP = String.fromCharCode(31);
 const appNameOf = (handle: string) => handle.split(UNIT_SEP)[0];
+
+/** A saved resource's live status indicator (FR-7.1/7.2): a green dot when the
+ *  resource is currently running, a hollow grey dot when it's not, and an amber
+ *  dot when the OS won't let us tell. `Unknown`/absent renders nothing so
+ *  resources whose status can't meaningfully be evaluated stay unadorned. */
+function StatusDot({ status }: { status?: ResourceStatus }) {
+  if (!status || status === "Unknown") return null;
+  const label =
+    status === "Active"
+      ? "실행 중"
+      : status === "Inactive"
+        ? "실행 중 아님"
+        : "권한 필요";
+  return (
+    <span
+      className={`res-status res-status--${status.toLowerCase()}`}
+      title={label}
+      aria-label={label}
+    />
+  );
+}
 
 /** A group's live-terminal target: the descriptor of its (first) Claude Code
  *  session, or null when the group has no session to drive. */
@@ -1699,7 +1721,9 @@ export default function App() {
                   return (
                     <li
                       key={r.id}
-                      className={`resource ${canActivate ? "activatable" : ""}`}
+                      className={`resource ${canActivate ? "activatable" : ""}${
+                        r.status === "Inactive" ? " res-inactive" : ""
+                      }`}
                       onDoubleClick={() => canActivate && activateResource(r)}
                       title={
                         canActivate
@@ -1709,6 +1733,7 @@ export default function App() {
                           : undefined
                       }
                     >
+                      <StatusDot status={r.status} />
                       {canActivate && (
                         <AppIcon
                           target={iconTarget}
