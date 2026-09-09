@@ -41,6 +41,18 @@ struct RequestBody<'a> {
 struct ResponseBody {
     #[serde(default)]
     content: Vec<ContentBlock>,
+    #[serde(default)]
+    usage: Usage,
+}
+
+/// Token accounting for one Bedrock call, echoed back by Anthropic models. Used
+/// only for the graphical usage meter — never contains any request content.
+#[derive(Deserialize, Default, Clone, Copy)]
+pub struct Usage {
+    #[serde(default)]
+    pub input_tokens: u64,
+    #[serde(default)]
+    pub output_tokens: u64,
 }
 
 #[derive(Deserialize)]
@@ -65,7 +77,7 @@ pub async fn send_message(
     region: &str,
     model: &str,
     messages: &[ChatMsg],
-) -> Result<String, String> {
+) -> Result<(String, Usage), String> {
     if token.trim().is_empty() {
         return Err("No Bedrock API key configured.".into());
     }
@@ -144,6 +156,6 @@ pub async fn send_message(
     if reply.is_empty() {
         Err("Claude returned an empty reply.".into())
     } else {
-        Ok(reply)
+        Ok((reply, parsed.usage))
     }
 }

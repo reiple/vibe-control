@@ -13,6 +13,8 @@
     "windows": [
       {
         "title": "vibe-control",
+        "titleBarStyle": "Overlay",
+        "hiddenTitle": true,
         "width": 1000,
         "height": 700,
         "minWidth": 700,
@@ -30,6 +32,9 @@
     "targets": "all",
     "icon": [
       "icons/icon.png"
-    ]
+    ],
+    "macOS": {
+      "signingIdentity": "vibe-control-dev"
+    }
   }
 }

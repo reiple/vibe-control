@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Required for macOS to allow (and prompt for) Apple Events / Automation.
+	     vibe-control drives Safari, Chrome, Finder and Terminal via osascript to
+	     list per-tab / per-window items and to activate them. Without this key
+	     macOS silently DENIES automation instead of prompting, so tab/window
+	     lists come back empty. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>vibe-control lists and activates the tabs, windows and folders of your open apps (Safari, Chrome, Finder, Terminal) so you can group and restore your work context.</string>
+</dict>
+</plist>
