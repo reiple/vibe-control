@@ -71,10 +71,19 @@ export async function activateWindow(handle: string): Promise<void> {
  *  (e.g. "chrome" / "msedge"). Each RunningWindow is one tab; `handle` is an
  *  opaque per-tab token for `activateTab`. Fetched ON DEMAND when a browser
  *  group is expanded — never on the poll. Empty when no window's tabs are
- *  readable (UI then shows the OS windows instead). */
-export async function listBrowserTabs(name: string): Promise<RunningWindow[]> {
+ *  readable (UI then shows the OS windows instead).
+ *
+ *  `reveal` picks the entry point: on group-expand it stays false, so a
+ *  background browser window is read best-effort but is NEVER pulled to the
+ *  foreground (opening a group can't steal focus). The explicit "bring forward
+ *  and re-read" button passes true, which foregrounds each browser window first
+ *  — the reliable way to make Chromium build a background window's tab tree. */
+export async function listBrowserTabs(
+  name: string,
+  reveal = false
+): Promise<RunningWindow[]> {
   if (!inTauri()) return [];
-  return await invoke<RunningWindow[]>("list_browser_tabs", { name });
+  return await invoke<RunningWindow[]>("list_browser_tabs", { name, reveal });
 }
 
 /** Bring a SPECIFIC browser tab to the front (FR-2.8 / FR-4.2 / AC-20).
@@ -139,6 +148,38 @@ export async function activateTabResource(
   title: string
 ): Promise<void> {
   await invoke("activate_tab_resource", { hint, title });
+}
+
+/** Register ONE individual OS window (dragged from the left panel) into a group
+ *  as a focus-only WindowRef resource (FR-2.8 / FR-3.5 / AC-20) — e.g. a single
+ *  KakaoTalk chat-room window, or a browser window from the OS-window fallback.
+ *  `title` is the window title, `app` the owning app-group name, `handle` the
+ *  opaque HWND token. The same window title can't be added twice. Returns the
+ *  updated bundle list. */
+export async function addWindowResource(
+  bundleId: string,
+  title: string,
+  app: string,
+  handle: string
+): Promise<WorkBundle[]> {
+  return await invoke<WorkBundle[]>("add_window_resource", {
+    bundleId,
+    title,
+    app,
+    handle,
+  });
+}
+
+/** Activate a SAVED individual window (FR-4.1 / FR-4.2 / AC-20). `hint` is the
+ *  stored HWND token, `title` the saved window title (re-match key when the
+ *  handle goes stale), `app` the owning app-group name. Focuses exactly that
+ *  window, not just the app. A closed window is not reopened — it errors. */
+export async function activateWindowResource(
+  hint: string,
+  title: string,
+  app: string
+): Promise<void> {
+  await invoke("activate_window_resource", { hint, title, app });
 }
 
 // ── Claude prompt console ─────────────────────────────────────────────

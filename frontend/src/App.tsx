@@ -27,6 +27,8 @@ import {
   addAppResource,
   addTabResource,
   activateTabResource,
+  addWindowResource,
+  activateWindowResource,
   claudeStatus,
   setClaudeApiKey,
   setClaudeModel,
@@ -275,6 +277,16 @@ export default function App() {
     handle: string;
     title: string;
   } | null>(null);
+  // The individual OS window being dragged (distinct from an app or tab drag).
+  // Holds the owning app-group name + the window's opaque handle + title so a
+  // drop can register it as a focus-only WindowRef resource (FR-2.8 / AC-20).
+  // Set from BOTH a general app's window rows and a browser's OS-window
+  // fallback rows (shown when tab reading fails).
+  const draggedWin = useRef<{
+    app: string;
+    handle: string;
+    title: string;
+  } | null>(null);
 
   // Polling economy (FR-7.5 / FR-7.6 / NFR-Pf3). `pollInFlight` keeps a slow
   // refresh from overlapping the next tick; `resizingUntil` suppresses polls
@@ -368,7 +380,8 @@ export default function App() {
     // items cancels the in-flight native HTML5 drag before it can drop. The
     // background poll yields to an active drag; a manual ↻ can't collide with
     // a drag (one pointer) so it isn't gated.
-    if (silent && (draggedApp.current || draggedTab.current)) return;
+    if (silent && (draggedApp.current || draggedTab.current || draggedWin.current))
+      return;
     // FR-7.6 concurrency guard: if the previous poll is still fetching, skip
     // this tick rather than stacking another OS enumeration on top of it. Only
     // background polls are gated — an explicit ↻ is a deliberate user action.
@@ -378,7 +391,11 @@ export default function App() {
     setSessionNonce((n) => n + 1); // also refresh inline coding-session statuses
     try {
       const apps = await listRunningApps();
-      if (silent && (draggedApp.current || draggedTab.current)) return; // a drag began while fetching
+      if (
+        silent &&
+        (draggedApp.current || draggedTab.current || draggedWin.current)
+      )
+        return; // a drag began while fetching
       setRunningApps(apps);
     } catch (e) {
       // A background poll shouldn't flash the error banner every tick — only
@@ -451,10 +468,13 @@ export default function App() {
   // Lazily read a browser's open tabs when its group is expanded (FR-9.6 /
   // FR-10.12) — never on the poll (FR-10.7). An empty result (background/
   // unreadable window) leaves the group falling back to its OS windows.
-  const fetchTabs = async (name: string) => {
+  // `reveal=false` (expand) never foregrounds the browser; `reveal=true` (the
+  // explicit "앞으로 가져와 다시 읽기" button) foregrounds each window first so a
+  // background window's lazily-built tab tree becomes readable.
+  const fetchTabs = async (name: string, reveal = false) => {
     setTabsLoadingApps((cur) => new Set(cur).add(name));
     try {
-      const tabs = await listBrowserTabs(name);
+      const tabs = await listBrowserTabs(name, reveal);
       setTabsByApp((cur) => ({ ...cur, [name]: tabs }));
     } catch (e) {
       setError(errText(e));
@@ -485,6 +505,19 @@ export default function App() {
     activateTabResource(r.identity.hint ?? "", r.identity.descriptor).catch((e) =>
       setError(errText(e))
     );
+  };
+
+  // Double-clicking a SAVED individual window in a group re-focuses exactly that
+  // window (FR-4.1/4.2, AC-20): try the stored HWND, else re-match by title
+  // within the owning app. A closed window is not reopened — it surfaces as an
+  // error rather than silently launching the app.
+  const activateSavedWindow = (r: Resource) => {
+    setError(null);
+    activateWindowResource(
+      r.identity.hint ?? "",
+      r.identity.descriptor,
+      r.identity.reopen_info ?? ""
+    ).catch((e) => setError(errText(e)));
   };
 
   const toggleExpanded = (name: string) =>
@@ -540,6 +573,19 @@ export default function App() {
   const onDragStartTab = (e: React.DragEvent, browser: string, w: RunningWindow) => {
     draggedTab.current = { browser, handle: w.handle, title: w.title };
     draggedApp.current = null;
+    draggedWin.current = null;
+    e.dataTransfer.effectAllowed = "copy";
+    e.dataTransfer.setData("text/plain", w.title);
+  };
+
+  // Dragging an individual OS window row registers just that window (not the
+  // whole app) on drop as a WindowRef (FR-2.8 / FR-3.5 / AC-20). `app` is the
+  // owning app-group name; used for both general apps and the browser OS-window
+  // fallback.
+  const onDragStartWin = (e: React.DragEvent, app: string, w: RunningWindow) => {
+    draggedWin.current = { app, handle: w.handle, title: w.title };
+    draggedApp.current = null;
+    draggedTab.current = null;
     e.dataTransfer.effectAllowed = "copy";
     e.dataTransfer.setData("text/plain", w.title);
   };
@@ -548,8 +594,10 @@ export default function App() {
     e.preventDefault();
     setDragOverId(null);
     const tab = draggedTab.current;
+    const win = draggedWin.current;
     const app = draggedApp.current;
     draggedTab.current = null;
+    draggedWin.current = null;
     draggedApp.current = null;
     setError(null);
     try {
@@ -557,6 +605,11 @@ export default function App() {
         // A live browser tab → focus-only tab resource (no URL, FR-9.7).
         setBundles(
           await addTabResource(bundle.id, tab.title, tab.browser, tab.handle)
+        );
+      } else if (win) {
+        // An individual OS window → focus-only WindowRef resource (FR-2.8).
+        setBundles(
+          await addWindowResource(bundle.id, win.title, win.app, win.handle)
         );
       } else if (app) {
         const target = app.bundle_id ?? app.name;
@@ -737,20 +790,19 @@ export default function App() {
                     <li
                       key={`${app.name} ${w.handle} ${i}`}
                       className="running-window"
-                      draggable={showTabs}
+                      draggable
                       onDragStart={
                         showTabs
                           ? (e) => onDragStartTab(e, app.name, w)
-                          : undefined
+                          : (e) => onDragStartWin(e, app.name, w)
                       }
-                      onDragEnd={
-                        showTabs
-                          ? () => {
-                              draggedTab.current = null;
-                              setDragOverId(null);
-                            }
-                          : undefined
-                      }
+                      onDragEnd={() => {
+                        // Clear whichever ref this row set, so the paused poll
+                        // resumes even on a cancelled (dropped-outside) drag.
+                        draggedTab.current = null;
+                        draggedWin.current = null;
+                        setDragOverId(null);
+                      }}
                       onClick={() =>
                         showTabs
                           ? activateTabRow(w.handle, app.name)
@@ -759,7 +811,7 @@ export default function App() {
                       title={
                         showTabs
                           ? "Click: switch to this tab · Drag: add to a group"
-                          : "Click: bring this window to front"
+                          : "Click: bring this window to front · Drag: add this window to a group"
                       }
                     >
                       <span
@@ -775,9 +827,21 @@ export default function App() {
                       {tabsLoading
                         ? "탭 읽는 중…"
                         : wins.length > 0
-                        ? "탭을 읽을 수 없어 창을 표시합니다"
+                        ? "백그라운드 창이라 탭을 읽지 못했습니다 — 창 목록을 표시합니다"
                         : "열린 탭을 찾을 수 없습니다"}
                     </span>
+                    {!tabsLoading && (
+                      <button
+                        className="ghost reveal-tabs"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          void fetchTabs(app.name, true);
+                        }}
+                        title="브라우저 창을 앞으로 가져와 탭을 다시 읽습니다"
+                      >
+                        ⟳ 앞으로 가져와 다시 읽기
+                      </button>
+                    )}
                   </li>
                 )}
               </Fragment>
@@ -874,15 +938,21 @@ export default function App() {
                     }`}
                     onDoubleClick={() => {
                       if (isSavedTab(r.kind)) activateSavedTab(r);
+                      // A saved individual window re-focuses that exact window,
+                      // not just the app (FR-4.2); a closed window is not
+                      // reopened — it surfaces as an error.
+                      else if (r.kind === "WindowRef") activateSavedWindow(r);
                       else if (isActivatable(r.kind))
                         activate(r.identity.reopen_info ?? r.identity.descriptor);
                     }}
                     title={
                       isSavedTab(r.kind)
                         ? "Double-click: switch to this tab"
-                        : isActivatable(r.kind)
-                          ? "Double-click: bring to front · opens it if closed"
-                          : undefined
+                        : r.kind === "WindowRef"
+                          ? "Double-click: bring this window to front"
+                          : isActivatable(r.kind)
+                            ? "Double-click: bring to front · opens it if closed"
+                            : undefined
                     }
                   >
                     {isActivatable(r.kind) && (

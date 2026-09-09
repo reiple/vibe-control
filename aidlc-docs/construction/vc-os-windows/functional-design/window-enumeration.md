@@ -156,6 +156,37 @@ Chromium 지연 접근성 트리(배경 창 `Name` 미생성)로 탭 제목이 �
 
 **검증**: `cargo build -p vc-app`·`clippy -p vc-os-windows -p vc-app --all-targets` 0 경고, `cargo test` vc-core 24/24·vc-os-windows 5/5·vc-app 2/2 통과. live 탭 순서 변경 후 saved tab 활성화 검증은 수동 필요(이 환경에서 실행 불가 — 완료로 기록하지 않음).
 
+## 6.9 Edge 중첩 Tab 수집·접근성 트리 준비·개별 창 등록 (보완 Bolt H4, 2026-09-09)
+
+§6.8이 남긴 "Edge 읽기 실패 원인(추정)"을 2단계 진단 스크립트(`diag_edge_tabs.ps1`/`diag_edge_tabs2.ps1`, 읽기 전용)로 실측 규명하고, 그 결과에 근거해 수집·활성화·사용자 흐름·개별 창 등록을 보완한다.
+
+**확정된 진단(실측)**
+- **중첩 Tab**: Edge 탭 스트립 = 바깥 `Tab`('탭 표시줄', `TabItem` Children=0/Descendants=3) ⊃ 안쪽 무명 `Tab`(직계 `TabItem` Children=3). 기존 `FindFirst(Descendants,Tab)`가 바깥을 잡고 `FindAll(Children,TabItem)`→0이라 수집 실패였다.
+- **지연 접근성 트리**: 백그라운드 창은 스트립만 있고 `TabItem`이 아직 없음(Children=0/Descendants=0). 포그라운드 전환 시 생성·안정.
+- 미확정(일반화 금지): 고정 대기 확대만으로 백그라운드 창이 항상 읽힌다는 보장 없음. Chrome은 이번에 실측 재확인 못 함(설계상 회귀 방지만).
+
+### 6.9.1 수집·활성화 (U4)
+- 탭 스트립 하위 `TabItem` 탐색을 `Children`→**`Descendants`**로 변경(`LIST_TABS_SCRIPT`·`ACTIVATE_TAB_SCRIPT` 공통). 범위를 **찾은 스트립 하위로 한정** → 페이지 내부 ARIA `TabItem`은 스트립의 자손이 아니라 오수집 안 됨(FR-9.6). 두 스크립트가 **동일 탐색·순서**(FindFirst Tab → FindAll Descendants TabItem)라 수집 인덱스와 활성화 인덱스 정합. Chrome 직계 `TabItem`도 Descendants에 포함되어 회귀 없음.
+- 고정 350ms 단발 → **제한 재시도**: warm-up(옵션 포그라운드 포함) 후 창별 최대 6×150ms 폴링, `TabItem`>0이면 조기 종료. 실패 시 빈 결과(창 목록 폴백).
+- `list_tabs(process, bring_to_front)`: `bring_to_front`(=`$env:VC_TAB_FG='1'`)일 때만 `VcFg` P/Invoke(ShowWindowAsync+SetForegroundWindow)로 대상 창을 먼저 포그라운드. 그룹 펼치기는 `false`(포커스 미탈취, FR-10.7의 "폴링 미포함" 유지), 명시적 "다시 읽기"와 저장 탭 활성화만 `true`.
+
+### 6.9.2 접근성 트리 준비·사용자 흐름 (U6/U7)
+- `list_browser_tabs(name, reveal)`에 `reveal` 추가 → `enumerate_browser_tab_sessions(name, bring_to_front)`. `activate_live_tab`은 저장 탭 활성화 시 `reveal=true`로 재열거(§6.8 제목 재검증 유지).
+- 프론트: 목록 펼침만으로 Edge를 앞으로 가져오지 않음. 자동 수집 실패 시 사유 안내("백그라운드 창이라 탭을 읽지 못했습니다 …") + **"⟳ 앞으로 가져와 다시 읽기"** 버튼(→ `fetchTabs(name, true)`)으로 사용자가 명시적으로 선택.
+
+### 6.9.3 일반 앱 개별 창 등록 (U6/U7, `WindowRef` 배선)
+- 지금까지 아무 곳도 생성하지 않던 `ResourceKind::WindowRef`를 배선. 신규 커맨드 `add_window_resource(bundle_id,title,app,handle)`(→ `WindowRef`: descriptor=제목, hint=HWND, reopen_info=app; **제목으로 중복 방지** — vc-core `distinct_key(WindowRef)=descriptor`와 정합, HWND는 OS 재활용이라 식별키 제외)·`activate_window_resource(hint,title,app)`.
+- 헬퍼 `activate_live_window`: `enumerate_running_windows()` 재열거 → 저장 HWND가 같은 창이면 포커스, 낡았으면 (app,제목) 재매칭, 없으면 에러(FR-4.2). `reopen_resource`의 `WindowRef`도 이 경로. **닫힌 창은 재열지 않음**(범위 외 — 에러로 표면화).
+- 프론트: 창 하위 행을 draggable로(일반 앱 창 + 브라우저 OS-창 폴백 행 모두, 즉 **탭 수집 실패 시에도 창 등록 가능**). `draggedWin` ref, 폴링은 app/tab/win 세 드래그 어느 것이든 진행 중이면 양보. 저장 `WindowRef`는 배지 "Window"(앱/창/탭 구분), 더블클릭 시 그 창 복귀. 앱 전체 등록 유지.
+
+### 6.9.4 검증
+- **정적(실행 완료)**: `cargo clippy --workspace --all-targets` 0 경고, `cargo test --workspace` 전 통과(vc-core 24/24·vc-os-windows 5/5·vc-app 2/2·vc-sessions 8/8·vc-store 2/2), `npx tsc --noEmit` 무오류·`vite build` 성공. 진단 스크립트는 실 Windows+Edge에서 실행해 중첩 Tab·지연 트리 실측 확정.
+- **런타임(미완료 — 직접 실행 못 함, 완료로 기록하지 않음)**: Edge 백그라운드/포그라운드 수집, 여러 Edge 창, 탭 순서 변경 후 저장 탭 활성화, Chrome 회귀, 카카오톡 개별 창 등록·복귀 — 앱 UI 플로우 실행은 미수행, 사용자 실환경 확인 필요.
+
+## AC 매핑(보완 3)
+- **AC-20 추가 확장**: 중첩 Tab 처리로 Edge 탭 개별 표시·등록·활성화; 백그라운드 창은 명시적 "다시 읽기"로만 포그라운드; 개별 OS 창(카카오톡 채팅방 등)을 그룹에 등록·복귀; 탭 수집 실패 시에도 창 등록 가능.
+- 회귀 방지: **AC-7**(스트립 하위로 범위 한정 → 페이지 내부 TabItem 미수집), **AC-2/FR-4.2**(정확한 탭/창만 활성화, 앱만 활성화는 성공 아님), FR-10.7(펼침이 포커스 탈취·폴링 부하 유발 안 함).
+
 ## 미해결/후속
 - 탭 **URL 수집**(캡처 경로 `read_tabs`, FR-9.1의 주소 부분·DevTools 프로토콜)만 잔존 — 라이브 탭의 **작업 묶음 등록/복원은 §6.7에서 제목 기반 포커스 전용으로 해소**(URL 불필요).
 - macOS 라이브 탭 세션(현재 앱 창 폴백) — AX 기반 탭 열거는 후속.

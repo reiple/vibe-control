@@ -624,12 +624,20 @@ impl WinBrowserTabReader {
     /// shown as the green dot (FR-2.4).
     ///
     /// LIMITATION (accepted, documented — `#B3`): Chromium builds a window's
-    /// accessibility tree lazily, so only the *engaged/foreground* browser
-    /// window reliably exposes its strip; a fully-background window yields no
-    /// rows and the UI falls back to its OS-window list. Runs ONLY on demand
-    /// (group expand), never on the 1-second poll, so the `Add-Type` compile it
-    /// pays never touches the hot path (FR-10.7). Empty on any failure.
-    pub fn list_tabs(process: &str) -> Result<Vec<(String, String, bool)>> {
+    /// accessibility tree lazily, so a fully-background window may expose an
+    /// empty tab strip (the `Tab` container is present but holds no `TabItem`
+    /// nodes yet — confirmed by diagnosis on Edge, 2026-09-09). The script gives
+    /// the lazy tree a BOUNDED chance to populate (a warm-up ping + up to
+    /// ~6×150 ms polling for `TabItem`s) rather than trusting one fixed sleep,
+    /// but does NOT foreground the window unless `bring_to_front` is set. When
+    /// `bring_to_front` is true (the user's explicit "bring forward and re-read"
+    /// action) each matching window is foregrounded first, which forces Chromium
+    /// to build its tree; that is the reliable path for a background window.
+    /// Runs ONLY on demand (group expand / explicit re-read), never on the
+    /// 1-second poll, so the `Add-Type` compile it pays never touches the hot
+    /// path (FR-10.7). Empty on any failure — the UI falls back to the OS-window
+    /// list.
+    pub fn list_tabs(process: &str, bring_to_front: bool) -> Result<Vec<(String, String, bool)>> {
         // Defense in depth: `process` only ever comes from our own enumeration,
         // but keep it a bare identifier before it reaches PowerShell (it is also
         // passed via an env var, never the command line — see module SECURITY).
@@ -643,6 +651,9 @@ impl WinBrowserTabReader {
         let output = Command::new("powershell.exe")
             .args(["-NoProfile", "-NonInteractive", "-Command", LIST_TABS_SCRIPT])
             .env("VC_PROC", process)
+            // "1" only on the user's explicit "bring forward and re-read" action;
+            // group-expand passes "0" so merely opening a group never steals focus.
+            .env("VC_TAB_FG", if bring_to_front { "1" } else { "0" })
             .creation_flags(CREATE_NO_WINDOW)
             .output();
         let output = match output {
@@ -738,35 +749,69 @@ impl WinBrowserTabReader {
 }
 
 /// Read-only UIA enumeration of a browser's tab strips. Emits one TSV line per
-/// real tab: `<hwnd>\t<index>\t<selected 0|1>\t<name>`. A warm-up pass nudges
-/// Chromium to build the (engaged) window's tree before we read it. The target
-/// process name arrives in `$env:VC_PROC`. Silent on failure (empty output).
+/// real tab: `<hwnd>\t<index>\t<selected 0|1>\t<name>`. The target process name
+/// arrives in `$env:VC_PROC`; `$env:VC_TAB_FG='1'` opts into foregrounding each
+/// matching window first (the user's explicit re-read), which is the reliable
+/// way to force Chromium to build a background window's tree.
+///
+/// Two confirmed Chromium/Edge quirks are handled (diagnosis 2026-09-09):
+///  1. NESTED `Tab` structure — the outer `Tab` ('탭 표시줄') holds the tab
+///     buttons only at Descendants depth (an inner unnamed `Tab` is the real
+///     container). So `TabItem`s are collected with `Descendants` scope of the
+///     strip, NOT `Children` (which returned 0). Scope stays confined to the
+///     located tab strip, so page-internal ARIA `TabItem`s are never collected
+///     (FR-9.6) — the page content is not a descendant of the strip.
+///  2. LAZY accessibility tree — a background window's strip may hold no
+///     `TabItem`s yet. Instead of one fixed sleep we warm-up then poll up to
+///     `$maxTries`×`$stepMs`, stopping as soon as any tab materialises.
+///
+/// Silent on failure (empty output). The collection order here is the SAME
+/// `FindFirst(Tab)`→`FindAll(Descendants,TabItem)` order `ACTIVATE_TAB_SCRIPT`
+/// uses, so a tab's index is stable between listing and activation.
 #[cfg(target_os = "windows")]
 const LIST_TABS_SCRIPT: &str = r#"$ErrorActionPreference='SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public static class VcFg { [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h); [DllImport("user32.dll")] public static extern bool ShowWindowAsync(IntPtr h, int n); }'
 $AE=[System.Windows.Automation.AutomationElement]
 $CT=[System.Windows.Automation.ControlType]
 $TS=[System.Windows.Automation.TreeScope]
 $CP=$AE::ControlTypeProperty
 $proc=$env:VC_PROC
+$fg=($env:VC_TAB_FG -eq '1')
 $root=$AE::RootElement
 $winCond=New-Object System.Windows.Automation.PropertyCondition($CP,$CT::Window)
 $stripCond=New-Object System.Windows.Automation.PropertyCondition($CP,$CT::Tab)
 $itemCond=New-Object System.Windows.Automation.PropertyCondition($CP,$CT::TabItem)
 $wins=$root.FindAll($TS::Children,$winCond)
-foreach($w in $wins){
-  $p=Get-Process -Id $w.Current.ProcessId -ErrorAction SilentlyContinue
-  if($p -and $p.ProcessName -eq $proc){ $null=$w.FindFirst($TS::Descendants,$stripCond) }
-}
-Start-Sleep -Milliseconds 350
+$targets=@()
 foreach($w in $wins){
   $p=Get-Process -Id $w.Current.ProcessId -ErrorAction SilentlyContinue
   if(-not $p -or $p.ProcessName -ne $proc){ continue }
+  $targets+=$w
+}
+foreach($w in $targets){
+  if($fg){
+    $wh=[IntPtr][int64]$w.Current.NativeWindowHandle
+    [void][VcFg]::ShowWindowAsync($wh,9)
+    [void][VcFg]::SetForegroundWindow($wh)
+  }
+  $null=$w.FindFirst($TS::Descendants,$stripCond)
+}
+$maxTries=6
+$stepMs=150
+foreach($w in $targets){
   $h=[int64]$w.Current.NativeWindowHandle
-  $strip=$w.FindFirst($TS::Descendants,$stripCond)
-  if(-not $strip){ continue }
-  $items=$strip.FindAll($TS::Children,$itemCond)
+  $items=$null
+  for($try=0;$try -lt $maxTries;$try++){
+    $strip=$w.FindFirst($TS::Descendants,$stripCond)
+    if($strip){
+      $found=$strip.FindAll($TS::Descendants,$itemCond)
+      if($found.Count -gt 0){ $items=$found; break }
+    }
+    Start-Sleep -Milliseconds $stepMs
+  }
+  if(-not $items){ continue }
   $idx=0
   foreach($t in $items){
     $sel=0; $pt=$null
@@ -796,9 +841,21 @@ if(-not $el){ 'NOSTRIP'; exit 1 }
 $CT=[System.Windows.Automation.ControlType]
 $TS=[System.Windows.Automation.TreeScope]
 $CP=[System.Windows.Automation.AutomationElement]::ControlTypeProperty
-$strip=$el.FindFirst($TS::Descendants,(New-Object System.Windows.Automation.PropertyCondition($CP,$CT::Tab)))
-if(-not $strip){ 'NOSTRIP'; exit 1 }
-$items=$strip.FindAll($TS::Children,(New-Object System.Windows.Automation.PropertyCondition($CP,$CT::TabItem)))
+$stripCond=New-Object System.Windows.Automation.PropertyCondition($CP,$CT::Tab)
+$itemCond=New-Object System.Windows.Automation.PropertyCondition($CP,$CT::TabItem)
+# Poll for the lazily-built tree, then enumerate with the SAME
+# FindFirst(Tab)->FindAll(Descendants,TabItem) order LIST_TABS_SCRIPT uses so
+# the index we were handed still points at the same tab (nested Tab structure).
+$items=$null
+for($try=0;$try -lt 6;$try++){
+  $strip=$el.FindFirst($TS::Descendants,$stripCond)
+  if($strip){
+    $found=$strip.FindAll($TS::Descendants,$itemCond)
+    if($found.Count -gt 0){ $items=$found; break }
+  }
+  Start-Sleep -Milliseconds 150
+}
+if(-not $items){ 'NOSTRIP'; exit 1 }
 if($idx -lt 0 -or $idx -ge $items.Count){ 'BADIDX'; exit 1 }
 $t=$items[$idx]
 $pt=$null

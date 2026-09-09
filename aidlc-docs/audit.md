@@ -562,3 +562,10 @@ Important:
 **Context**: CONSTRUCTION — Supplement Bolt H3, §H/§H2 보완. U4(빈 제목 표시) + U6(activate_live_tab 검증 로직). 기존 기능 무변경. AUTO MODE.
 
 ---
+## CONSTRUCTION — Supplement Bolt H4 (Edge 중첩 Tab 수집·접근성 트리 준비·개별 창 등록)
+**Timestamp**: 2026-09-09T09:30:00Z
+**User Input**: "제시한 재현 결과를 근거로 AI-DLC 보완 작업을 진행하라. 기존 관련 문서와 작업 기록을 참고하여 필요한 Inception 산출물을 갱신하고, 적절한 Unit/Bolt로 Construction을 진행한다. [보완 범위] 1. Edge 탭 수집 및 활성화 - 확인된 중첩 Tab 구조를 처리한다. [...] 2. 접근성 트리 준비 및 사용자 흐름 - 특정 고정 대기 시간이 항상 충분하다고 가정하지 않는다. [...] 목록을 펼치는 것만으로 Edge 창을 무조건 앞으로 가져오지 않는다. [...] 3. 일반 앱의 개별 창 등록 - 카카오톡 채팅방 등 [...] 개별 OS 창을 그룹에 등록 [...] Edge 탭 수집 실패로 창 목록을 대신 표시할 때도 창 등록은 가능하게 한다. [...] 닫힌 창을 자동으로 다시 여는 기능은 이번 범위에서 제외한다. [검증 및 기록] [...] 직접 실행하지 못한 항목은 검증 완료로 처리하지 않는다. [...] 먼저 간결한 설계·수용 기준을 제시하고 프로젝트 승인 절차에 따라 구현을 진행하라. 커밋·푸시·PR·병합은 별도 요청 전까지 하지 마라."
+**AI Response**: "설계·수용 기준(Bolt H4, AC-H4-1~5) 제시 후 AUTO MODE로 구현 완료. 진단(2단계 진단 스크립트 실측): Edge 탭 스트립은 중첩 Tab(바깥 '탭 표시줄'은 TabItem을 Descendants로만 보유, 안쪽 무명 Tab이 직계 보유) + 백그라운드 창 지연 접근성 트리(TabItem 미생성). 구현: (U4) LIST_TABS/ACTIVATE 스크립트 스트립 하위 탐색 Children→Descendants(스트립 하위로 범위 한정, 두 스크립트 동일 순서로 인덱스 정합), 고정 350ms→제한 재시도(6×150ms), list_tabs(process,bring_to_front) 옵션 포그라운드; (U6) reveal/bring_to_front 배선, activate_live_tab 저장 탭은 포그라운드 재열거+제목 재검증, 신규 add_window_resource/activate_window_resource/activate_live_window(WindowRef 배선, 제목 중복 방지, 닫힌 창 재열기 없음), reopen_resource WindowRef 분기, generate_handler 22→24; (U7) 창 행 draggable(일반 앱+브라우저 폴백)→addWindowResource, draggedWin 폴링 양보, 폴백 사유 안내+'⟳ 앞으로 가져와 다시 읽기' 버튼, 저장 WindowRef 배지 'Window'+더블클릭 복귀. 정적 검증 완료: cargo clippy --workspace --all-targets 0 경고, cargo test --workspace 전 통과(vc-core 24·vc-os-windows 5·vc-app 2·vc-sessions 8·vc-store 2), tsc --noEmit 무오류, vite build 성공. 런타임 검증(Edge 백/포그라운드·다중 창·탭 순서 변경·Chrome 회귀·카카오톡 개별 창 등록)은 앱 UI 플로우를 직접 실행하지 못해 완료로 기록하지 않음 — 사용자 실환경 확인 필요. 커밋/푸시/PR/병합은 미실행(별도 요청 대기)."
+**Context**: CONSTRUCTION — Supplement Bolt H4, §H3에 이어 진단→설계→구현→정적검증 연결. U4 vc-os-windows + U6 vc-app + U7 frontend. WindowRef 최초 배선(가법). 문서: known-deviations.md §H4, window-enumeration.md §6.9, aidlc-state.md, audit.md. 커밋 미실행. AUTO MODE.
+
+---
