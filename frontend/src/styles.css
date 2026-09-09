@@ -414,6 +414,20 @@ body { margin: 0; background: var(--body); }
 .running-expand:active { transform: none; box-shadow: none; filter: none; }
 .running-expand:focus-visible { outline: none; box-shadow: none; }
 
+/* Windows path: chevron + window/tab count next to the app name. Kept small and
+   tidy (mono, tabular-nums) and pushed to the row's trailing edge so the digit
+   sits at the same quiet level as the expanded sub-items below it. */
+.running-count {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  line-height: 1;
+  color: var(--ink-muted);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+
 /* One live window/tab/folder inside an expanded app group (FR-2.2/2.8).
    Indented under the app icon; drag-registerable into a context group. */
 .running-window {
@@ -429,7 +443,7 @@ body { margin: 0; background: var(--body); }
 /* Placeholder rows (Loading… / No windows or tabs): non-interactive, dimmed. */
 .running-window.muted {
   color: var(--ink-muted);
-  font-size: 12px;
+  font-size: 11px;
   cursor: default;
 }
 .running-window.muted:hover { background: transparent; }
@@ -457,7 +471,7 @@ body { margin: 0; background: var(--body); }
 }
 .win-title {
   font-family: var(--grotesk);
-  font-size: 12px;
+  font-size: 11px;
   color: var(--ink-muted);
   white-space: nowrap;
   overflow: hidden;
