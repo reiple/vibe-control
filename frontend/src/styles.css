@@ -1290,6 +1290,31 @@ button.mini.danger {
 .resource.activatable { cursor: pointer; }
 .resource.activatable:hover .resource-name { color: var(--accent-deep); }
 
+/* Saved-resource live status (FR-7.1/7.2). A 7px dot mirroring the running
+   panel's window dot: green = running, hollow = not, amber = permission. */
+.res-status {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.res-status--active {
+  background: #35c46a;
+  box-shadow: 0 0 0 3px rgba(53, 196, 106, 0.18);
+}
+.res-status--inactive {
+  background: transparent;
+  border: 1.5px solid var(--ink-muted);
+  opacity: 0.55;
+}
+.res-status--permissionrequired {
+  background: #febc2e;
+  box-shadow: 0 0 0 3px rgba(254, 188, 46, 0.18);
+}
+/* Dim resources that aren't currently running (FR-7.3). */
+.resource.res-inactive { opacity: 0.62; }
+.resource.res-inactive .resource-name { color: var(--ink-muted); }
+
 /* Kind tag = tiny uppercase mono caption chip. */
 .badge {
   font-family: var(--mono);

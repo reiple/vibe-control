@@ -83,4 +83,45 @@ mod tests {
         assert!(is_noise("Muted Tab"));
         assert!(!is_noise("My Regular Window"));
     }
+
+    fn res_with_descriptor(descriptor: &str) -> Resource {
+        Resource::new(
+            descriptor,
+            crate::models::ResourceKind::WindowRef,
+            crate::models::ResourceIdentity {
+                kind: crate::models::ResourceKind::WindowRef,
+                descriptor: descriptor.to_string(),
+                hint: None,
+                reopen_info: None,
+            },
+        )
+    }
+
+    // FR-7.1/7.2: the exact path get_bundles wires — a resource whose descriptor
+    // matches a currently-running title is Active; one that doesn't is Unknown
+    // (no reopen_info/session), and evaluation preserves resource order/id.
+    #[test]
+    fn test_evaluate_active_when_running() {
+        let a = res_with_descriptor("Obsidian");
+        let b = res_with_descriptor("SomeClosedApp");
+        let resources = vec![a.clone(), b.clone()];
+        let running = vec!["Obsidian".to_string(), "제목 없음 - 그림판".to_string()];
+
+        let snaps = evaluate(&resources, &running, true);
+        assert_eq!(snaps.len(), 2);
+        assert_eq!(snaps[0].resource_id, a.id);
+        assert_eq!(snaps[0].status, ResourceStatus::Active);
+        assert_eq!(snaps[1].resource_id, b.id);
+        assert_eq!(snaps[1].status, ResourceStatus::Unknown);
+    }
+
+    // A running title that is "noise" (system/aux window) must NOT count as a
+    // match, so a resource named after it stays non-Active.
+    #[test]
+    fn test_evaluate_noise_title_does_not_match() {
+        let res = res_with_descriptor("System Settings");
+        let running = vec!["System Settings".to_string()];
+        let snaps = evaluate(&[res], &running, true);
+        assert_ne!(snaps[0].status, ResourceStatus::Active);
+    }
 }

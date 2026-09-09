@@ -60,8 +60,11 @@ pub struct Resource {
     pub display_name: String,
     pub kind: ResourceKind,
     pub identity: ResourceIdentity,
-    /// 캐시된 상태 (권위는 평가 시점)
-    #[serde(skip)]
+    /// 캐시된 상태 (권위는 평가 시점). 프론트로는 직렬화하되(get_bundles가
+    /// 매 조회마다 evaluate로 채움 — FR-7.1/7.2) 디스크에서는 읽지 않는다:
+    /// 저장 시점 값은 이미 낡았을 수 있으므로 로드 시 항상 Unknown으로 두고
+    /// 재평가한다(skip_deserializing → Default). 구파일에 필드가 없어도 호환.
+    #[serde(skip_deserializing)]
     pub status: ResourceStatus,
     /// 묶음 내 정렬 순서
     pub order: u32,

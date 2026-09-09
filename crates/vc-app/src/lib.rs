@@ -313,12 +313,38 @@ impl<E: std::fmt::Display> From<E> for CommandError {
     }
 }
 
+/// Return all saved bundles, freshly tagging each resource with its live status
+/// (FR-7.1/7.2): a resource whose descriptor matches a currently-running app
+/// name or window/tab title is `Active`, otherwise `Inactive`/`Unknown`. Status
+/// is recomputed on every call (never persisted — see `Resource.status`) so the
+/// UI reflects the real world; the frontend dims inactive resources (FR-7.3).
 #[tauri::command]
-fn get_bundles(state: State<SharedState>) -> std::result::Result<Vec<WorkBundle>, CommandError> {
-    let app = state.lock().map_err(|_| CommandError {
-        message: "state lock poisoned".into(),
-    })?;
-    Ok(app.get_bundles().to_vec())
+async fn get_bundles(
+    state: State<'_, SharedState>,
+) -> std::result::Result<Vec<WorkBundle>, CommandError> {
+    // Snapshot running window/tab + app titles first (same fast enumeration
+    // list_running_apps uses), outside the state lock. App-level enumeration
+    // needs no OS permission, so evaluation runs with has_permission=true;
+    // per-window/session PermissionRequired reflection stays deferred (FR-12.7/B6).
+    let running_titles = running_titles_snapshot();
+
+    let mut bundles = {
+        let app = state.lock().map_err(|_| CommandError {
+            message: "state lock poisoned".into(),
+        })?;
+        app.get_bundles().to_vec()
+    };
+
+    for b in &mut bundles {
+        let snaps = vc_core::evaluate::evaluate(&b.resources, &running_titles, true);
+        let by_id: HashMap<_, _> = snaps.iter().map(|s| (s.resource_id, s.status)).collect();
+        for res in &mut b.resources {
+            if let Some(&st) = by_id.get(&res.id) {
+                res.status = st;
+            }
+        }
+    }
+    Ok(bundles)
 }
 
 #[tauri::command]
@@ -2482,6 +2508,29 @@ fn enumerate_running_windows() -> Vec<AppWindows> {
     {
         Vec::new()
     }
+}
+
+/// Collect the tokens that mark a saved resource as "running" for status
+/// evaluation (FR-7.1). `evaluate` compares each resource's `descriptor` for
+/// exact equality, and a dragged resource stores whatever launch target it was
+/// registered with, so we gather every token a descriptor could equal: the live
+/// app's name AND its stable launch id (`bundle_id` — what an AppLaunch resource
+/// actually stores), plus each window/tab's title and opaque handle. Window
+/// handles are non-persistent, so a saved WindowRef rarely matches by handle
+/// (degrades to Inactive — best-effort, expected).
+fn running_titles_snapshot() -> Vec<String> {
+    let mut titles = Vec::new();
+    for (name, bundle_id, windows) in enumerate_running_windows() {
+        titles.push(name);
+        if let Some(bid) = bundle_id {
+            titles.push(bid);
+        }
+        for (handle, title, _focused) in windows {
+            titles.push(title);
+            titles.push(handle);
+        }
+    }
+    titles
 }
 
 /// Restore the saved window position/size (E2 / FR-8.10 / AC-14) before the

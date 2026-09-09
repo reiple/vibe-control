@@ -28,6 +28,10 @@ export interface Resource {
   kind: ResourceKind;
   identity: ResourceIdentity;
   order: number;
+  /** Live status recomputed by the backend on every get_bundles call
+   *  (FR-7.1/7.2). Absent on the mutation commands' returns; refreshed on the
+   *  next poll. */
+  status?: ResourceStatus;
 }
 
 export interface WorkBundle {
