@@ -100,8 +100,73 @@ note in memory / `known-deviations.md`). It is **fine for local runs, invalid fo
 
 ---
 
-## 5. Not in scope (no cloud infra)
+## <a name="ci"></a>6. Automated release via GitHub Actions + CLI install — **[Bolt R1, 2026-09-09]**
 
-No servers, containers, CDNs, or CI/CD are defined for this project (Infrastructure Design was
-skipped). If auto-update is desired later, Tauri's updater plugin + a static release feed would be the
-natural addition — out of scope for 0.1.0.
+> **[Update]** Section 5 previously said "no CI/CD is defined." That is now superseded: a tag-driven
+> release pipeline publishes installers to **GitHub Releases**, and users install with a one-line
+> command. Requirement: **FR-14** (requirements v1.4). This is the delivery layer — no runtime code
+> (U1–U7) changed.
+
+### 6.1 Pipeline — `.github/workflows/release.yml`
+
+Trigger: push a version tag (`git tag v0.1.0 && git push origin v0.1.0`) or run the workflow
+manually with a `tag` input. Four jobs:
+
+1. **`create-release`** (ubuntu) — creates a **draft** GitHub Release for the tag up front (so the two
+   parallel build jobs never race to create it) and attaches `install.sh` / `install.ps1`.
+2. **`build-macos`** (macos-latest) — installs frontend deps (`npm ci`), builds `frontend/dist`
+   explicitly, then `tauri build --target universal-apple-darwin` (ad-hoc signed, `APPLE_SIGNING_IDENTITY=-`).
+   Uploads the **universal `.dmg`** to the draft release.
+3. **`build-windows`** (windows-latest) — same frontend steps, then `tauri build`. Uploads the
+   **`.msi`** (WiX) and **`-setup.exe`** (NSIS) to the draft release.
+4. **`publish`** (ubuntu) — after both builds succeed, `gh release edit <tag> --draft=false --latest`
+   flips the draft to a published/latest release (so users never see a half-populated release).
+
+> **cwd nuance (why `beforeBuildCommand` is disabled in CI):** locally the npm-prebuilt Tauri CLI runs
+> `beforeBuildCommand` from `crates/` so `../frontend` resolves correctly (`known-deviations.md#H1`).
+> To keep CI robust against that relative-path subtlety, each build job builds the frontend
+> **explicitly** (`npm --prefix frontend run build`) and then runs `tauri build` with
+> `--config '{"build":{"beforeBuildCommand":""}}'` (from `crates/vc-app`, invoking
+> `../../frontend/node_modules/.bin/tauri`). `frontendDist` (`../../frontend/dist`) already points at
+> the explicitly-built output, so the embedded UI is fresh.
+
+### 6.2 One-line install (FR-14.3)
+
+- **macOS** (universal .dmg → `/Applications`, clears Gatekeeper quarantine):
+  ```
+  curl -fsSL https://raw.githubusercontent.com/reiple/vibe-control/main/install.sh | bash
+  ```
+- **Windows** (silent install of `.msi`/`-setup.exe`):
+  ```
+  irm https://raw.githubusercontent.com/reiple/vibe-control/main/install.ps1 | iex
+  ```
+- Pin a version: `VC_VERSION=v0.1.0` (bash) / `$env:VC_VERSION='v0.1.0'` (PowerShell). Both scripts
+  discover assets via the **GitHub Releases API** (no `jq` needed on macOS), so version strings baked
+  into filenames don't break them.
+
+### 6.3 Signing still applies
+
+The CI build is **unsigned / ad-hoc** (§2 is still WAIVED). `install.sh` therefore runs
+`xattr -dr com.apple.quarantine` after copying, and `install.ps1` warns about the SmartScreen
+"Unknown publisher" prompt. A real public release still needs Apple Developer ID + notarization and a
+Windows Authenticode cert (§2) — at which point the ad-hoc/quarantine handling can be dropped.
+
+### 6.4 How to cut a release
+
+```
+# 1. Bump version in crates/vc-app/tauri.conf.json (and frontend/package.json to match)
+# 2. Commit, then tag + push:
+git tag v0.1.0
+git push origin v0.1.0
+# 3. Watch the Release workflow in the Actions tab; it publishes the release when green.
+```
+
+---
+
+## 5. Not in scope
+
+No servers, containers, or CDNs are defined for this project (Infrastructure Design was skipped) — the
+GitHub Releases assets are served by GitHub, not our own infra. **In-app auto-update** (Tauri updater
+plugin + a static release feed) and **app-store distribution** remain out of scope for 0.1.0 (FR-14.6):
+users re-run the install command to update. Supply-chain scanning (`cargo audit` / `npm audit`) is a
+backlog follow-up now that CI exists (SECURITY-10, `known-deviations.md#H5-h`) — not a release blocker.
