@@ -2298,6 +2298,10 @@ textarea.cc-input--multiline {
   flex: 1;
   display: flex;
 }
+/* @mention autocomplete — a plain inline list of group names (claude-code
+   style), not boxed cards. Names flow left-to-right and wrap to a new line
+   when they run out of width; each chip is a small session-state dot + the
+   @name in mono. */
 .mention-menu {
   position: absolute;
   bottom: calc(100% + 6px);
@@ -2306,7 +2310,9 @@ textarea.cc-input--multiline {
   max-height: 200px;
   overflow-y: auto;
   display: flex;
-  flex-direction: column;
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: 2px;
   padding: 4px;
   background: var(--panel);
   border: 1px solid var(--keyline);
@@ -2314,31 +2320,44 @@ textarea.cc-input--multiline {
   box-shadow: 0 6px 18px var(--shadow, rgba(0, 0, 0, 0.18));
   z-index: 20;
 }
+.mention-menu li {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
 .mention-item {
   display: flex;
-  flex-direction: column;
-  gap: 1px;
-  padding: 6px 8px;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
   border: none;
   background: transparent;
   border-radius: 4px;
   text-align: left;
   cursor: pointer;
   color: var(--ink);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.6;
 }
 .mention-item:hover,
 .mention-item.active {
   background: var(--sunk);
 }
-.mention-item > span:first-child {
-  font-family: var(--grotesk);
-  font-size: 13px;
-  font-weight: 600;
+.mention-name {
+  white-space: nowrap;
 }
-.mention-sub {
-  font-family: var(--mono);
-  font-size: 10px;
-  color: var(--ink-muted);
+.mention-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--ink-muted);
+  opacity: 0.35;
+}
+.mention-dot.live {
+  background: #3fb950;
+  opacity: 1;
 }
 
 /* The "보낼 내용" preview inside the new-session folder modal — one clamped line
