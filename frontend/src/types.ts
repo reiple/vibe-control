@@ -1,6 +1,7 @@
 export type ResourceKind =
   | "WindowRef"
   | "BrowserTab"
+  | "BrowserTabLive"
   | "Folder"
   | "AppLaunch"
   | "Url"
@@ -59,6 +60,12 @@ export interface RestoreReport {
 export interface RunningWindow {
   handle: string;
   title: string;
+  /** "tab" (browser), "folder" (Finder), or "window" (everything else) — drives
+   *  the child icon and which resource kind it registers as. */
+  kind: string;
+  /** Value registered into a group when dragged in: a URL (tab), a POSIX path
+   *  (folder), or the window handle (window). */
+  target: string;
   is_focused: boolean;
 }
 
@@ -69,6 +76,17 @@ export interface RunningApp {
    *  empty when only app-level info is available — the app is then a single
    *  activatable entry. */
   windows: RunningWindow[];
+}
+
+/** Persisted UI layout (sidebar width + saved window rect). Mirrors the backend
+ *  `LayoutSettings` — never carries Claude credentials. */
+export interface LayoutSettings {
+  panel_width: number;
+  card_height: number;
+  window_x: number | null;
+  window_y: number | null;
+  window_width: number | null;
+  window_height: number | null;
 }
 
 /** One turn of the in-app Claude prompt console. */
@@ -182,4 +200,25 @@ export interface InteractiveScreen {
   alive: boolean;
   lines: string[];
   prompt: DetectedPrompt | null;
+}
+
+/** Running Bedrock token usage for the on-screen meter. All cumulative except
+ *  the `last_*` fields (the most recent call). Content is never included. */
+export interface ClaudeUsage {
+  configured: boolean;
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  requests: number;
+  last_input: number;
+  last_output: number;
+  last_total: number;
+  /** Model context window, for gauge scaling. */
+  context_window: number;
+  /** True when the today totals are the whole account's CloudWatch usage
+   *  (all models, this region); false when only this app's local tally. */
+  account: boolean;
+  /** Region the account totals were read from (empty when app-local). */
+  region: string;
 }

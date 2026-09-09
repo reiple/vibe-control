@@ -96,6 +96,7 @@ mod pbt {
         prop_oneof![
             Just(ResourceKind::WindowRef),
             Just(ResourceKind::BrowserTab),
+            Just(ResourceKind::BrowserTabLive),
             Just(ResourceKind::Folder),
             Just(ResourceKind::AppLaunch),
             Just(ResourceKind::Url),

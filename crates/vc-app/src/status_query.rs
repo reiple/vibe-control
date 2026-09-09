@@ -80,8 +80,11 @@ impl WorkSummarizer for CloudWorkSummarizer {
             role: "user".to_string(),
             content: prompt,
         }];
+        // main's send_message now returns token usage alongside the text; the
+        // background summarizer doesn't meter tokens, so drop the usage here and
+        // keep outcome_from_reply operating on the reply text alone.
         let reply = claude::send_message(&self.token, &self.region, &self.model, &messages).await;
-        outcome_from_reply(reply)
+        outcome_from_reply(reply.map(|(text, _usage)| text))
     }
 }
 

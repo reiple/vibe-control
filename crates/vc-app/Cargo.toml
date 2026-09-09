@@ -22,6 +22,15 @@ serde_json = "1.0"
 # default-tls uses the platform TLS stack (macOS Security.framework, Windows
 # SChannel) — no OpenSSL/cmake build, robust on both targets.
 reqwest = { version = "0.13", default-features = false, features = ["json", "default-tls"] }
+# Account-wide Bedrock token usage ("today across this whole account") is read
+# from CloudWatch AWS/Bedrock metrics. Needs standard AWS credentials (the
+# Bedrock bearer token is invoke-only); when absent we fall back to the local
+# per-app tally. rustls avoids an OpenSSL build on both host and cross targets.
+aws-config = { version = "1", default-features = false, features = ["behavior-version-latest", "rustls", "rt-tokio"] }
+aws-sdk-cloudwatch = { version = "1", default-features = false, features = ["behavior-version-latest", "rustls", "rt-tokio"] }
+# Only for the bounded timeout around the CloudWatch call (tokio is already
+# pulled in by tauri + the AWS SDK; this just names it for direct use).
+tokio = { version = "1", default-features = false, features = ["time"] }
 vc-core = { path = "../vc-core" }
 vc-store = { path = "../vc-store" }
 vc-sessions = { path = "../vc-sessions" }

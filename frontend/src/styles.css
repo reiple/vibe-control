@@ -43,6 +43,8 @@
   --mono: "Space Mono", "SF Mono", "SFMono-Regular", ui-monospace, Menlo,
     Consolas, monospace;
   --condensed: var(--grotesk);
+  /* Button labels — Lato (from Google Fonts), falling back to the UI stack. */
+  --button: "Lato", var(--grotesk);
 
   /* Chassis (warm light-grey plastic) */
   --body: #d4d1c9;
@@ -94,11 +96,18 @@
 * { box-sizing: border-box; }
 body { margin: 0; background: var(--body); }
 
-/* ── Boot splash ─────────────────────────────────────────────────────────
+/* ── Boot splash / intro animation ───────────────────────────────────────
    Full-viewport overlay React renders on mount and holds until the app has
    finished its first load. Opaque + pointer-catching, so it blocks every
    click, drag, and key focus underneath until it fades out. Rendered by React
    (not static HTML) so it paints at the correct DPI scale on Windows/WebView2.
+
+   Story (see intro-animation.md): scattered, drifting application tiles are
+   pulled by a central signal toward one point, sweep in on curved paths, and
+   collapse into a single glowing control core — then VIBE CONTROL resolves.
+   Dark and holographic, carrying the TE hero-orange as the unified core so the
+   intro reads as of a piece with the product. The final fade to the light
+   chassis is itself the transition into the app.
    ------------------------------------------------------------------------- */
 .splash {
   /* Absolute (not fixed) inside the relatively-positioned .app-shell: WebView2
@@ -111,15 +120,15 @@ body { margin: 0; background: var(--body); }
   right: 0;
   bottom: 0;
   z-index: 1000;
+  overflow: hidden;
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Faint engineered grain: a soft top highlight fading to a shaded base,
-     like the EP-133 chassis catching light. */
+  /* Dark command-centre backdrop: a soft central glow lifting off deep,
+     near-black plastic — high-tech, calm, not cyberpunk. */
   background:
-    radial-gradient(130% 100% at 50% 0%, var(--edge-hi) 0%, var(--body) 45%,
-      var(--sunk) 100%);
-  transition: opacity 0.4s ease;
+    radial-gradient(120% 100% at 50% 45%, #17171c 0%, #0d0d10 58%, #08080a 100%);
+  transition: opacity 0.5s ease;
   opacity: 1;
   user-select: none;
 }
@@ -128,107 +137,240 @@ body { margin: 0; background: var(--body); }
   pointer-events: none;
 }
 
-.splash-card {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 22px;
+.intro {
+  position: absolute;
+  inset: 0;
 }
 
-/* Charcoal "rubber pad" tile cradling a glowing orange record dot — the
-   product's hero accent, reading as "powering on". */
-.splash-badge {
-  width: 76px;
-  height: 76px;
-  border-radius: 18px;
-  background: linear-gradient(180deg, var(--pad-hi) 0%, var(--pad) 60%,
-    var(--pad-edge) 100%);
+/* The scattered field of application tiles. */
+.intro-field {
+  position: absolute;
+  inset: 0;
+}
+
+/* Each tile lives at the centre and is pushed out to its scatter point by the
+   converge keyframe (via --x/--y), then swept back through a curved mid-point
+   (--mx/--my) into the core. The inner face carries only the idle float, so the
+   two motions compose cleanly. */
+.intro-icon {
+  --size: 34px;
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: var(--size);
+  height: var(--size);
+  margin: calc(var(--size) / -2) 0 0 calc(var(--size) / -2);
+  will-change: transform, opacity;
+  animation: intro-converge 5.6s cubic-bezier(0.5, 0, 0.2, 1) both;
+}
+.intro-icon-face {
+  position: relative;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 22%;
+  background: linear-gradient(150deg, rgba(255, 255, 255, 0.15),
+    rgba(255, 255, 255, 0.03));
+  border: 1px solid rgba(255, 255, 255, 0.16);
   box-shadow:
-    0 1px 0 #4a4a4d inset,
-    0 -2px 4px rgba(0, 0, 0, 0.4) inset,
-    0 10px 22px var(--shadow);
+    0 6px 18px rgba(0, 0, 0, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.18);
+  animation: intro-float 3.4s ease-in-out infinite;
+}
+/* Faint, softly-blurred tool glyph on the larger tiles — atmospheric, not a
+   literal icon set. Sits behind the tile's own light with low contrast. */
+.intro-icon-glyph {
+  position: absolute;
+  inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
+  color: rgba(255, 255, 255, 0.62);
+  opacity: 0.3;
+  filter: blur(0.6px);
 }
-.splash-rec {
-  width: 26px;
-  height: 26px;
-  border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, var(--accent-hi),
-    var(--accent) 60%, var(--accent-deep));
-  box-shadow: 0 0 0 2px rgba(240, 67, 30, 0.25);
-  animation: splash-pulse 1.15s ease-in-out infinite;
+.intro-icon.is-accent .intro-icon-glyph {
+  color: rgba(255, 210, 195, 0.8);
+  opacity: 0.38;
 }
-@keyframes splash-pulse {
-  0%, 100% {
-    box-shadow: 0 0 0 2px rgba(240, 67, 30, 0.15);
-    transform: scale(0.94);
+.intro-icon-glyph svg {
+  width: 56%;
+  height: 56%;
+}
+.intro-icon.is-accent .intro-icon-face {
+  background: linear-gradient(150deg, rgba(255, 90, 50, 0.55),
+    rgba(240, 67, 30, 0.16));
+  border-color: rgba(255, 120, 80, 0.55);
+  box-shadow:
+    0 6px 22px rgba(240, 67, 30, 0.45),
+    inset 0 1px 0 rgba(255, 255, 255, 0.28);
+}
+
+@keyframes intro-converge {
+  /* Scattered and holding (chaos). */
+  0%,
+  20% {
+    transform: translate(var(--x), var(--y)) scale(1);
+    opacity: 1;
   }
-  50% {
-    box-shadow: 0 0 0 7px rgba(240, 67, 30, 0);
-    transform: scale(1);
+  /* Sweep through the curved mid-point (attraction). */
+  55% {
+    transform: translate(var(--mx), var(--my)) scale(0.62);
+    opacity: 1;
+  }
+  /* Gathered tight at the core (organisation). */
+  82% {
+    transform: translate(0, 0) scale(0.16);
+    opacity: 0.85;
+  }
+  /* Absorbed into the unified core. */
+  100% {
+    transform: translate(0, 0) scale(0.04);
+    opacity: 0;
   }
 }
 
-.splash-word {
+/* Gentle idle drift while scattered; imperceptible once collapsed to the core. */
+@keyframes intro-float {
+  0%,
+  100% { transform: translate(0, 0); }
+  50% { transform: translate(3px, -4px); }
+}
+
+/* Central signal: a ring pulsing out from the core, cueing the attraction. */
+.intro-pulse {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 90, 50, 0.6);
+  opacity: 0;
+  animation: intro-pulse 2.2s ease-out 1s 2;
+}
+.intro-pulse--2 { animation-delay: 1.9s; }
+@keyframes intro-pulse {
+  0% { transform: scale(0.4); opacity: 0; }
+  12% { opacity: 0.75; }
+  100% { transform: scale(26); opacity: 0; }
+}
+
+/* Faint orbiting network ring that forms as the tiles gather, then fades. */
+.intro-ring {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 150px;
+  height: 150px;
+  margin: -75px 0 0 -75px;
+  border-radius: 50%;
+  border: 1px dashed rgba(255, 255, 255, 0.18);
+  opacity: 0;
+  animation: intro-ring 3s ease-out 2.6s both;
+}
+@keyframes intro-ring {
+  0% { transform: rotate(0deg) scale(0.3); opacity: 0; }
+  30% { opacity: 0.55; }
+  70% { opacity: 0.45; }
+  100% { transform: rotate(210deg) scale(1); opacity: 0; }
+}
+
+/* The unified control core: grows, flares, and settles into a steady glow. */
+.intro-core {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 16px;
+  height: 16px;
+  margin: -8px 0 0 -8px;
+  border-radius: 50%;
+  background: radial-gradient(circle at 40% 35%, #ff7a52,
+    var(--accent) 55%, var(--accent-deep));
+  opacity: 0;
+  animation: intro-core 3.4s cubic-bezier(0.3, 0, 0.2, 1) 2.8s both;
+}
+@keyframes intro-core {
+  0% { opacity: 0; transform: scale(0); box-shadow: 0 0 0 0 rgba(240, 67, 30, 0); }
+  35% {
+    opacity: 1;
+    transform: scale(1.7);
+    box-shadow: 0 0 36px 9px rgba(240, 67, 30, 0.55);
+  }
+  60% {
+    transform: scale(2.3);
+    box-shadow: 0 0 52px 15px rgba(240, 67, 30, 0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(2.05);
+    box-shadow: 0 0 44px 11px rgba(240, 67, 30, 0.45);
+  }
+}
+
+/* Title resolves below the settled core (unification → VIBE CONTROL). */
+.intro-title-wrap {
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: calc(50% + 46px);
+  text-align: center;
+  pointer-events: none;
+}
+.intro-title {
   font-family: var(--display);
   font-weight: 700;
-  font-size: 26px;
-  letter-spacing: 0.06em;
-  color: var(--ink);
+  font-size: 34px;
+  letter-spacing: 0.22em;
+  color: #f3f1ec;
+  text-shadow: 0 0 20px rgba(240, 67, 30, 0.35);
+  opacity: 0;
+  animation: intro-title 1.6s cubic-bezier(0.2, 0, 0.2, 1) 4.1s both;
 }
-
-/* Row of LCD-green segment blocks doing a left-to-right chase, echoing a
-   hardware boot sequence on the device's readout. */
-.splash-leds {
-  display: flex;
-  gap: 8px;
+@keyframes intro-title {
+  0% { opacity: 0; transform: translateY(14px); letter-spacing: 0.42em; }
+  60% { opacity: 1; }
+  100% { opacity: 1; transform: translateY(0); letter-spacing: 0.22em; }
 }
-.splash-leds span {
-  width: 16px;
-  height: 7px;
-  border-radius: 2px;
-  background: var(--lcd-seg-off);
-  animation: splash-chase 1.2s ease-in-out infinite;
-}
-.splash-leds span:nth-child(2) { animation-delay: 0.12s; }
-.splash-leds span:nth-child(3) { animation-delay: 0.24s; }
-.splash-leds span:nth-child(4) { animation-delay: 0.36s; }
-.splash-leds span:nth-child(5) { animation-delay: 0.48s; }
-@keyframes splash-chase {
-  0%, 70%, 100% {
-    background: var(--lcd-seg-off);
-    box-shadow: none;
-  }
-  35% {
-    background: var(--lcd-seg);
-    box-shadow: 0 0 6px rgba(28, 34, 26, 0.6);
-  }
-}
-
-.splash-cap {
+.intro-sub {
+  margin-top: 11px;
   font-family: var(--mono);
   text-transform: uppercase;
-  letter-spacing: 0.24em;
-  font-size: 10px;
-  color: var(--ink-muted);
-  animation: splash-blink 1.6s steps(1, end) infinite;
+  letter-spacing: 0.34em;
+  font-size: 11px;
+  color: rgba(255, 255, 255, 0.55);
+  opacity: 0;
+  animation: intro-sub 1.2s ease 4.8s both;
 }
-@keyframes splash-blink {
-  0%, 60% { opacity: 1; }
-  80%, 100% { opacity: 0.35; }
+@keyframes intro-sub {
+  0% { opacity: 0; }
+  100% { opacity: 0.85; }
 }
 
-/* Respect reduced-motion: keep the splash, drop the animation. */
+/* Respect reduced-motion: skip the choreography, show the resolved end state
+   (a steady core with the title) and no movement. */
 @media (prefers-reduced-motion: reduce) {
-  .splash,
-  .splash-rec,
-  .splash-leds span,
-  .splash-cap {
+  .splash { transition: none; }
+  .intro-field,
+  .intro-pulse,
+  .intro-ring { display: none; }
+  .intro-icon,
+  .intro-icon-face { animation: none; }
+  .intro-core {
     animation: none;
-    transition: none;
+    opacity: 1;
+    transform: scale(2.05);
+    box-shadow: 0 0 44px 11px rgba(240, 67, 30, 0.45);
   }
+  .intro-title,
+  .intro-sub {
+    animation: none;
+    opacity: 1;
+    transform: none;
+    letter-spacing: 0.22em;
+  }
+  .intro-sub { opacity: 0.85; }
 }
 
 /* Small technical-caption utility (uppercase mono, wide tracking). */
@@ -249,6 +391,11 @@ body { margin: 0; background: var(--body); }
   overflow: hidden;
   position: relative; /* containing block for the boot splash overlay */
 }
+
+/* Native title bar is a transparent Overlay: the sidebar (--sunk) and main
+   (--body) each run to the very top edge keeping their own colour — no seam —
+   and the traffic lights float over the sidebar header. The extra top padding
+   on both headers (below) clears the lights and keeps the two titles aligned. */
 .app {
   display: flex;
   flex: 1;
@@ -271,7 +418,8 @@ body { margin: 0; background: var(--body); }
 }
 
 .sidebar-header {
-  padding: 16px 16px 10px;
+  /* Top padding clears the overlaid macOS traffic lights. */
+  padding: 34px 16px 10px;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -382,19 +530,32 @@ body { margin: 0; background: var(--body); }
 
 /* An app with several windows clicks to expand rather than drag-only. */
 .running-item.has-windows { cursor: pointer; }
-/* Window count + expand chevron, pushed to the row's trailing edge. */
-.running-count {
+/* Expand chevron + item count, pushed to the row's trailing edge. It's a real
+   button so expanding never collides with clicking the row to activate. */
+.running-expand {
   margin-left: auto;
-  padding-left: 8px;
+  padding: 2px 4px;
+  border: none;
+  background: transparent;
+  border-radius: 0;
+  /* No keycap chrome — kill the global button box-shadow so only the glyph shows. */
+  box-shadow: none;
+  text-transform: none;
+  letter-spacing: 0;
+  font-weight: 400;
   font-family: var(--mono);
   font-variant-numeric: tabular-nums;
   font-size: 10px;
   color: var(--ink-muted);
+  cursor: pointer;
   flex-shrink: 0;
 }
+.running-expand:hover { background: transparent; color: var(--ink); filter: none; }
+.running-expand:active { transform: none; box-shadow: none; filter: none; }
+.running-expand:focus-visible { outline: none; box-shadow: none; }
 
-/* One live window/tab inside an expanded app group (FR-2.8). Indented under
-   the app icon; not drag-registerable itself (app-level DnD is unchanged). */
+/* One live window/tab/folder inside an expanded app group (FR-2.2/2.8).
+   Indented under the app icon; drag-registerable into a context group. */
 .running-window {
   display: flex;
   align-items: center;
@@ -405,6 +566,23 @@ body { margin: 0; background: var(--body); }
   user-select: none;
 }
 .running-window:hover { background: var(--bone); }
+/* Placeholder rows (Loading… / No windows or tabs): non-interactive, dimmed. */
+.running-window.muted {
+  color: var(--ink-muted);
+  font-size: 12px;
+  cursor: default;
+}
+.running-window.muted:hover { background: transparent; }
+/* Actionable permission hint: clickable (re-check after granting), tinted to
+   read as a call to action rather than a dead placeholder. */
+.running-window.muted.access-needed {
+  color: var(--rust, #c4501e);
+  cursor: pointer;
+}
+.running-window.muted.access-needed:hover {
+  background: var(--bone);
+  text-decoration: underline;
+}
 .win-dot {
   width: 7px;
   height: 7px;
@@ -424,6 +602,30 @@ body { margin: 0; background: var(--body); }
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+/* Informational row shown under an expanded browser when its tabs are still
+   loading or couldn't be read — not clickable, quieter than a real tab. */
+.running-window-hint {
+  cursor: default;
+  opacity: 0.7;
+  flex-wrap: wrap;
+  row-gap: 4px;
+}
+.running-window-hint:hover { background: transparent; }
+.running-window-hint .win-title {
+  font-style: italic;
+  white-space: normal;
+}
+/* Explicit "bring forward and re-read" action inside the fallback hint — the
+   opt-in that foregrounds a background browser window (accessibility-tree
+   readiness / FR-10.7). */
+.reveal-tabs {
+  font-family: var(--grotesk);
+  font-size: 11px;
+  padding: 2px 8px;
+  cursor: pointer;
+  white-space: nowrap;
 }
 
 /* ── Buttons = EP-133 keys: SHARP · FLAT · SOFT ────────────
@@ -458,10 +660,10 @@ button {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  font-family: var(--grotesk);
+  font-family: var(--button);
   text-transform: uppercase;
   letter-spacing: 0.07em;
-  font-weight: 600;
+  font-weight: 700;
   font-size: 12px;
   color: var(--cap-ink);
   background: linear-gradient(180deg, var(--face-a) 0%, var(--face-b) 60%, var(--face-c) 100%);
@@ -612,7 +814,12 @@ button.mini.danger {
 /* ── Right: main dashboard = the labeled pad grid ───────── */
 .main {
   flex: 1;
-  padding: 20px 24px;
+  /* No TOP padding here: it now lives on .main-header so the header (which is the
+     window drag region) owns the top strip. On the sidebar the 34px clearance is
+     the header's own padding, so its top edge drags + double-click-maximizes; the
+     main panel must match, or grabbing the top of the right pane hits non-draggable
+     .main padding. Horizontal + bottom padding stay for content below the header. */
+  padding: 0 24px 20px;
   overflow-y: auto;
   background: var(--body);
 }
@@ -622,9 +829,12 @@ button.mini.danger {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  margin-bottom: 18px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--keyline);
+  /* Bleed into .main's horizontal padding so the draggable top strip spans the
+     full width (incl. corners); re-add the side inset via padding so the title and
+     actions still line up with the content below. 34px top clears the traffic
+     lights and makes the whole top band a drag region (FR: move + dbl-click max). */
+  margin: 0 -24px 18px;
+  padding: 34px 24px 0;
 }
 .main-header h2 {
   display: flex;
@@ -651,6 +861,196 @@ button.mini.danger {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* ── KO II display: wide black LCD set into the chassis ─────
+   A dark dot-matrix-style screen behind glass — recessed with an inner
+   shadow, framed by a thin dark bezel, lit by a dim phosphor readout, and
+   finished with a glossy diagonal glare + top reflection so it looks like
+   glass catching the room light (à la Teenage Engineering EP-133 K.O. II). */
+.ko-screen {
+  margin-bottom: 18px;
+  padding: 3px; /* the bezel frame */
+  border-radius: 0; /* sharp, square corners */
+  background: linear-gradient(180deg, #46433d 0%, #2a2823 100%);
+  box-shadow: 0 1px 0 var(--edge-hi), inset 0 1px 1px rgba(0, 0, 0, 0.45),
+    0 2px 6px rgba(30, 29, 26, 0.25);
+}
+.ko-screen-glass {
+  position: relative;
+  overflow: hidden;
+  height: 88px;
+  padding: 12px 24px;
+  border-radius: 0; /* sharp, square corners */
+  display: flex;
+  align-items: stretch;
+  justify-content: space-between;
+  gap: 24px;
+  /* black OLED/LCD face with a faint top-lit sheen baked in */
+  background: radial-gradient(130% 150% at 28% -10%, #191d20 0%, #0b0d0f 55%, #050607 100%);
+  box-shadow: inset 0 2px 10px rgba(0, 0, 0, 0.85),
+    inset 0 0 0 1px rgba(0, 0, 0, 0.7), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+/* Single glossy reflection in the top-right, like a glass tablet catching
+   light: one crisp diagonal edge where the dark screen meets the sheen, then
+   a soft fade out toward the corner. */
+.ko-screen-glare {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  background: linear-gradient(
+    118deg,
+    transparent 0 58%,
+    rgba(255, 255, 255, 0.13) 58.4%,
+    rgba(255, 255, 255, 0.06) 76%,
+    rgba(255, 255, 255, 0.02) 88%,
+    transparent 96%
+  );
+}
+
+/* ── Graphical Claude usage meter on the black LCD (K.O. II, primary hues) ── */
+
+/* Left column: title row, big token counter, legend chips. */
+.ko-usage {
+  position: relative;
+  z-index: 1;
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 8px;
+}
+.ko-usage-model {
+  margin-left: auto;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  font-size: 9px;
+  font-weight: 700;
+  color: #0a0c0e;
+  background: #ffd21e;
+  padding: 2px 7px;
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(255, 210, 30, 0.5);
+}
+.ko-usage-total {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.ko-usage-total b {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 32px;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  color: #ffcf33; /* bright amber LED counter */
+  text-shadow: 0 0 10px rgba(255, 190, 40, 0.55), 0 0 2px rgba(255, 220, 120, 0.9);
+}
+.ko-legend {
+  display: flex;
+  gap: 14px;
+  font-family: var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+.ko-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #b0bbb2;
+}
+.ko-chip em {
+  width: 8px;
+  height: 8px;
+  border-radius: 1px;
+  font-style: normal;
+}
+.ko-chip.in em {
+  background: #22c6e0;
+  box-shadow: 0 0 6px rgba(34, 198, 224, 0.9);
+}
+.ko-chip.out em {
+  background: #ff8f1f;
+  box-shadow: 0 0 6px rgba(255, 143, 31, 0.9);
+}
+.ko-chip.req em {
+  background: #35c46a;
+  box-shadow: 0 0 6px rgba(53, 196, 106, 0.9);
+}
+
+/* Right column: last-call readout + small group/app counts. */
+.ko-side {
+  position: relative;
+  z-index: 1;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  justify-content: center;
+  gap: 12px;
+}
+.ko-last {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+}
+.ko-last b {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 22px;
+  line-height: 1;
+  color: #ffcf33; /* amber LED, matches the today counter */
+  text-shadow: 0 0 8px rgba(255, 190, 40, 0.45), 0 0 2px rgba(255, 220, 120, 0.85);
+}
+.ko-last i {
+  font-family: var(--mono);
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.16em;
+  font-size: 9px;
+  color: #6f7d73;
+}
+.ko-mini {
+  display: flex;
+  gap: 14px;
+  align-items: baseline;
+}
+.ko-mini b {
+  font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 700;
+  font-size: 15px;
+  color: #b9d3bc;
+  text-shadow: 0 0 6px rgba(150, 210, 165, 0.3);
+}
+.ko-mini i {
+  font-family: var(--mono);
+  font-style: normal;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  font-size: 8px;
+  color: #5f7066;
+  margin-left: 4px;
+}
+.ko-led {
+  width: 9px;
+  height: 9px;
+  border-radius: 50%;
+  background: #38423b;
+}
+.ko-led.on {
+  background: #57e08a;
+  box-shadow: 0 0 6px rgba(87, 224, 138, 0.8), 0 0 12px rgba(87, 224, 138, 0.4);
+}
+.ko-led.off {
+  background: #d0512a;
+  box-shadow: 0 0 5px rgba(208, 81, 42, 0.6);
 }
 
 .error {
@@ -763,7 +1163,32 @@ button.mini.danger {
 .group-actions {
   margin-left: auto;
   display: flex;
+  align-items: center;
   gap: 6px;
+}
+
+/* Close (×) on each group card — a bare glyph, NOT a key: no face, wall, bevel
+   or cast, just the × mark. Still keyboard-operable (role=button + tabindex). */
+.close-group {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 2px;
+  font-family: var(--grotesk);
+  font-size: 19px;
+  line-height: 1;
+  color: var(--ink-muted);
+  cursor: pointer;
+  user-select: none;
+}
+.close-group:hover {
+  color: var(--ink);
+}
+.close-group:focus-visible {
+  outline: none;
+  color: var(--ink);
+  box-shadow: 0 0 0 2px var(--body), 0 0 0 4px #8a8780;
+  border-radius: 3px;
 }
 
 .resource-list {
@@ -820,6 +1245,35 @@ button.mini.danger {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* Bare × to drop a single item from the group — no button chrome, just the mark,
+   pushed to the far right of the row. Dim by default, rust on hover. */
+.resource-remove {
+  flex: none;
+  margin-left: auto;
+  border: 0;
+  background: none;
+  /* No keycap chrome — kill the global button box-shadow/radius so only the × shows. */
+  box-shadow: none;
+  border-radius: 0;
+  text-transform: none;
+  letter-spacing: 0;
+  padding: 0 2px;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 1;
+  color: var(--ink-muted);
+  opacity: 0.55;
+  cursor: pointer;
+  transition: opacity 0.12s ease, color 0.12s ease;
+}
+.resource-remove:hover {
+  opacity: 1;
+  color: var(--rust, #c4501e);
+  filter: none;
+}
+.resource-remove:active { transform: none; box-shadow: none; filter: none; }
+.resource-remove:focus-visible { outline: none; box-shadow: none; }
 
 /* ── Restore report = recessed instrument readout ───────── */
 .restore-report {
@@ -1315,6 +1769,72 @@ button.mini.danger {
 @media (prefers-reduced-motion: reduce) {
   .modal-backdrop,
   .modal { animation: none; }
+}
+
+/* ── Full-conversation viewer (FR-12.3 / AC-17) ── */
+.conversation-modal {
+  width: min(720px, 100%);
+  max-height: min(80vh, 720px);
+  padding: 16px 16px 12px;
+  gap: 10px;
+}
+.conversation-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+.conversation-head .modal-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.conversation-body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 6px 4px 2px;
+}
+.conversation-empty {
+  font-family: var(--mono);
+  font-size: 12px;
+  color: var(--ink-muted);
+  padding: 24px 0;
+  text-align: center;
+}
+.conv-turn {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--sunk);
+  box-shadow: inset 0 1px 0 var(--edge-hi);
+}
+.conv-turn.user {
+  background: var(--panel);
+  border: 1px solid var(--keyline);
+}
+.conv-role {
+  font-family: var(--display);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--ink-muted);
+}
+.conv-text {
+  margin: 0;
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--ink);
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 /* ── Bottom: the Claude prompt console = a docked control strip ── */

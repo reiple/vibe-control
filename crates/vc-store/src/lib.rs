@@ -88,6 +88,28 @@ impl JsonBundleStore {
             .map_err(|e| CoreError::Corrupt(format!("Cannot rename analysis cache: {}", e)))?;
         Ok(())
     }
+
+    /// Durably write `bytes` to `path` via a temp-file swap.
+    ///
+    /// Writes to `<path>.tmp` first, then atomically `rename`s it over `path`
+    /// so a reader never observes a half-written file. On ANY failure (write or
+    /// rename) the temp file is removed before returning so a crash/full-disk
+    /// mid-save leaves no orphaned `.tmp` behind (see known-deviations C1/C2).
+    fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+        let temp_path = PathBuf::from(format!("{}.tmp", path.display()));
+
+        if let Err(e) = fs::write(&temp_path, bytes) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(CoreError::Corrupt(format!("Cannot write temp file: {}", e)));
+        }
+
+        if let Err(e) = fs::rename(&temp_path, path) {
+            let _ = fs::remove_file(&temp_path);
+            return Err(CoreError::Corrupt(format!("Cannot rename file: {}", e)));
+        }
+
+        Ok(())
+    }
 }
 
 impl BundleStore for JsonBundleStore {
@@ -104,19 +126,8 @@ impl BundleStore for JsonBundleStore {
     }
 
     fn save(&self, bundles: &[WorkBundle]) -> Result<()> {
-        let path = self.bundles_path();
-        let temp_path = PathBuf::from(format!("{}.tmp", path.display()));
-
-        // Serialize to temp file
         let bytes = vc_core::migrate::serialize(bundles)?;
-        fs::write(&temp_path, bytes)
-            .map_err(|e| CoreError::Corrupt(format!("Cannot write temp file: {}", e)))?;
-
-        // Atomic rename
-        fs::rename(&temp_path, &path)
-            .map_err(|e| CoreError::Corrupt(format!("Cannot rename file: {}", e)))?;
-
-        Ok(())
+        Self::atomic_write(&self.bundles_path(), &bytes)
     }
 
     fn load_settings(&self) -> Result<AppSettings> {
@@ -137,10 +148,7 @@ impl BundleStore for JsonBundleStore {
         let bytes = serde_json::to_vec(settings)
             .map_err(|e| CoreError::Corrupt(format!("Cannot serialize settings: {}", e)))?;
 
-        fs::write(&path, bytes)
-            .map_err(|e| CoreError::Corrupt(format!("Cannot write settings: {}", e)))?;
-
-        Ok(())
+        Self::atomic_write(&path, &bytes)
     }
 }
 
@@ -216,6 +224,43 @@ mod tests {
         // Corrupt file must degrade to an empty cache, never panic or error.
         let cache = store.load_analysis_cache();
         assert!(cache.entries.is_empty());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// C1: a successful save leaves no orphaned `.tmp` file behind.
+    #[test]
+    fn test_save_leaves_no_temp_file() {
+        let (store, dir) = temp_store("no-temp");
+        store.save(&[WorkBundle::new("A")]).unwrap();
+        let temp = dir.join("bundles.json.tmp");
+        assert!(!temp.exists(), "temp file should be renamed away, not left behind");
+        assert!(dir.join("bundles.json").exists());
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// C1: when the rename cannot land (store dir removed after construction),
+    /// save() fails AND cleans up its temp file rather than leaking it.
+    #[test]
+    fn test_save_cleans_temp_on_failure() {
+        let (store, dir) = temp_store("cleanup");
+        // Remove the store dir so both the temp write and rename target are gone.
+        fs::remove_dir_all(&dir).unwrap();
+        let result = store.save(&[WorkBundle::new("A")]);
+        assert!(result.is_err(), "save into a missing dir must fail");
+        assert!(!dir.join("bundles.json.tmp").exists(), "temp file must be cleaned up on failure");
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    /// C2: settings save is atomic (temp+rename) and roundtrips, leaving no `.tmp`.
+    #[test]
+    fn test_settings_atomic_roundtrip() {
+        let (store, dir) = temp_store("settings");
+        let settings = AppSettings { panel_width: 321.0, ..AppSettings::default() };
+        store.save_settings(&settings).unwrap();
+
+        assert!(!dir.join("settings.json.tmp").exists(), "settings temp file should be renamed away");
+        let loaded = store.load_settings().unwrap();
+        assert_eq!(loaded.panel_width, 321.0);
         let _ = fs::remove_dir_all(&dir);
     }
 }

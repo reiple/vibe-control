@@ -75,10 +75,64 @@ pub fn claude_process_running() -> Option<bool> {
     }))
 }
 
+/// Whether this process holds macOS **Accessibility** permission — required for
+/// the `System Events` pass behind per-instance window listing (VS Code /
+/// Terminal / any non-browser, non-Finder app). Window *titles* on modern macOS
+/// are permission-gated, so this cannot be worked around in code.
+///
+/// When `prompt` is true and permission is missing, macOS shows the one-time
+/// "allow Accessibility" dialog for THIS app; the user must click Allow (there
+/// is no way to grant it programmatically). Because the per-window scan runs via
+/// an `osascript` child whose *responsible process* is this app, granting the
+/// app authorizes those System Events calls too — the same attribution that lets
+/// Safari/Chrome tab reads work once Automation is allowed.
+#[cfg(target_os = "macos")]
+pub fn accessibility_trusted(prompt: bool) -> bool {
+    use core_foundation::base::TCFType;
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::string::{CFString, CFStringRef};
+
+    #[link(name = "ApplicationServices", kind = "framework")]
+    extern "C" {
+        fn AXIsProcessTrustedWithOptions(options: CFDictionaryRef) -> bool;
+        static kAXTrustedCheckOptionPrompt: CFStringRef;
+    }
+
+    // SAFETY: `kAXTrustedCheckOptionPrompt` is a framework-owned constant string
+    // (get-rule); the options dict is a well-formed {CFString: CFBoolean} that
+    // `AXIsProcessTrustedWithOptions` only reads.
+    unsafe {
+        let key = CFString::wrap_under_get_rule(kAXTrustedCheckOptionPrompt);
+        let val = if prompt {
+            CFBoolean::true_value()
+        } else {
+            CFBoolean::false_value()
+        };
+        let opts = CFDictionary::from_CFType_pairs(&[(key.as_CFType(), val.as_CFType())]);
+        AXIsProcessTrustedWithOptions(opts.as_concrete_TypeRef())
+    }
+}
+
+/// Non-macOS builds have no Accessibility gate; treat as always trusted.
+#[cfg(not(target_os = "macos"))]
+pub fn accessibility_trusted(_prompt: bool) -> bool {
+    true
+}
+
 /// One app grouped with its live windows:
 /// `(display name, bundle id, [(handle, title, is_focused)])`.
 #[cfg(target_os = "macos")]
 type AppWindows = (String, Option<String>, Vec<(String, String, bool)>);
+
+/// One expandable child of an app in the running-apps list:
+/// `(kind, handle, title, target, is_focused)` where `kind` is
+/// `"tab"` | `"folder"` | `"window"`. `target` is the value registered into a
+/// group (a URL, a POSIX folder path, or a window handle); `handle` activates
+/// the child (`app\u{1f}title\u{1f}idx` for windows, `Finder\u{1f}name` for
+/// folders, `app\u{1f}url` for tabs).
+#[cfg(target_os = "macos")]
+pub type AppChild = (String, String, String, String, bool);
 
 #[cfg(target_os = "macos")]
 pub struct MacWindowEnumerator;
@@ -246,6 +300,254 @@ function run() {
         }
         map
     }
+
+    /// Lazily enumerate one app's expandable children when the user expands it in
+    /// the running-apps list. Kept off the fast `NSWorkspace` app-list path so the
+    /// left panel never stalls on the slow, permission-gated per-window scan. Each
+    /// query is bounded by an AppleScript `with timeout`, so one unresponsive app
+    /// fails fast instead of hanging the UI. Dispatch by app:
+    /// - Safari / Google Chrome → per-tab children (target = URL)
+    /// - Finder → per-window folder children (target = POSIX path)
+    /// - everything else → per-window children (target = window handle)
+    pub fn list_app_children(app_name: &str, _bundle_id: Option<&str>) -> Vec<AppChild> {
+        match app_name {
+            "Safari" => Self::browser_tabs("Safari", "name", "current tab"),
+            "Google Chrome" => Self::browser_tabs("Google Chrome", "title", "active tab"),
+            "Finder" => Self::finder_folders(),
+            other => Self::app_windows(other),
+        }
+    }
+
+    /// Browser tabs (title + URL) across all windows; the active tab of each
+    /// window is flagged focused. `title_prop`/`curtab_prop` differ per browser
+    /// (Safari: `name`/`current tab`; Chrome: `title`/`active tab`).
+    fn browser_tabs(app: &str, title_prop: &str, curtab_prop: &str) -> Vec<AppChild> {
+        let esc_app = app.replace('\\', "\\\\").replace('"', "\\\"");
+        // IMPORTANT: `tab` is a terminology word inside `tell application
+        // "Safari"/"Google Chrome"` — both dictionaries define a `tab` class — so the
+        // bare AppleScript `tab` constant coerces to the literal text "tab" instead of
+        // an ASCII tab, corrupting the delimiter. We therefore compute a unit-separator
+        // delimiter (U+001F, which never occurs in titles/URLs) OUTSIDE the tell block,
+        // where no app terminology can shadow it, and split on it in Rust.
+        let script = format!(
+            "set fs to (character id 31)\n\
+             set out to \"\"\n\
+             tell application \"{esc_app}\"\n\
+             try\n\
+             with timeout of 3 seconds\n\
+             repeat with w in windows\n\
+             set curT to missing value\n\
+             try\n\
+             set curT to {curtab_prop} of w\n\
+             end try\n\
+             repeat with t in tabs of w\n\
+             set foc to \"0\"\n\
+             try\n\
+             if (t is curT) then set foc to \"1\"\n\
+             end try\n\
+             set out to out & foc & fs & ({title_prop} of t) & fs & (URL of t) & linefeed\n\
+             end repeat\n\
+             end repeat\n\
+             end timeout\n\
+             end try\n\
+             end tell\n\
+             return out"
+        );
+        let Some(out) = run_osascript(&script) else {
+            return vec![];
+        };
+        out.lines()
+            .filter_map(|line| {
+                let mut parts = line.splitn(3, '\u{1f}');
+                let foc = parts.next().unwrap_or("0").trim() == "1";
+                let title = parts.next().unwrap_or("").trim();
+                let url = parts.next().unwrap_or("").trim();
+                if url.is_empty() {
+                    return None;
+                }
+                let title = if title.is_empty() { url } else { title };
+                let handle = format!("{app}\u{1f}{url}");
+                Some((
+                    "tab".to_string(),
+                    handle,
+                    title.to_string(),
+                    url.to_string(),
+                    foc,
+                ))
+            })
+            .collect()
+    }
+
+    /// Finder windows as folder children: window name + the POSIX path it shows.
+    fn finder_folders() -> Vec<AppChild> {
+        // IMPORTANT: iterate `Finder window i` BY INDEX, not `repeat with w in
+        // Finder windows`. The `repeat with w in ...` form makes Finder resolve
+        // `name of w` against the window's *selection/contents* — it yields the
+        // enclosed file names with empty targets, so every row got dropped and the
+        // group showed nothing. Indexing returns one row per actual window.
+        // `tab` is Finder terminology, so the U+001F delimiter is computed outside
+        // the tell block where no app terminology can shadow it.
+        const SCRIPT: &str = "set fs to (character id 31)\n\
+             set out to \"\"\n\
+             tell application \"Finder\"\n\
+             try\n\
+             with timeout of 2 seconds\n\
+             set n to (count of Finder windows)\n\
+             repeat with i from 1 to n\n\
+             set w to Finder window i\n\
+             set nm to \"\"\n\
+             try\n\
+             set nm to name of w\n\
+             end try\n\
+             set p to \"\"\n\
+             try\n\
+             set p to POSIX path of (target of w as alias)\n\
+             end try\n\
+             set out to out & nm & fs & p & linefeed\n\
+             end repeat\n\
+             end timeout\n\
+             end try\n\
+             end tell\n\
+             return out";
+        let Some(out) = run_osascript(SCRIPT) else {
+            return vec![];
+        };
+        // Basename of a POSIX path or a name that happens to be a path: drop a
+        // trailing slash, then take the last segment. Empty → the input.
+        fn basename(s: &str) -> &str {
+            let s = s.trim_end_matches('/');
+            s.rsplit('/').next().filter(|b| !b.is_empty()).unwrap_or(s)
+        }
+        out.lines()
+            .filter_map(|line| {
+                let (name, path) = line.split_once('\u{1f}')?;
+                let name = name.trim();
+                let path = path.trim();
+                // Only a truly blank row (the trailing linefeed) is dropped. A
+                // window WITHOUT a filesystem target (Recents / saved search /
+                // AirDrop / network) is still a real instance the user wants to
+                // see, so it is kept and activated by window name instead of path.
+                if name.is_empty() && path.is_empty() {
+                    return None;
+                }
+                let title = if !path.is_empty() {
+                    basename(path).to_string()
+                } else {
+                    // Saved-search / smart-folder windows: show a clean name.
+                    basename(name)
+                        .trim_end_matches(".cannedSearch")
+                        .trim_end_matches(".savedSearch")
+                        .to_string()
+                };
+                let title = if title.is_empty() {
+                    name.to_string()
+                } else {
+                    title
+                };
+                // Handle carries the raw window name so a path-less window can be
+                // raised by name (see `activate_child`).
+                let handle = format!("Finder\u{1f}{name}");
+                Some((
+                    "folder".to_string(),
+                    handle,
+                    title,
+                    path.to_string(),
+                    false,
+                ))
+            })
+            .collect()
+    }
+
+    /// Raise an already-open Finder window by its name (title). Used for windows
+    /// that have no filesystem path (Recents / saved searches) and therefore
+    /// cannot be re-opened via `open <path>`. Best-effort: brings Finder frontmost
+    /// even if no window name matches.
+    pub fn activate_finder_window(name: &str) -> Result<()> {
+        let esc = name.replace('\\', "\\\\").replace('"', "\\\"");
+        let script = format!(
+            "tell application \"Finder\"\n\
+             activate\n\
+             try\n\
+             with timeout of 2 seconds\n\
+             set n to (count of Finder windows)\n\
+             repeat with i from 1 to n\n\
+             set w to Finder window i\n\
+             if (name of w) is \"{esc}\" then\n\
+             set index of w to 1\n\
+             exit repeat\n\
+             end if\n\
+             end repeat\n\
+             end timeout\n\
+             end try\n\
+             end tell"
+        );
+        run_osascript(&script).map(|_| ()).ok_or_else(|| {
+            CoreError::Internal("Finder window activation failed (grant Automation)".into())
+        })
+    }
+
+    /// Windows of a SINGLE process via `System Events`, bounded by a 2s timeout so
+    /// an unresponsive app fails fast instead of stalling. `System Events` returns
+    /// a process's windows front-to-back, so window index 1 is that app's own
+    /// front window — flagged focused, the "active window in this group" marker
+    /// (FR-2.4). (It is keyed on the process's own z-order, NOT on whether the app
+    /// is system-frontmost — vibe-control itself is frontmost while the user reads
+    /// this list, so a system-frontmost gate would never light up.)
+    fn app_windows(app_name: &str) -> Vec<AppChild> {
+        let esc = app_name.replace('\\', "\\\\").replace('"', "\\\"");
+        // Delimiter computed outside the tell block (see `browser_tabs`) so no
+        // System Events terminology can shadow it. Each row is
+        // `foc <fs> idx <fs> title`; the 1-based window index disambiguates two
+        // windows that share a title (common for Terminal/VS Code) so each is
+        // independently registerable and focusable.
+        let script = format!(
+            "set fs to (character id 31)\n\
+             set out to \"\"\n\
+             tell application \"System Events\"\n\
+             try\n\
+             with timeout of 2 seconds\n\
+             set p to first process whose name is \"{esc}\"\n\
+             set idx to 0\n\
+             repeat with w in windows of p\n\
+             set idx to idx + 1\n\
+             set wt to \"\"\n\
+             try\n\
+             set wt to name of w\n\
+             end try\n\
+             set foc to \"0\"\n\
+             if (idx is 1) then set foc to \"1\"\n\
+             set out to out & foc & fs & idx & fs & wt & linefeed\n\
+             end repeat\n\
+             end timeout\n\
+             end try\n\
+             end tell\n\
+             return out"
+        );
+        let Some(out) = run_osascript(&script) else {
+            return vec![];
+        };
+        out.lines()
+            .filter_map(|line| {
+                let mut parts = line.splitn(3, '\u{1f}');
+                let foc = parts.next().unwrap_or("0").trim() == "1";
+                let idx = parts.next().unwrap_or("").trim();
+                let title = parts.next().unwrap_or("").trim();
+                if title.is_empty() {
+                    return None;
+                }
+                // handle = `app\u{1f}title\u{1f}idx`; `focus_window` raises the
+                // window at this exact position, falling back to a title match.
+                let handle = format!("{app_name}\u{1f}{title}\u{1f}{idx}");
+                Some((
+                    "window".to_string(),
+                    handle.clone(),
+                    title.to_string(),
+                    handle,
+                    foc,
+                ))
+            })
+            .collect()
+    }
 }
 
 #[cfg(target_os = "macos")]
@@ -270,23 +572,26 @@ impl MacBrowserTabReader {
 
     /// `title_prop` differs: Safari exposes `name of t`, Chrome exposes `title of t`.
     fn read_app_tabs(app: &str, title_prop: &str) -> Vec<(String, String)> {
+        // `tab` collides with browser `tab` terminology inside the tell block, so use
+        // a unit-separator (U+001F) delimiter computed outside it.
         let script = format!(
-            "tell application \"{app}\"\n\
+            "set fs to (character id 31)\n\
              set out to \"\"\n\
+             tell application \"{app}\"\n\
              repeat with w in windows\n\
              repeat with t in tabs of w\n\
-             set out to out & ({title_prop} of t) & tab & (URL of t) & linefeed\n\
+             set out to out & ({title_prop} of t) & fs & (URL of t) & linefeed\n\
              end repeat\n\
              end repeat\n\
-             return out\n\
-             end tell"
+             end tell\n\
+             return out"
         );
         let Some(out) = run_osascript(&script) else {
             return vec![];
         };
         out.lines()
             .filter_map(|line| {
-                let (title, url) = line.split_once('\t')?;
+                let (title, url) = line.split_once('\u{1f}')?;
                 let url = url.trim();
                 if url.is_empty() {
                     return None;
@@ -329,36 +634,121 @@ impl MacLauncher {
     }
 
     /// Bring a SPECIFIC window to the front (FR-2.8 / FR-4.1). `handle` is
-    /// `display_name\u{1f}title` as produced by `list_running_windows`: activate
-    /// the app first (works without Accessibility), then best-effort raise the
-    /// window whose title matches via `System Events` `AXRaise`. Raising the
-    /// exact window needs Accessibility permission; failure is non-fatal because
-    /// the app is already frontmost. When the handle carries no title part, this
-    /// degrades to plain app activation (single-window consistency).
+    /// `display_name\u{1f}title` or `display_name\u{1f}title\u{1f}idx` (the 1-based
+    /// window index, when known) as produced by `app_windows`/`list_running_windows`.
+    /// Activates the app first (works without Accessibility), then best-effort
+    /// raises the exact window via `System Events` `AXRaise`: by window index first
+    /// (unambiguous when two windows share a title), falling back to a title match
+    /// for older, index-less handles. Raising the exact window needs Accessibility
+    /// permission; failure is non-fatal because the app is already frontmost. When
+    /// the handle carries neither title nor index, this degrades to plain app
+    /// activation (single-window consistency). Also used to restore a WindowRef
+    /// resource, so a closed app is relaunched by the leading `open_app`.
     pub fn focus_window(handle: &str) -> Result<()> {
-        let (app, title) = handle.split_once('\u{1f}').unwrap_or((handle, ""));
-        // Always bring the app forward first.
+        let mut parts = handle.splitn(3, '\u{1f}');
+        let app = parts.next().unwrap_or(handle);
+        let title = parts.next().unwrap_or("");
+        let idx: Option<u32> = parts.next().and_then(|s| s.trim().parse().ok());
+        // Always bring the app forward first (relaunches it if it was closed).
         Self::open_app(app)?;
-        if title.is_empty() {
+        if title.is_empty() && idx.is_none() {
             return Ok(());
         }
         let esc_app = app.replace('\\', "\\\\").replace('"', "\\\"");
         let esc_title = title.replace('\\', "\\\\").replace('"', "\\\"");
+        // Raise the exact window position first; if that index is now out of range
+        // (a window closed), fall through to a title match.
+        let index_raise = match idx {
+            Some(i) => format!(
+                "try\n\
+                 perform action \"AXRaise\" of (window {i} of p)\n\
+                 set frontmost of p to true\n\
+                 return\n\
+                 end try\n"
+            ),
+            None => String::new(),
+        };
+        let title_raise = if title.is_empty() {
+            String::new()
+        } else {
+            format!(
+                "repeat with w in windows of p\n\
+                 if (name of w) is \"{esc_title}\" then\n\
+                 perform action \"AXRaise\" of w\n\
+                 set frontmost of p to true\n\
+                 return\n\
+                 end if\n\
+                 end repeat\n"
+            )
+        };
         let script = format!(
             "tell application \"System Events\"\n\
              try\n\
              set p to first process whose name is \"{esc_app}\"\n\
-             repeat with w in windows of p\n\
-             if (name of w) is \"{esc_title}\" then\n\
-             perform action \"AXRaise\" of w\n\
-             set frontmost of p to true\n\
-             return\n\
-             end if\n\
-             end repeat\n\
+             {index_raise}\
+             {title_raise}\
              end try\n\
              end tell"
         );
         // Advisory: the app is already frontmost even if the raise fails.
+        let _ = run_osascript(&script);
+        Ok(())
+    }
+
+    /// Focus a specific browser tab by URL (FR-2.2 for per-tab items). Activates
+    /// the browser, then selects the first tab whose URL matches and raises its
+    /// window. Selecting the active tab differs per browser (Chrome sets
+    /// `active tab index`; Safari sets `current tab`). If NO tab matches (the tab
+    /// was closed since it was registered), the URL is reopened in a new tab of
+    /// that same browser — otherwise the browser would just come frontmost on
+    /// whatever unrelated tab happened to be active, which looks like the wrong
+    /// tab got activated.
+    pub fn activate_browser_tab(app: &str, url: &str) -> Result<()> {
+        Self::open_app(app)?;
+        let esc_app = app.replace('\\', "\\\\").replace('"', "\\\"");
+        let esc_url = url.replace('\\', "\\\\").replace('"', "\\\"");
+        let select = if app == "Google Chrome" {
+            "set active tab index of w to i\nset index of w to 1"
+        } else {
+            "set current tab of w to t\nset index of w to 1"
+        };
+        // Reopen path when the tab is gone. Chrome has no `open location`; make a
+        // tab explicitly (spawning a window first if none is open). Safari's
+        // `open location` reliably opens the URL in a new tab of the front window.
+        let reopen = if app == "Google Chrome" {
+            "if (count of windows) is 0 then\n\
+             make new window\n\
+             end if\n\
+             tell window 1 to make new tab with properties {URL:\"URL_PLACEHOLDER\"}\n\
+             set index of window 1 to 1"
+        } else {
+            "open location \"URL_PLACEHOLDER\""
+        }
+        .replace("URL_PLACEHOLDER", &esc_url);
+        let script = format!(
+            "tell application \"{esc_app}\"\n\
+             activate\n\
+             set didFind to false\n\
+             try\n\
+             repeat with w in windows\n\
+             set i to 0\n\
+             repeat with t in tabs of w\n\
+             set i to i + 1\n\
+             if (URL of t) is \"{esc_url}\" then\n\
+             {select}\n\
+             set didFind to true\n\
+             exit repeat\n\
+             end if\n\
+             end repeat\n\
+             if didFind then exit repeat\n\
+             end repeat\n\
+             end try\n\
+             if not didFind then\n\
+             {reopen}\n\
+             end if\n\
+             end tell"
+        );
+        // Advisory: the browser is already frontmost even if selection fails.
         let _ = run_osascript(&script);
         Ok(())
     }

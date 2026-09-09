@@ -5,3 +5,6 @@ edition = "2021"
 
 [dependencies]
 vc-core = { path = "../vc-core" }
+
+[target.'cfg(target_os = "macos")'.dependencies]
+core-foundation = "0.10"

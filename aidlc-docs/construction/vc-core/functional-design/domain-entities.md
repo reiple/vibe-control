@@ -28,7 +28,9 @@
 - **불변식**: identity의 안정 서술자는 표시 이름 변경으로 바뀌지 않음.
 
 ### ResourceKind (열거)
-`WindowRef` · `BrowserTab` · `Folder` · `AppLaunch` · `Url` · `CodingSession`
+`WindowRef` · `BrowserTab` · `BrowserTabLive` · `Folder` · `AppLaunch` · `Url` · `CodingSession`
+
+> **`BrowserTabLive` (2026-09-09 추가)** — 실행 중 브라우저의 **라이브 탭**을 좌측 패널에서 드래그해 작업 묶음에 등록하는 **포커스 전용** 종류. URL을 보유하는 캡처용 `BrowserTab`과 달리, UIA가 백그라운드 탭 URL을 주지 않고 FR-9.7이 추측을 금하므로 **URL 없이** 제목(`descriptor`)+활성화 토큰(`hint`=`<browser>\u{1f}<hwnd>\u{1f}<idx>`)만 저장하고 `reopen_info`는 없다. 복원은 URL을 열지 않고 탭을 재포커스한다.
 
 ### ResourceStatus (열거)
 `Active` · `Inactive` · `PermissionRequired` · `Unknown`
@@ -54,6 +56,7 @@
 |---|---|---|---|
 | WindowRef | app_id(번들/실행경로) + role/class + title_signature(보조) | pid, native_handle | app_id (+연결 문서/폴더 있으면 그 정보) |
 | BrowserTab | browser_id + full_url + tab_discriminator | tab_native_id | full_url (스킴 보존) |
+| BrowserTabLive | 탭 제목(title) | `<browser>\u{1f}<hwnd>\u{1f}<idx>` (활성화 토큰) | — (URL 미저장, FR-9.7 — 재포커스 전용) |
 | Folder | absolute_path | window handle | absolute_path |
 | AppLaunch | app_id(실행경로/번들) | pid | app_id |
 | Url | full_url | — | full_url |
