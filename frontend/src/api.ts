@@ -433,14 +433,21 @@ export async function sendCommandToSession(
 
 /** Start (or reuse) an interactive PTY-backed `claude --resume` for a session,
  *  optionally seeding it with an initial prompt. Local-only; no external send.
- *  Resolves to the session key used for subsequent polls/keys. */
+ *  Resolves to the session key used for subsequent polls/keys.
+ *
+ *  `cwd` is the session's stored working folder: a fallback used only when the
+ *  session has no transcript yet to resume (e.g. it was created but never got a
+ *  first turn) — the backend then starts it FRESH in that folder under the same
+ *  id, so opening the terminal makes it usable instead of a dead error. */
 export async function startInteractiveSession(
   sessionRef: string,
-  initialPrompt?: string
+  initialPrompt?: string,
+  cwd?: string | null
 ): Promise<string> {
   return await invoke<string>("start_interactive_session", {
     sessionRef,
     initialPrompt: initialPrompt ?? null,
+    cwd: cwd ?? null,
   });
 }
 

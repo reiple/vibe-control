@@ -16,6 +16,8 @@
 
 use std::collections::HashMap;
 use std::io::{Read, Write};
+#[cfg(unix)]
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
@@ -121,10 +123,121 @@ pub struct InteractiveScreen {
     pub prompt: Option<DetectedPrompt>,
 }
 
-/// Start (or reuse) an interactive `claude --resume <id>` PTY for `session_ref`.
-/// Optionally writes an initial prompt + Enter once the REPL is up. Returns the
-/// registry key (the session ref) the frontend then polls / sends keys to.
-pub fn start(session_ref: &str, initial_prompt: Option<&str>) -> Result<String, String> {
+/// Absolute dirs where `claude` (and the tools it shells out to — node, git,
+/// rg…) commonly install but that a Finder-launched macOS `.app` does NOT see:
+/// such a bundle inherits only the minimal LaunchServices PATH
+/// (`/usr/bin:/bin:/usr/sbin:/sbin`). We both probe these to find `claude` and
+/// prepend them to the child PTY's PATH so everything resolves inside it.
+#[cfg(unix)]
+fn extra_bin_dirs() -> Vec<PathBuf> {
+    let mut dirs = Vec::new();
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        for sub in [
+            ".local/bin",
+            ".claude/local",
+            ".npm-global/bin",
+            ".bun/bin",
+            ".volta/bin",
+            ".yarn/bin",
+            ".cargo/bin",
+            "bin",
+        ] {
+            dirs.push(home.join(sub));
+        }
+    }
+    for p in ["/opt/homebrew/bin", "/usr/local/bin", "/opt/local/bin"] {
+        dirs.push(PathBuf::from(p));
+    }
+    dirs
+}
+
+/// Resolve the `claude` executable to a concrete path. Bare
+/// `CommandBuilder::new("claude")` fails with "No such file or directory" in a
+/// Finder-launched bundle (minimal PATH) — the exact "세션 시작 실패" the embedded
+/// terminal showed. Order: (1) an existing binary in a well-known dir (cheap);
+/// (2) whatever `claude` the user's login shell resolves (covers nvm/asdf/custom
+/// installs); (3) bare "claude" so a genuine miss still surfaces a clear error.
+#[cfg(unix)]
+fn resolve_claude_program() -> std::ffi::OsString {
+    for dir in extra_bin_dirs() {
+        let cand = dir.join("claude");
+        if cand.is_file() {
+            return cand.into_os_string();
+        }
+    }
+    if let Some(path) = login_shell_claude() {
+        return path.into();
+    }
+    "claude".into()
+}
+
+/// Ask the user's login shell where `claude` is, so profile-managed PATHs
+/// (nvm/asdf/volta) are honoured. Interactive+login so both `.zprofile` and
+/// `.zshrc` style PATH exports are loaded; stdin nulled so it can't block on a
+/// tty. Takes the last non-empty output line (skips any rc-file banner noise).
+#[cfg(unix)]
+fn login_shell_claude() -> Option<String> {
+    use std::process::{Command, Stdio};
+    let shell = std::env::var("SHELL").unwrap_or_else(|_| "/bin/zsh".into());
+    let out = Command::new(shell)
+        .args(["-ilc", "command -v claude"])
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let path = String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .next_back()
+        .unwrap_or("")
+        .to_string();
+    (!path.is_empty() && std::path::Path::new(&path).is_file()).then_some(path)
+}
+
+#[cfg(not(unix))]
+fn resolve_claude_program() -> std::ffi::OsString {
+    "claude".into()
+}
+
+/// PATH for the child, with the well-known bin dirs prepended (unix only). A
+/// no-op elsewhere so Windows keeps its inherited environment untouched.
+#[cfg(unix)]
+fn apply_child_path(builder: &mut CommandBuilder) {
+    let mut parts: Vec<String> = extra_bin_dirs()
+        .into_iter()
+        .map(|p| p.to_string_lossy().into_owned())
+        .collect();
+    if let Ok(existing) = std::env::var("PATH") {
+        for p in existing.split(':') {
+            if !p.is_empty() && !parts.iter().any(|x| x == p) {
+                parts.push(p.to_string());
+            }
+        }
+    }
+    builder.env("PATH", parts.join(":"));
+}
+
+#[cfg(not(unix))]
+fn apply_child_path(_builder: &mut CommandBuilder) {}
+
+/// Start (or reuse) an interactive PTY-backed `claude` for `session_ref`.
+/// Normally resumes the existing transcript (`--resume <id>` in its recorded
+/// working dir). When there is NO transcript yet — a session that was created
+/// but never got a first turn (e.g. the old bug where a Finder-launched bundle
+/// couldn't find `claude` on its minimal PATH, so the process never started) —
+/// it falls back to starting the session FRESH under the same id
+/// (`--session-id <ref>`) in `fallback_cwd`, so re-opening the terminal makes it
+/// usable again instead of a dead "no transcript" error. Optionally writes an
+/// initial prompt + Enter once the REPL is up. Returns the registry key.
+pub fn start(
+    session_ref: &str,
+    fallback_cwd: Option<&str>,
+    initial_prompt: Option<&str>,
+) -> Result<String, String> {
     // Reuse a still-running session rather than spawning a duplicate. Checked
     // FIRST (before reading the session file) so a live session — including a
     // brand-new one registered by `start_new` whose `.jsonl` may not exist yet —
@@ -138,16 +251,26 @@ pub fn start(session_ref: &str, initial_prompt: Option<&str>) -> Result<String, 
         }
     }
 
-    let (cwd, id) = ClaudeCodeSessionProvider::resume_info(session_ref)
-        .ok_or_else(|| "세션 경로/ID를 확인할 수 없습니다".to_string())?;
-
     // Resume the existing session log in its recorded working directory. The
     // reader thread + registration + optional initial prompt are handled by the
     // shared spawn helper (same path as a brand-new session).
-    let mut builder = CommandBuilder::new("claude");
-    builder.arg("--resume");
-    builder.arg(&id);
-    spawn_into_registry(session_ref, &cwd, builder, initial_prompt)
+    if let Some((cwd, id)) = ClaudeCodeSessionProvider::resume_info(session_ref) {
+        let mut builder = CommandBuilder::new(resolve_claude_program());
+        builder.arg("--resume");
+        builder.arg(&id);
+        return spawn_into_registry(session_ref, &cwd, builder, initial_prompt);
+    }
+
+    // No transcript to resume. If we know the folder the session belongs to,
+    // start it fresh under the same id rather than failing outright.
+    let cwd = fallback_cwd.filter(|c| !c.is_empty()).ok_or_else(|| {
+        "이 세션의 대화 기록이 없습니다 (한 번도 실행되지 않은 세션). 그룹에서 삭제 후 다시 만들어 주세요."
+            .to_string()
+    })?;
+    if !std::path::Path::new(cwd).is_dir() {
+        return Err(format!("세션 작업 폴더를 찾을 수 없습니다: {cwd}"));
+    }
+    start_new(session_ref, cwd, session_ref, initial_prompt)
 }
 
 /// Start a BRAND-NEW interactive `claude --session-id <id>` PTY for `session_ref`.
@@ -170,7 +293,7 @@ pub fn start_new(
             }
         }
     }
-    let mut builder = CommandBuilder::new("claude");
+    let mut builder = CommandBuilder::new(resolve_claude_program());
     builder.arg("--session-id");
     builder.arg(session_id);
     spawn_into_registry(session_ref, cwd, builder, initial_prompt)
@@ -200,6 +323,10 @@ fn spawn_into_registry(
         builder.env(k, v);
     }
     builder.env("TERM", "xterm-256color");
+    // A Finder-launched bundle inherits a minimal PATH; prepend the dirs where
+    // `claude` and its child tools live so the PTY child resolves them (this is
+    // set AFTER the env copy above so it overrides the inherited PATH).
+    apply_child_path(&mut builder);
 
     let child = pair
         .slave

@@ -2005,8 +2005,9 @@ fn list_open_session_terminals() -> Vec<String> {
 fn start_interactive_session(
     session_ref: String,
     initial_prompt: Option<String>,
+    cwd: Option<String>,
 ) -> std::result::Result<String, CommandError> {
-    pty::start(&session_ref, initial_prompt.as_deref())
+    pty::start(&session_ref, cwd.as_deref(), initial_prompt.as_deref())
         .map_err(|message| CommandError { message })
 }
 

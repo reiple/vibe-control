@@ -113,9 +113,14 @@ const kindLabel: Record<string, string> = {
 const isActivatable = (kind: string) =>
   kind === "AppLaunch" || kind === "WindowRef" || kind === "Folder";
 
-// A saved live browser tab (FR-9.6 / AC-20): focus-only, no URL — activated by
-// its stored handle (re-matched by title), never re-opened as a URL (FR-9.7).
-const isSavedTab = (kind: string) => kind === "BrowserTabLive";
+// A saved browser tab the user can re-focus by double-click. Covers BOTH the
+// legacy `BrowserTab` (persisted with a URL descriptor + `browser␟url` reopen
+// info — every tab in existing bundles is this kind) and the newer live
+// `BrowserTabLive` (focus-only handle, FR-9.6 / AC-20). Excluding `BrowserTab`
+// here made `canActivate` false, so double-clicking a saved Safari tab was a
+// silent no-op ("사파리가 아예 안 뜬다") — the backend was never even called.
+const isSavedTab = (kind: string) =>
+  kind === "BrowserTabLive" || kind === "BrowserTab";
 
 // Apps whose expanded list shows browser TABS (via UI Automation) rather than
 // OS windows — matched case-insensitively against the app-group name, which on
@@ -173,6 +178,13 @@ function StatusDot({ status }: { status?: ResourceStatus }) {
 const groupSessionRef = (b: WorkBundle): string | null =>
   b.resources.find((r) => r.kind === "CodingSession")?.identity.descriptor ??
   null;
+
+/** The working folder stored on a group's (first) Claude Code session (in
+ *  `hint`), or null. Used only as a fallback for a session with no transcript to
+ *  resume — the backend starts it fresh there so a never-run session still
+ *  opens. Older sessions saved before cwd was persisted return null. */
+const groupSessionCwd = (b: WorkBundle): string | null =>
+  b.resources.find((r) => r.kind === "CodingSession")?.identity.hint ?? null;
 
 /** Parse a leading `@group` target out of a prompt. Matches the longest group
  *  name that the text (after `@`) starts with — so multi-word names work — and
@@ -1147,7 +1159,8 @@ export default function App() {
     setPromptSending(true);
     try {
       openGroupTerminal(target.id); // mount/stream the terminal if not already
-      await startInteractiveSession(ref); // idempotent: reuses a live PTY
+      // idempotent: reuses a live PTY; cwd is the transcript-less fallback.
+      await startInteractiveSession(ref, undefined, groupSessionCwd(target));
       await submitInteractiveLine(ref, text);
       setPromptTarget(target.id);
       setPromptInput("");
@@ -1193,8 +1206,12 @@ export default function App() {
         kind: "CodingSession",
         identity: {
           kind: "CodingSession",
+          // Persist the working folder in `hint` so the session stays restorable
+          // even if it never writes a transcript (a never-run session can then
+          // be re-opened fresh in this folder instead of a dead "no transcript"
+          // error after a restart).
           descriptor: sessionId,
-          hint: null,
+          hint: cwd,
           reopen_info: sessionId,
         },
         order: bundle.resources.length,
@@ -1705,15 +1722,17 @@ export default function App() {
                   const canActivate =
                     isActivatable(r.kind) || isSavedTab(r.kind);
                   // Icon: a WindowRef stores its owning app in reopen_info; a
-                  // saved live tab stores its browser as the LEADING segment of
-                  // hint (`browser␟handle`, TAB_SEP = U+001F), so appNameOf pulls
-                  // the browser name that resolves the icon — passing the whole
-                  // hint would fail to match; everything else uses reopen/descriptor.
+                  // saved tab stores its browser as the LEADING segment (U+001F)
+                  // of hint (`browser␟handle`, live tabs) or reopen_info
+                  // (`browser␟url`, legacy BrowserTab whose hint is null), so
+                  // appNameOf pulls the browser name that resolves the icon —
+                  // passing the whole handle would fail to match; everything else
+                  // uses reopen/descriptor.
                   const iconTarget =
                     r.kind === "WindowRef"
                       ? appNameOf(r.identity.reopen_info ?? r.identity.descriptor)
                       : isSavedTab(r.kind)
-                      ? appNameOf(r.identity.hint ?? "")
+                      ? appNameOf(r.identity.hint ?? r.identity.reopen_info ?? "")
                       : r.identity.reopen_info ?? r.identity.descriptor;
                   return (
                     <li
@@ -1806,7 +1825,12 @@ export default function App() {
                         </span>
                       )}
                     </div>
-                    {open && <GroupTerminal sessionRef={ref} />}
+                    {open && (
+                      <GroupTerminal
+                        sessionRef={ref}
+                        cwd={groupSessionCwd(b)}
+                      />
+                    )}
                   </div>
                 );
               })()}

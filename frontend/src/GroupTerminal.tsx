@@ -19,7 +19,15 @@ import {
  *  reuse) the session, then seed the current rendered frame so a reused/idle
  *  session isn't blank. On unmount we only detach the UI — the `claude` process
  *  keeps running (persistence-free by design; the group owns its lifetime). */
-export function GroupTerminal({ sessionRef }: { sessionRef: string }) {
+export function GroupTerminal({
+  sessionRef,
+  cwd,
+}: {
+  sessionRef: string;
+  /** Stored working folder — fallback used only when the session has no
+   *  transcript to resume, so a never-run session still opens (starts fresh). */
+  cwd?: string | null;
+}) {
   const hostRef = useRef<HTMLDivElement | null>(null);
 
   useEffect(() => {
@@ -67,11 +75,18 @@ export function GroupTerminal({ sessionRef }: { sessionRef: string }) {
       });
       if (disposed) return;
 
-      // 2) Start (or reuse) the session's PTY.
+      // 2) Start (or reuse) the session's PTY (cwd is the transcript-less
+      //    fallback so a never-run session still opens instead of erroring).
       try {
-        await startInteractiveSession(sessionRef);
+        await startInteractiveSession(sessionRef, undefined, cwd);
       } catch (e) {
-        term.write(`\r\n\x1b[31m세션 시작 실패: ${String(e)}\x1b[0m\r\n`);
+        // Backend rejects with a `CommandError` = `{ message }` object, so a bare
+        // String(e) rendered as the useless "[object Object]". Pull the message.
+        const msg =
+          e && typeof e === "object" && "message" in e
+            ? String((e as { message: unknown }).message)
+            : String(e);
+        term.write(`\r\n\x1b[31m세션 시작 실패: ${msg}\x1b[0m\r\n`);
         return;
       }
       if (disposed) return;
@@ -99,7 +114,7 @@ export function GroupTerminal({ sessionRef }: { sessionRef: string }) {
       if (unlisten) unlisten();
       term.dispose();
     };
-  }, [sessionRef]);
+  }, [sessionRef, cwd]);
 
   return <div className="group-term" ref={hostRef} />;
 }
